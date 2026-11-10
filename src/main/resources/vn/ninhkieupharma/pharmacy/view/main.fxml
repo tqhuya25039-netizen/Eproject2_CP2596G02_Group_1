@@ -11,7 +11,7 @@
 
 <BorderPane xmlns="http://javafx.com/javafx/21"
             xmlns:fx="http://javafx.com/fxml/1"
-            fx:controller="vn.ninhkieupharma.pharmacy.controller.MainController"
+            fx:controller="vn.ninhkieupharma.pharmacy.features.common.controller.MainController"
             fx:id="root" styleClass="app-root">
     <left>
         <VBox prefWidth="270.0" styleClass="sidebar">
@@ -20,7 +20,7 @@
                     <Label text="NK" styleClass="brand-mark"/>
                     <VBox spacing="2.0">
                         <Label text="Ninh Kieu Pharma" styleClass="brand-name"/>
-                        <Label text="QUẢN LÝ NHÀ THUỐC" styleClass="brand-caption"/>
+                        <Label fx:id="brandCaptionLabel" text="QUẢN LÝ NHÀ THUỐC" styleClass="brand-caption"/>
                     </VBox>
                 </HBox>
             </VBox>
@@ -38,7 +38,7 @@
                         <Label fx:id="roleLabel" text="Vai trò" styleClass="sidebar-role"/>
                     </VBox>
                 </HBox>
-                <Button text="Đăng xuất" onAction="#handleLogout"
+                <Button fx:id="logoutButton" text="Đăng xuất" onAction="#handleLogout"
                         maxWidth="Infinity" styleClass="button-logout"/>
             </VBox>
         </VBox>
@@ -47,7 +47,9 @@
         <HBox alignment="CENTER_LEFT" styleClass="topbar">
             <Label fx:id="breadcrumbLabel" text="Tổng quan" styleClass="topbar-title"/>
             <HBox HBox.hgrow="ALWAYS"/>
-            <Label text="DỮ LIỆU MẪU" styleClass="demo-badge"/>
+            <Button fx:id="languageButton" text="English" onAction="#handleToggleLanguage"
+                    styleClass="button-secondary"/>
+            <Label fx:id="demoBadgeLabel" text="MYSQL" styleClass="demo-badge"/>
         </HBox>
     </top>
     <center>

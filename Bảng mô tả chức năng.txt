@@ -1,0 +1,23 @@
+CHÍ CHỌNG: QUẢN LÍ NHÂN SỰ VÀ CA LÀM
+Quản lí lịch khả dụng (bảng đăng ký ca làm của nhân viên): Mỗi nhân viên sẽ đăng ký ca làm, thời gian rảnh rỗi của mình vào bảng cho tuần tiếp theo.
+Quản lí lịch làm (lịch làm của cửa hàng thực tế): Xếp lịch làm khả dụng của nhân viên vào lịch làm cửa hàng, xử lý thiếu, trùng lịch.
+Quản lí tài khoản người dùng hệ thống và phân quyền: Gồm admin và staff.
+Quản lí bảng chấm công.
+-> Báo cáo thống kê số ca làm và giờ làm thực tế, tỉ lệ phủ ca
+-> Báo cáo chấp hành ca làm (Giờ giấc làm việc)
+QUỐC HUY: QUẢN LÍ SẢN PHẨM VÀ NHÀ CUNG CẤP
+Quản lí danh mục sản phẩm
+Quản lí sản phẩm
+Quản lí nhà cung cấp
+-> Thống kê báo cáo xu hướng tập trung nhành hàng (Ngành hàng, loại nào đang có nhiều/ít, để lựa chọn thay thế trong một số trường hợp bán hàng vì một loại thuốc có thể có nhiều dạng, nhiều nhà cung cấp)
+-> Mức độ phủ sóng, tỉ trọng: Đánh giá tỉ lệ phần trăm số lượng mặt hàng của nhà cung cấp đang cung cấp cho cửa hàng. Xem cửa hàng có phân bổ đều hay đang phụ thuộc lớn vào nhà phân phối nào đó.
+QUỐC KHANH: QUẢN LÍ KHO HÀNG
+Quản lí nhập kho
+Quản lí vị trí vật lý kho hàng: Cửa hàng có nhiều kệ tầng, vì vậy mỗi vị trí đơn vị kho (tủ, kệ, dãy) sẽ lưu danh mục, sản phẩm sẽ chứa ở đây. Thuận tiện cho việc tìm kiếm, thay đổi hay sắp xếp lại cửa hàng.
+Quản lí phiên, phiếu kiểm kê, điều chỉnh tồn
+-> Báo cáo lượng thay đổi trong kho hàng, lượng mặt hàng hư hỏng, hết hạn sử dụng
+THÀNH VĂN: QUẢN LÍ BÁN HÀNG VÀ KHÁCH HÀNG
+Quản lí khách hàng: Tên, số điện thoại, thuốc dị ứng, điểm tích điểm,...
+Quản lí bán hàng
+Quản lí chương trình khuyến mãi: tỉ suất điểm tích điểm, bật/tắt, tỉ lệ quy đổi.
+-> Thống kê số lượng đơn hàng, doanh thu.

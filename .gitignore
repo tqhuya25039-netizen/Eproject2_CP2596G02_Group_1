@@ -1,0 +1,8 @@
+target/
+.vscode/
+.idea/
+*.iml
+*.class
+*.log
+*.docx
+maven-mvnd-*.zip
