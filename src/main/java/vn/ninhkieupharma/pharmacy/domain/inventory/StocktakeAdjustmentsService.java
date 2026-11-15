@@ -1,0 +1,93 @@
+package vn.ninhkieupharma.pharmacy.domain.inventory;
+
+import vn.ninhkieupharma.pharmacy.common.dao.FeatureModuleDAO;
+import vn.ninhkieupharma.pharmacy.common.model.ModuleDefinition;
+import vn.ninhkieupharma.pharmacy.common.model.ModuleRow;
+import vn.ninhkieupharma.pharmacy.common.service.AbstractFeatureModuleService;
+import vn.ninhkieupharma.pharmacy.common.service.Localization;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public final class StocktakeAdjustmentsService extends AbstractFeatureModuleService {
+    private static final Pattern QUANTITY =
+            Pattern.compile("[+-]?\\d+(?:[,.]\\d+)?(?:\\s+\\p{L}+(?:\\s+\\p{L}+)*)?");
+    private static final Pattern MOVEMENT_QUANTITY = Pattern.compile("[+-]?\\d+(?:[,.]\\d+)?");
+    private final FeatureModuleDAO repository;
+
+    public StocktakeAdjustmentsService(FeatureModuleDAO repository) {
+        super(repository, Set.of("UC-14", "UC-15"));
+        this.repository = repository;
+    }
+
+    @Override
+    public List<ModuleRow> findAll(ModuleDefinition module) {
+        if (!module.id().equals("UC-15") || repository.supportsNativeReports()) {
+            return super.findAll(module);
+        }
+        List<List<String>> movements = new ArrayList<>();
+        for (ModuleRow receipt : repository.findAll("UC-12")) {
+            List<String> values = receipt.values();
+            movements.add(List.of(values.get(2), values.get(1), "Nhập hàng",
+                    quantity(values.get(3)), "Phiếu " + values.get(0)));
+        }
+        for (ModuleRow stocktake : repository.findAll("UC-14")) {
+            List<String> values = stocktake.values();
+            String variance = values.get(3);
+            if (!variance.contains("Khớp tồn") && !variance.equals(Localization.text("Khớp tồn"))) {
+                movements.add(List.of(values.get(2), values.get(1), "Điều chỉnh",
+                        quantity(variance), "Phiên " + values.get(0)));
+            }
+        }
+        for (ModuleRow sample : repository.findAll("UC-15")) {
+            List<String> values = sample.values();
+            if (values.size() > 2
+                    && (values.get(2).equals("Bán hàng")
+                    || values.get(2).equals("Hư hỏng")
+                    || values.get(2).equals("Sắp hết hạn"))) {
+                movements.add(values);
+            }
+        }
+        repository.replaceAll("UC-15", movements);
+        return super.findAll(module);
+    }
+
+    @Override
+    public vn.ninhkieupharma.pharmacy.common.model.ModuleRow create(
+            vn.ninhkieupharma.pharmacy.common.model.ModuleDefinition module, List<String> values) {
+        validateVariance(values);
+        return super.create(module, values);
+    }
+
+    @Override
+    public vn.ninhkieupharma.pharmacy.common.model.ModuleRow update(
+            vn.ninhkieupharma.pharmacy.common.model.ModuleDefinition module, UUID rowId, List<String> values) {
+        validateVariance(values);
+        return super.update(module, rowId, values);
+    }
+
+    private void validateVariance(List<String> values) {
+        if (values.size() <= 3 || values.get(3) == null
+                || values.get(3).equals("Khớp tồn")
+                || values.get(3).equals(Localization.text("Khớp tồn"))) {
+            return;
+        }
+        if (!QUANTITY.matcher(values.get(3).trim()).matches()) {
+            throw new IllegalArgumentException(
+                    Localization.text("Expected a numeric quantity: ") + values.get(3));
+        }
+    }
+
+    private String quantity(String value) {
+        Matcher matcher = MOVEMENT_QUANTITY.matcher(value);
+        if (!matcher.find()) {
+            throw new IllegalArgumentException(
+                    Localization.text("Expected a numeric quantity: ") + value);
+        }
+        return matcher.group() + " " + value.substring(matcher.end()).trim();
+    }
+}
