@@ -3,6 +3,11 @@ package vn.ninhkieupharma.pharmacy.common.dao;
 import vn.ninhkieupharma.pharmacy.config.DatabaseConnection;
 import vn.ninhkieupharma.pharmacy.common.model.ModuleRow;
 import vn.ninhkieupharma.pharmacy.common.auth.PasswordHasher;
+import vn.ninhkieupharma.pharmacy.common.service.Localization;
+import vn.ninhkieupharma.pharmacy.domain.sales.SaleAllergyWarning;
+import vn.ninhkieupharma.pharmacy.domain.sales.SaleOrderRequest;
+import vn.ninhkieupharma.pharmacy.domain.sales.SaleProduct;
+import vn.ninhkieupharma.pharmacy.domain.sales.SaleReceipt;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -10,22 +15,158 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.nio.charset.StandardCharsets;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Maps the feature screens to the normalized tables in 01_schema_quan_ly_cua_hang.sql.
+ * Maps the feature screens to the normalized tables in environment/01_schema_quan_ly_cua_hang.sql.
  * The application deliberately does not own schema creation or demo business data.
  */
 public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
     private static final long ROW_ID_PREFIX = 0x4e4b504841524d41L;
+    private final SalesCheckoutDAO salesCheckoutDAO = new SalesCheckoutDAO();
+
+    @Override
+    public List<SaleProduct> findSaleProducts() {
+        return salesCheckoutDAO.findSaleProducts();
+    }
+
+    @Override
+    public List<SaleAllergyWarning> findSaleAllergyWarnings(
+            Optional<UUID> customerId, List<UUID> productIds) {
+        return salesCheckoutDAO.findAllergyWarnings(customerId, productIds);
+    }
+
+    @Override
+    public SaleReceipt completeSale(long authenticatedUserId, SaleOrderRequest request) {
+        return salesCheckoutDAO.completeSale(authenticatedUserId, request);
+    }
+
+    private record CustomerState(boolean active, boolean blocked) {
+        private String code() {
+            if (!active && blocked) {
+                return "ARCHIVED_BLOCKED";
+            }
+            if (!active) {
+                return "ARCHIVED";
+            }
+            return blocked ? "BLOCKED" : "ACTIVE";
+        }
+    }
+
+    private record CustomerAllergy(String name, String note) {
+    }
 
     @Override
     public boolean supportsNativeReports() {
         return true;
+    }
+
+    @Override
+    public List<ModuleRow> findCustomerPurchaseHistory(UUID customerRowId) {
+        long customerId = numericId(customerRowId);
+        String sql = """
+                SELECT sale_id, sale_code, DATE_FORMAT(sold_at, '%Y-%m-%d %H:%i'),
+                       CAST(ROUND(total_amount, 0) AS CHAR), status
+                FROM sales
+                WHERE customer_id = ?
+                ORDER BY sold_at DESC, sale_id DESC
+                """;
+        try (Connection connection = DatabaseConnection.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setLong(1, customerId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                List<ModuleRow> history = new ArrayList<>();
+                while (resultSet.next()) {
+                    history.add(row(resultSet.getLong("sale_id"), List.of(
+                            resultSet.getString("sale_code"),
+                            resultSet.getString(3),
+                            resultSet.getString(4),
+                            resultSet.getString("status"))));
+                }
+                return List.copyOf(history);
+            }
+        } catch (SQLException exception) {
+            throw new DataAccessException("Could not load customer purchase history from MySQL.", exception);
+        }
+    }
+
+    @Override
+    public List<ModuleRow> findCustomersAvailableForSale() {
+        String sql = """
+                SELECT c.customer_id, c.full_name, COALESCE(c.phone, ''), COALESCE(c.email, ''),
+                       COALESCE((SELECT GROUP_CONCAT(
+                           CONCAT(ca.allergen_name,
+                               IF(ca.note IS NULL OR ca.note = '', '', CONCAT(' | ', ca.note)))
+                           ORDER BY ca.allergen_name SEPARATOR '\\n')
+                           FROM customer_allergies ca
+                           WHERE ca.customer_id = c.customer_id), ''),
+                       c.loyalty_points, COALESCE(DATE_FORMAT(c.date_of_birth, '%Y-%m-%d'), '')
+                FROM customers c
+                WHERE c.is_active = 1 AND c.is_blocked = 0
+                ORDER BY c.full_name, c.customer_id
+                """;
+        try (Connection connection = DatabaseConnection.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql);
+             ResultSet resultSet = statement.executeQuery()) {
+            List<ModuleRow> customers = new ArrayList<>();
+            while (resultSet.next()) {
+                customers.add(row(resultSet.getLong("customer_id"), List.of(
+                        resultSet.getString("full_name"),
+                        resultSet.getString(3),
+                        resultSet.getString(4),
+                        resultSet.getString(5),
+                        resultSet.getString("loyalty_points"),
+                        resultSet.getString(6))));
+            }
+            return List.copyOf(customers);
+        } catch (SQLException exception) {
+            throw new DataAccessException("Could not load eligible customers for sales.", exception);
+        }
+    }
+
+    @Override
+    public ModuleRow createCustomerFromSale(List<String> values) {
+        List<String> customerValues = salesCustomerValues(values);
+        ModuleRow created = createCustomer(customerValues);
+        return new ModuleRow(created.id(), saleCustomerValues(created.values()));
+    }
+
+    @Override
+    public ModuleRow updateCustomerFromSale(UUID customerRowId, List<String> values) {
+        List<String> customerValues = salesCustomerValues(values);
+        long customerId = numericId(customerRowId);
+        String phone = normalizeCustomerPhone(customerValues.get(2));
+        long loyaltyPoints = transaction(connection -> {
+            long currentPoints = ensureCustomerAvailableForSale(connection, customerId);
+            ensureCustomerPhoneAvailable(connection, phone, customerId);
+            ensureCustomerEmailAvailable(connection, customerValues.get(3), customerId);
+            execute(connection, """
+                    UPDATE customers
+                    SET full_name = ?, phone = ?, email = ?, date_of_birth = ?
+                    WHERE customer_id = ?
+                    """, statement -> {
+                statement.setString(1, customerValues.get(1).trim());
+                setNullableString(statement, 2, phone);
+                setNullableString(statement, 3, customerValues.get(3));
+                setNullableDate(statement, 4, parseCustomerDate(customerValues.get(8)));
+                statement.setLong(5, customerId);
+            });
+            replaceAllergies(connection, customerId, customerValues.get(4));
+            return currentPoints;
+        });
+        return row(customerId, List.of(
+                customerValues.get(1).trim(),
+                phone,
+                customerValues.get(3),
+                customerValues.get(4),
+                Long.toString(loyaltyPoints),
+                customerValues.get(8)));
     }
 
     @Override
@@ -111,6 +252,10 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
                                      FROM supplier_products sp
                                      JOIN suppliers s ON s.supplier_id = sp.supplier_id
                                      WHERE sp.product_id = p.product_id), '')
+                           , COALESCE(CAST(p.selling_price AS CHAR), '')
+                           , COALESCE((SELECT GROUP_CONCAT(pi.ingredient_name
+                               ORDER BY pi.ingredient_name SEPARATOR '; ')
+                               FROM product_ingredients pi WHERE pi.product_id = p.product_id), '')
                     FROM products p
                     JOIN product_categories c ON c.category_id = p.category_id
                     ORDER BY p.product_id
@@ -218,10 +363,21 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
                     """);
             case "UC-16" -> query(moduleId, """
                     SELECT c.customer_id, c.customer_code, c.full_name, COALESCE(c.phone, ''),
-                           COALESCE((SELECT GROUP_CONCAT(ca.allergen_name ORDER BY ca.allergen_name
-                               SEPARATOR ', ') FROM customer_allergies ca
+                           COALESCE(c.email, ''),
+                           COALESCE((SELECT GROUP_CONCAT(
+                               CONCAT(ca.allergen_name,
+                                   IF(ca.note IS NULL OR ca.note = '', '', CONCAT(' | ', ca.note)))
+                               ORDER BY ca.allergen_name SEPARATOR '\\n') FROM customer_allergies ca
                                WHERE ca.customer_id = c.customer_id), ''),
-                           c.loyalty_points, IF(c.is_active, 'ACTIVE', 'INACTIVE')
+                           c.loyalty_points,
+                           CASE
+                               WHEN NOT c.is_active AND c.is_blocked THEN 'ARCHIVED_BLOCKED'
+                               WHEN NOT c.is_active THEN 'ARCHIVED'
+                               WHEN c.is_blocked THEN 'BLOCKED'
+                               ELSE 'ACTIVE'
+                           END,
+                           COALESCE(c.block_reason, ''),
+                           COALESCE(DATE_FORMAT(c.date_of_birth, '%Y-%m-%d'), '')
                     FROM customers c ORDER BY c.customer_id
                     """);
             case "UC-17" -> query(moduleId, """
@@ -235,14 +391,27 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
                     """);
             case "UC-18" -> query(moduleId, """
                     SELECT promotion_id, promotion_code, promotion_name,
-                           CONCAT(discount_percent, '%'),
-                           CONCAT(DATE_FORMAT(starts_at, '%Y-%m-%d'), ' to ',
-                                  DATE_FORMAT(ends_at, '%Y-%m-%d')),
-                           IF(is_active, 'ACTIVE', 'INACTIVE')
-                    FROM promotions ORDER BY promotion_id
+                           CAST(discount_percent AS CHAR),
+                           DATE_FORMAT(starts_at, '%Y-%m-%d'),
+                           DATE_FORMAT(points_redemption_starts_at, '%Y-%m-%d'),
+                           DATE_FORMAT(points_earning_ends_at, '%Y-%m-%d'),
+                           DATE_FORMAT(ends_at, '%Y-%m-%d'),
+                           CAST(redemption_vnd_per_point AS CHAR),
+                           COALESCE((
+                               SELECT GROUP_CONCAT(
+                                   CONCAT(CAST(t.minimum_invoice_total_vnd AS CHAR), ':',
+                                          CAST(t.points_rate_percent AS CHAR))
+                                   ORDER BY t.minimum_invoice_total_vnd SEPARATOR ';')
+                               FROM promotion_point_tiers t
+                               WHERE t.promotion_id = p.promotion_id
+                           ), ''),
+                           IF(p.is_active, 'ACTIVE', 'INACTIVE')
+                    FROM promotions p ORDER BY p.promotion_id
                     """);
             case "UC-19" -> query(moduleId, """
-                    SELECT DATE(sold_at), COUNT(*), CAST(ROUND(SUM(total_amount), 0) AS UNSIGNED),
+                    SELECT CAST(DATE_FORMAT(MIN(sold_at), '%Y%m%d') AS UNSIGNED),
+                           DATE_FORMAT(MIN(sold_at), '%d/%m/%Y'), COUNT(*),
+                           CAST(ROUND(SUM(total_amount), 0) AS UNSIGNED),
                            CAST(ROUND(SUM(discount_amount), 0) AS UNSIGNED),
                            CAST(ROUND(AVG(total_amount), 0) AS UNSIGNED)
                     FROM sales
@@ -342,14 +511,17 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
     @Override
     public void delete(String moduleId, UUID rowId) {
         long id = numericId(rowId);
+        if ("UC-16".equals(moduleId)) {
+            executeOne("UPDATE customers SET is_active = 0 WHERE customer_id = ?", id);
+            return;
+        }
         String sql = switch (moduleId) {
             case "UC-02" -> "DELETE FROM employee_availabilities WHERE availability_id = ?";
             case "UC-07" -> "DELETE FROM product_categories WHERE category_id = ?";
             case "UC-08" -> "DELETE FROM products WHERE product_id = ?";
             case "UC-09" -> "DELETE FROM suppliers WHERE supplier_id = ?";
             case "UC-13" -> "DELETE FROM warehouse_locations WHERE location_id = ?";
-            case "UC-16" -> "DELETE FROM customers WHERE customer_id = ?";
-            case "UC-18" -> "DELETE FROM promotions WHERE promotion_id = ?";
+            case "UC-18" -> "UPDATE promotions SET is_active = 0 WHERE promotion_id = ?";
             default -> throw readOnly(moduleId);
         };
         executeOne(sql, id);
@@ -428,18 +600,19 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
     }
 
     private ModuleRow createProduct(List<String> values) {
-        requireSize("UC-08", values, 8);
+        requireSize("UC-08", values, 10);
         if (values.get(0).isBlank() || values.get(1).isBlank() || values.get(2).isBlank() || values.get(4).isBlank()) {
             throw new IllegalArgumentException("Mã sản phẩm, tên sản phẩm, danh mục và đơn vị tính là bắt buộc.");
         }
+        BigDecimal sellingPrice = parseOptionalNonNegativeDecimal(values.get(8), "Selling price");
         long categoryId = resolveId("SELECT category_id FROM product_categories WHERE category_name = ?",
                 values.get(2).trim());
         long productId = transaction(connection -> {
             long id = insert(connection, """
                     INSERT INTO products
                         (category_id, product_code, product_name, dosage_form, unit_name,
-                         requires_prescription, is_active)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                         requires_prescription, selling_price, is_active)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """, statement -> {
                 statement.setLong(1, categoryId);
                 statement.setString(2, values.get(0).trim());
@@ -447,25 +620,29 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
                 setNullableString(statement, 4, values.get(3));
                 statement.setString(5, values.get(4).trim());
                 statement.setBoolean(6, affirmative(values.get(5)));
-                statement.setBoolean(7, isActive(values.get(6)));
+                setNullableBigDecimal(statement, 7, sellingPrice);
+                statement.setBoolean(8, isActive(values.get(6)));
             });
             requireNoUnpricedSupplier(values.get(7));
+            replaceProductIngredients(connection, id, values.get(9));
             return id;
         });
         return row(productId, values);
     }
 
     private ModuleRow updateProduct(long id, List<String> values) {
-        requireSize("UC-08", values, 8);
+        requireSize("UC-08", values, 10);
         if (values.get(0).isBlank() || values.get(1).isBlank() || values.get(2).isBlank() || values.get(4).isBlank()) {
             throw new IllegalArgumentException("Mã sản phẩm, tên sản phẩm, danh mục và đơn vị tính là bắt buộc.");
         }
+        BigDecimal sellingPrice = parseOptionalNonNegativeDecimal(values.get(8), "Selling price");
         long categoryId = resolveId("SELECT category_id FROM product_categories WHERE category_name = ?",
                 values.get(2).trim());
         transaction(connection -> {
             execute(connection, """
                     UPDATE products SET category_id = ?, product_code = ?, product_name = ?,
-                        dosage_form = ?, unit_name = ?, requires_prescription = ?, is_active = ?
+                        dosage_form = ?, unit_name = ?, requires_prescription = ?,
+                        selling_price = ?, is_active = ?
                     WHERE product_id = ?
                     """, statement -> {
                 statement.setLong(1, categoryId);
@@ -474,13 +651,45 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
                 setNullableString(statement, 4, values.get(3));
                 statement.setString(5, values.get(4).trim());
                 statement.setBoolean(6, affirmative(values.get(5)));
-                statement.setBoolean(7, isActive(values.get(6)));
-                statement.setLong(8, id);
+                setNullableBigDecimal(statement, 7, sellingPrice);
+                statement.setBoolean(8, isActive(values.get(6)));
+                statement.setLong(9, id);
             });
             requireExistingSupplierLink(connection, id, values.get(7));
+            replaceProductIngredients(connection, id, values.get(9));
             return null;
         });
         return row(id, values);
+    }
+
+    private void replaceProductIngredients(Connection connection, long productId, String encodedIngredients)
+            throws SQLException {
+        List<String> ingredients = new ArrayList<>();
+        java.util.Set<String> normalized = new java.util.HashSet<>();
+        if (encodedIngredients != null && !encodedIngredients.isBlank()) {
+            for (String ingredient : encodedIngredients.split(";", -1)) {
+                String trimmed = ingredient.trim();
+                if (trimmed.isEmpty()) {
+                    continue;
+                }
+                if (trimmed.length() > 120 || !normalized.add(trimmed.toLowerCase(Locale.ROOT))) {
+                    throw new IllegalArgumentException(
+                            "Ingredient names must be unique and no longer than 120 characters.");
+                }
+                ingredients.add(trimmed);
+            }
+        }
+        execute(connection, "DELETE FROM product_ingredients WHERE product_id = ?",
+                statement -> statement.setLong(1, productId));
+        try (PreparedStatement statement = connection.prepareStatement(
+                "INSERT INTO product_ingredients (product_id, ingredient_name) VALUES (?, ?)")) {
+            for (String ingredient : ingredients) {
+                statement.setLong(1, productId);
+                statement.setString(2, ingredient);
+                statement.addBatch();
+            }
+            statement.executeBatch();
+        }
     }
 
     private void requireNoUnpricedSupplier(String supplierName) {
@@ -590,100 +799,344 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
     }
 
     private ModuleRow createCustomer(List<String> values) {
-        requireSize("UC-16", values, 6);
+        validateCustomer(values);
+        CustomerState state = customerState(values.get(6));
+        String phone = normalizeCustomerPhone(values.get(2));
+        String code = "KH" + UUID.randomUUID().toString().replace("-", "")
+                .substring(0, 18).toUpperCase(Locale.ROOT);
         long id = transaction(connection -> {
-            String code = values.get(0).isBlank()
-                    ? "KH" + Long.toUnsignedString(System.nanoTime(), 36).toUpperCase(Locale.ROOT)
-                    : values.get(0);
+            ensureCustomerPhoneAvailable(connection, phone, 0);
+            ensureCustomerEmailAvailable(connection, values.get(3), 0);
             long customerId = insert(connection, """
                     INSERT INTO customers
-                        (customer_code, full_name, phone, loyalty_points, is_active)
-                    VALUES (?, ?, ?, ?, ?)
+                        (customer_code, full_name, phone, email, date_of_birth, loyalty_points,
+                         is_active, is_blocked, block_reason)
+                    VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
                     """, statement -> {
                 statement.setString(1, code);
-                statement.setString(2, values.get(1));
-                statement.setString(3, blankToNull(values.get(2)));
-                statement.setInt(4, parseNonNegativeInt(values.get(4), "Loyalty points"));
-                statement.setBoolean(5, isActive(values.get(5)));
+                statement.setString(2, values.get(1).trim());
+                setNullableString(statement, 3, phone);
+                setNullableString(statement, 4, values.get(3));
+                setNullableDate(statement, 5, parseCustomerDate(values.get(8)));
+                statement.setBoolean(6, state.active());
+                statement.setBoolean(7, state.blocked());
+                setNullableString(statement, 8, state.blocked() ? values.get(7).trim() : null);
             });
-            replaceAllergies(connection, customerId, values.get(3));
+            replaceAllergies(connection, customerId, values.get(4));
             return customerId;
         });
-        return row(id, values);
+        return row(id, customerValues(code, values, "0", state));
     }
 
     private ModuleRow updateCustomer(long id, List<String> values) {
-        requireSize("UC-16", values, 6);
+        validateCustomer(values);
+        CustomerState state = customerState(values.get(6));
+        String phone = normalizeCustomerPhone(values.get(2));
         transaction(connection -> {
+            ensureCustomerPhoneAvailable(connection, phone, id);
+            ensureCustomerEmailAvailable(connection, values.get(3), id);
             execute(connection, """
-                    UPDATE customers SET customer_code = ?, full_name = ?, phone = ?,
-                        loyalty_points = ?, is_active = ? WHERE customer_id = ?
+                    UPDATE customers
+                    SET full_name = ?, phone = ?, email = ?, is_active = ?, is_blocked = ?,
+                        block_reason = ?, date_of_birth = ?
+                    WHERE customer_id = ?
                     """, statement -> {
-                statement.setString(1, values.get(0));
-                statement.setString(2, values.get(1));
-                statement.setString(3, blankToNull(values.get(2)));
-                statement.setInt(4, parseNonNegativeInt(values.get(4), "Loyalty points"));
-                statement.setBoolean(5, isActive(values.get(5)));
-                statement.setLong(6, id);
+                statement.setString(1, values.get(1).trim());
+                setNullableString(statement, 2, phone);
+                setNullableString(statement, 3, values.get(3));
+                statement.setBoolean(4, state.active());
+                statement.setBoolean(5, state.blocked());
+                setNullableString(statement, 6, state.blocked() ? values.get(7).trim() : null);
+                setNullableDate(statement, 7, parseCustomerDate(values.get(8)));
+                statement.setLong(8, id);
             });
-            replaceAllergies(connection, id, values.get(3));
+            replaceAllergies(connection, id, values.get(4));
             return null;
         });
-        return row(id, values);
+        return row(id, customerValues(values.get(0), values, values.get(5), state));
     }
 
-    private void replaceAllergies(Connection connection, long customerId, String allergyNames) throws SQLException {
-        execute(connection, "DELETE FROM customer_allergies WHERE customer_id = ?",
-                statement -> statement.setLong(1, customerId));
-        if (allergyNames == null || allergyNames.isBlank()) {
-            return;
+    private static List<String> salesCustomerValues(List<String> values) {
+        requireSize("UC-17", values, 5);
+        List<String> customerValues = List.of(
+                "",
+                valueOrEmpty(values.get(0)),
+                valueOrEmpty(values.get(1)),
+                valueOrEmpty(values.get(2)),
+                valueOrEmpty(values.get(3)),
+                "0",
+                "ACTIVE",
+                "",
+                valueOrEmpty(values.get(4)));
+        validateCustomer(customerValues);
+        return customerValues;
+    }
+
+    private static List<String> saleCustomerValues(List<String> customerValues) {
+        return List.of(
+                customerValues.get(1),
+                customerValues.get(2),
+                customerValues.get(3),
+                customerValues.get(4),
+                customerValues.get(5),
+                customerValues.get(8));
+    }
+
+    private static String valueOrEmpty(String value) {
+        return value == null ? "" : value;
+    }
+
+    private void replaceAllergies(Connection connection, long customerId, String allergyText) throws SQLException {
+        List<CustomerAllergy> allergies = parseCustomerAllergies(allergyText);
+        java.util.Set<String> retainedNames = allergies.stream()
+                .map(allergy -> allergy.name().toLowerCase(Locale.ROOT))
+                .collect(java.util.stream.Collectors.toSet());
+        List<String> existingNames = new ArrayList<>();
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT allergen_name FROM customer_allergies WHERE customer_id = ?")) {
+            statement.setLong(1, customerId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    existingNames.add(resultSet.getString(1));
+                }
+            }
+        }
+        for (String existingName : existingNames) {
+            if (!retainedNames.contains(existingName.toLowerCase(Locale.ROOT))) {
+                execute(connection,
+                        "DELETE FROM customer_allergies WHERE customer_id = ? AND allergen_name = ?",
+                        statement -> {
+                            statement.setLong(1, customerId);
+                            statement.setString(2, existingName);
+                        });
+            }
         }
         try (PreparedStatement statement = connection.prepareStatement(
-                "INSERT INTO customer_allergies (customer_id, allergen_name) VALUES (?, ?)")) {
-            for (String allergy : allergyNames.split(",")) {
-                String name = allergy.trim();
-                if (!name.isEmpty()) {
-                    statement.setLong(1, customerId);
-                    statement.setString(2, name);
-                    statement.addBatch();
-                }
+                """
+                        INSERT INTO customer_allergies (customer_id, allergen_name, note)
+                        VALUES (?, ?, ?)
+                        ON DUPLICATE KEY UPDATE note = VALUES(note)
+                        """)) {
+            for (CustomerAllergy allergy : allergies) {
+                statement.setLong(1, customerId);
+                statement.setString(2, allergy.name());
+                setNullableString(statement, 3, allergy.note());
+                statement.addBatch();
             }
             statement.executeBatch();
         }
     }
 
+    private long ensureCustomerAvailableForSale(Connection connection, long customerId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT loyalty_points, is_active, is_blocked
+                FROM customers
+                WHERE customer_id = ?
+                FOR UPDATE
+                """)) {
+            statement.setLong(1, customerId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    throw new java.util.NoSuchElementException(
+                            Localization.text("Không tìm thấy khách hàng."));
+                }
+                if (!resultSet.getBoolean("is_active") || resultSet.getBoolean("is_blocked")) {
+                    throw new IllegalStateException(Localization.text(
+                            "Chỉ có thể cập nhật khách hàng đang hoạt động và không bị hạn chế bán."));
+                }
+                return resultSet.getLong("loyalty_points");
+            }
+        }
+    }
+
+    private void ensureCustomerPhoneAvailable(Connection connection, String phone, long currentCustomerId)
+            throws SQLException {
+        if (phone.isEmpty()) {
+            return;
+        }
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT 1 FROM customers WHERE phone = ? AND customer_id <> ? LIMIT 1")) {
+            statement.setString(1, phone);
+            statement.setLong(2, currentCustomerId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                if (resultSet.next()) {
+                    throw new IllegalArgumentException(Localization.text(
+                            "Số điện thoại đã được gắn với một khách hàng khác."));
+                }
+            }
+        }
+    }
+
+    private void ensureCustomerEmailAvailable(Connection connection, String email, long currentCustomerId)
+            throws SQLException {
+        if (email == null || email.isBlank()) {
+            return;
+        }
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT 1 FROM customers WHERE LOWER(email) = LOWER(?) AND customer_id <> ? LIMIT 1")) {
+            statement.setString(1, email.trim());
+            statement.setLong(2, currentCustomerId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                if (resultSet.next()) {
+                    throw new IllegalArgumentException(Localization.text(
+                            "Email đã được gắn với một khách hàng khác."));
+                }
+            }
+        }
+    }
+
+    private static void validateCustomer(List<String> values) {
+        requireSize("UC-16", values, 9);
+        if (values.get(1).isBlank()) {
+            throw new IllegalArgumentException(Localization.text("Tên khách hàng là bắt buộc."));
+        }
+        if (values.get(1).trim().length() > 120) {
+            throw new IllegalArgumentException(Localization.text("Tên khách hàng không được vượt quá 120 ký tự."));
+        }
+        String phone = normalizeCustomerPhone(values.get(2));
+        String email = values.get(3).trim();
+        if (email.length() > 120 || (!email.isEmpty()
+                && !email.matches("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$"))) {
+            throw new IllegalArgumentException(Localization.text(
+                    "Email không hợp lệ hoặc vượt quá 120 ký tự."));
+        }
+        if (phone.isEmpty() && email.isEmpty()) {
+            throw new IllegalArgumentException(Localization.text(
+                    "Cần nhập số điện thoại hoặc email của khách hàng."));
+        }
+        parseCustomerDate(values.get(8));
+        CustomerState state = customerState(values.get(6));
+        if (state.blocked() && values.get(7).isBlank()) {
+            throw new IllegalArgumentException(Localization.text(
+                    "Cần nhập lý do khi hạn chế bán."));
+        }
+        if (state.blocked() && values.get(7).trim().length() > 255) {
+            throw new IllegalArgumentException(Localization.text(
+                    "Lý do hạn chế không được vượt quá 255 ký tự."));
+        }
+        parseCustomerAllergies(values.get(4));
+    }
+
+    private static String normalizeCustomerPhone(String phone) {
+        String normalized = phone == null ? "" : phone.replaceAll("[\\s().-]", "");
+        if (!normalized.isEmpty() && !normalized.matches("\\+?[0-9]{7,15}")) {
+            throw new IllegalArgumentException(Localization.text(
+                    "Số điện thoại cần có từ 7 đến 15 chữ số."));
+        }
+        return normalized;
+    }
+
+    private static List<CustomerAllergy> parseCustomerAllergies(String allergyText) {
+        List<CustomerAllergy> allergies = new ArrayList<>();
+        java.util.Set<String> names = new java.util.HashSet<>();
+        if (allergyText == null || allergyText.isBlank()) {
+            return allergies;
+        }
+        for (String line : allergyText.split("\\R")) {
+            String[] parts = line.split("\\|", 2);
+            String name = parts[0].trim();
+            if (name.isEmpty()) {
+                continue;
+            }
+            String note = parts.length == 2 ? parts[1].trim() : "";
+            String key = name.toLowerCase(Locale.ROOT);
+            if (name.length() > 120 || note.length() > 255) {
+                throw new IllegalArgumentException(Localization.text(
+                        "Tên dị ứng tối đa 120 ký tự và ghi chú tối đa 255 ký tự."));
+            }
+            if (!names.add(key)) {
+                throw new IllegalArgumentException(Localization.text("Không nhập trùng dị ứng."));
+            }
+            allergies.add(new CustomerAllergy(name, note));
+        }
+        return List.copyOf(allergies);
+    }
+
+    private static CustomerState customerState(String value) {
+        return switch (value.trim().toUpperCase(Locale.ROOT)) {
+            case "ACTIVE" -> new CustomerState(true, false);
+            case "BLOCKED" -> new CustomerState(true, true);
+            case "ARCHIVED" -> new CustomerState(false, false);
+            case "ARCHIVED_BLOCKED" -> new CustomerState(false, true);
+            default -> throw new IllegalArgumentException(Localization.text("Trạng thái khách hàng không hợp lệ."));
+        };
+    }
+
+    private static List<String> customerValues(
+            String customerCode, List<String> input, String points, CustomerState state) {
+        String reason = state.blocked() ? input.get(7).trim() : "";
+        return List.of(customerCode, input.get(1).trim(), normalizeCustomerPhone(input.get(2)),
+                input.get(3).trim(), input.get(4), points, state.code(), reason, input.get(8));
+    }
+
+    private static LocalDate parseCustomerDate(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            LocalDate date = LocalDate.parse(value.trim());
+            if (date.isAfter(LocalDate.now())) {
+                throw new IllegalArgumentException(Localization.text("Ngày sinh không thể ở tương lai."));
+            }
+            return date;
+        } catch (java.time.format.DateTimeParseException exception) {
+            throw new IllegalArgumentException(
+                    Localization.text("Ngày sinh phải theo định dạng YYYY-MM-DD."), exception);
+        }
+    }
+
     private ModuleRow createPromotion(List<String> values) {
-        requireSize("UC-18", values, 5);
-        LocalDate[] dates = parseDateRange(values.get(3));
-        long id = insert("""
-                INSERT INTO promotions
-                    (promotion_code, promotion_name, discount_percent, starts_at, ends_at, is_active)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """, statement -> {
-            statement.setString(1, values.get(0));
-            statement.setString(2, values.get(1));
-            statement.setBigDecimal(3, parsePercent(values.get(2)));
-            statement.setString(4, dates[0] + " 00:00:00");
-            statement.setString(5, dates[1] + " 23:59:59");
-            statement.setBoolean(6, isActive(values.get(4)));
+        requireSize("UC-18", values, 10);
+        LocalDate[] dates = parsePromotionDates(values);
+        BigDecimal redemptionRate = parsePositiveDecimal(values.get(7), "Redemption value per point");
+        long id = transaction(connection -> {
+            long promotionId = insert(connection, """
+                    INSERT INTO promotions
+                        (promotion_code, promotion_name, discount_percent, points_multiplier,
+                         starts_at, points_redemption_starts_at, points_earning_ends_at, ends_at,
+                         redemption_vnd_per_point, is_active)
+                    VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+                    """, statement -> {
+                statement.setString(1, values.get(0).trim());
+                statement.setString(2, values.get(1).trim());
+                statement.setBigDecimal(3, parsePercent(values.get(2)));
+                statement.setString(4, dates[0] + " 00:00:00");
+                statement.setString(5, dates[1] + " 00:00:00");
+                statement.setString(6, dates[2] + " 23:59:59");
+                statement.setString(7, dates[3] + " 23:59:59");
+                statement.setBigDecimal(8, redemptionRate);
+                statement.setBoolean(9, isActive(values.get(9)));
+            });
+            savePromotionTiers(connection, promotionId, values.get(8));
+            return promotionId;
         });
         return row(id, values);
     }
 
     private ModuleRow updatePromotion(long id, List<String> values) {
-        requireSize("UC-18", values, 5);
-        LocalDate[] dates = parseDateRange(values.get(3));
-        execute("""
-                UPDATE promotions SET promotion_code = ?, promotion_name = ?, discount_percent = ?,
-                    starts_at = ?, ends_at = ?, is_active = ? WHERE promotion_id = ?
-                """, statement -> {
-            statement.setString(1, values.get(0));
-            statement.setString(2, values.get(1));
-            statement.setBigDecimal(3, parsePercent(values.get(2)));
-            statement.setString(4, dates[0] + " 00:00:00");
-            statement.setString(5, dates[1] + " 23:59:59");
-            statement.setBoolean(6, isActive(values.get(4)));
-            statement.setLong(7, id);
+        requireSize("UC-18", values, 10);
+        LocalDate[] dates = parsePromotionDates(values);
+        BigDecimal redemptionRate = parsePositiveDecimal(values.get(7), "Redemption value per point");
+        transaction(connection -> {
+            execute(connection, """
+                    UPDATE promotions SET promotion_code = ?, promotion_name = ?, discount_percent = ?,
+                        starts_at = ?, points_redemption_starts_at = ?, points_earning_ends_at = ?,
+                        ends_at = ?, redemption_vnd_per_point = ?, is_active = ?
+                    WHERE promotion_id = ?
+                    """, statement -> {
+                statement.setString(1, values.get(0).trim());
+                statement.setString(2, values.get(1).trim());
+                statement.setBigDecimal(3, parsePercent(values.get(2)));
+                statement.setString(4, dates[0] + " 00:00:00");
+                statement.setString(5, dates[1] + " 00:00:00");
+                statement.setString(6, dates[2] + " 23:59:59");
+                statement.setString(7, dates[3] + " 23:59:59");
+                statement.setBigDecimal(8, redemptionRate);
+                statement.setBoolean(9, isActive(values.get(9)));
+                statement.setLong(10, id);
+            });
+            savePromotionTiers(connection, id, values.get(8));
+            return null;
         });
         return row(id, values);
     }
@@ -783,6 +1236,24 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
         }
     }
 
+    private static void setNullableBigDecimal(
+            PreparedStatement statement, int index, BigDecimal value) throws SQLException {
+        if (value == null) {
+            statement.setNull(index, java.sql.Types.DECIMAL);
+        } else {
+            statement.setBigDecimal(index, value);
+        }
+    }
+
+    private static void setNullableDate(
+            PreparedStatement statement, int index, LocalDate value) throws SQLException {
+        if (value == null) {
+            statement.setNull(index, java.sql.Types.DATE);
+        } else {
+            statement.setDate(index, java.sql.Date.valueOf(value));
+        }
+    }
+
     private <T> T transaction(TransactionWork<T> work) {
         try (Connection connection = DatabaseConnection.getConnection()) {
             connection.setAutoCommit(false);
@@ -847,7 +1318,8 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
 
     private static java.math.BigDecimal parsePercent(String value) {
         try {
-            java.math.BigDecimal parsed = new java.math.BigDecimal(value.replace("%", "").trim());
+            java.math.BigDecimal parsed =
+                    new java.math.BigDecimal(value.replace("%", "").trim().replace(',', '.'));
             if (parsed.signum() < 0 || parsed.compareTo(new java.math.BigDecimal("100")) > 0) {
                 throw new NumberFormatException();
             }
@@ -857,23 +1329,91 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
         }
     }
 
-    private static LocalDate[] parseDateRange(String value) {
-        String[] parts = value.split("\\s+to\\s+", 2);
-        if (parts.length != 2) {
-            parts = value.split("\\s+đến\\s+", 2);
-        }
+    private static LocalDate[] parsePromotionDates(List<String> values) {
         try {
-            if (parts.length != 2) {
-                throw new IllegalArgumentException("Enter a date range as YYYY-MM-DD to YYYY-MM-DD.");
+            LocalDate accrualStart = LocalDate.parse(values.get(3));
+            LocalDate redemptionStart = LocalDate.parse(values.get(4));
+            LocalDate accrualEnd = LocalDate.parse(values.get(5));
+            LocalDate redemptionEnd = LocalDate.parse(values.get(6));
+            if (accrualStart.isAfter(redemptionStart)
+                    || redemptionStart.isAfter(accrualEnd)
+                    || accrualEnd.isAfter(redemptionEnd)) {
+                throw new IllegalArgumentException(
+                        "Promotion dates must be ordered: accrual start, redemption start, "
+                                + "accrual end, redemption end.");
             }
-            LocalDate start = LocalDate.parse(parts[0].trim());
-            LocalDate end = LocalDate.parse(parts[1].trim());
-            if (!start.isBefore(end)) {
-                throw new IllegalArgumentException("Promotion end date must be after its start date.");
-            }
-            return new LocalDate[]{start, end};
+            return new LocalDate[]{accrualStart, redemptionStart, accrualEnd, redemptionEnd};
         } catch (java.time.format.DateTimeParseException exception) {
             throw new IllegalArgumentException("Promotion dates must use YYYY-MM-DD.", exception);
+        }
+    }
+
+    private static java.math.BigDecimal parsePositiveDecimal(String value, String label) {
+        try {
+            java.math.BigDecimal parsed = new java.math.BigDecimal(value.trim().replace(',', '.'));
+            if (parsed.signum() <= 0) {
+                throw new NumberFormatException();
+            }
+            return parsed;
+        } catch (NumberFormatException exception) {
+            throw new IllegalArgumentException(label + " must be greater than zero.", exception);
+        }
+    }
+
+    private static BigDecimal parseOptionalNonNegativeDecimal(String value, String label) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            BigDecimal parsed = new BigDecimal(value.trim().replace(',', '.'))
+                    .setScale(2, java.math.RoundingMode.UNNECESSARY);
+            if (parsed.signum() < 0 || parsed.precision() > 12) {
+                throw new NumberFormatException();
+            }
+            return parsed;
+        } catch (NumberFormatException | ArithmeticException exception) {
+            throw new IllegalArgumentException(
+                    label + " must be a non-negative amount with at most two decimal places.", exception);
+        }
+    }
+
+    private void savePromotionTiers(Connection connection, long promotionId, String encodedTiers)
+            throws SQLException {
+        java.util.Map<java.math.BigDecimal, java.math.BigDecimal> tiers = new java.util.TreeMap<>();
+        for (String encoded : encodedTiers.split(";", -1)) {
+            String[] parts = encoded.split(":", -1);
+            if (parts.length != 2) {
+                throw new IllegalArgumentException("Each points tier must contain threshold:rate.");
+            }
+            try {
+                java.math.BigDecimal threshold =
+                        new java.math.BigDecimal(parts[0].trim().replace(',', '.'));
+                java.math.BigDecimal rate =
+                        new java.math.BigDecimal(parts[1].trim().replace(',', '.'));
+                if (threshold.signum() < 0 || rate.signum() <= 0
+                        || tiers.putIfAbsent(threshold, rate) != null) {
+                    throw new IllegalArgumentException(
+                            "Tier thresholds must be non-negative and unique; rates must be positive.");
+                }
+            } catch (NumberFormatException exception) {
+                throw new IllegalArgumentException("Each tier must contain valid decimal values.", exception);
+            }
+        }
+
+        execute(connection, "DELETE FROM promotion_point_tiers WHERE promotion_id = ?",
+                statement -> statement.setLong(1, promotionId));
+        try (PreparedStatement statement = connection.prepareStatement("""
+                INSERT INTO promotion_point_tiers
+                    (promotion_id, minimum_invoice_total_vnd, points_rate_percent)
+                VALUES (?, ?, ?)
+                """)) {
+            for (java.util.Map.Entry<java.math.BigDecimal, java.math.BigDecimal> tier : tiers.entrySet()) {
+                statement.setLong(1, promotionId);
+                statement.setBigDecimal(2, tier.getKey());
+                statement.setBigDecimal(3, tier.getValue());
+                statement.addBatch();
+            }
+            statement.executeBatch();
         }
     }
 

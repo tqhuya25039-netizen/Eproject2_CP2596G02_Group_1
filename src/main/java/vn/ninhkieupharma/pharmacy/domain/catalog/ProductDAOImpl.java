@@ -22,12 +22,13 @@ public final class ProductDAOImpl implements ProductDAO {
     private static final String TABLE = "Product";
     private static final String MODULE_ID = "UC-08";
     private static final String SEED_KEY = "typed-seed-uc-08";
-    private static final List<String> COLUMNS = List.of("productCode", "name", "category", "unit", "prescription", "status", "supplier");
+    private static final List<String> COLUMNS = List.of(
+            "productCode", "name", "category", "dosageForm", "unit", "prescription", "status", "supplier");
     private static final EntityCodec<Product> CODEC = EntityCodecs.of(Product::id,
-                        value -> List.of(value.productCode(), value.name(), value.category(), value.unit(),
-                                value.prescription(), value.status(), value.supplier()),
+                        value -> List.of(value.productCode(), value.name(), value.category(), value.dosageForm(),
+                                value.unit(), value.prescription(), value.status(), value.supplier()),
                         (id, values) -> new Product(id, values.get(0), values.get(1), values.get(2),
-                                values.get(3), values.get(4), values.get(5), values.get(6)));
+                                values.get(3), values.get(4), values.get(5), values.get(6), values.get(7)));
 
     public ProductDAOImpl() {
     }
@@ -44,7 +45,11 @@ public final class ProductDAOImpl implements ProductDAO {
                     + "setting_value VARCHAR(500) NOT NULL) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
             statement.execute("CREATE TABLE IF NOT EXISTS `" + TABLE + "` ("
                     + "`entity_id` CHAR(36) NOT NULL PRIMARY KEY, "
-                    + "`entity_order` BIGINT NOT NULL AUTO_INCREMENT UNIQUE, `productCode` VARCHAR(1000) NOT NULL, `name` VARCHAR(1000) NOT NULL, `category` VARCHAR(1000) NOT NULL, `unit` VARCHAR(1000) NOT NULL, `prescription` VARCHAR(1000) NOT NULL, `status` VARCHAR(1000) NOT NULL, `supplier` VARCHAR(1000) NOT NULL) "
+                    + "`entity_order` BIGINT NOT NULL AUTO_INCREMENT UNIQUE, `productCode` VARCHAR(1000) NOT NULL, "
+                    + "`name` VARCHAR(1000) NOT NULL, `category` VARCHAR(1000) NOT NULL, "
+                    + "`dosageForm` VARCHAR(1000) NOT NULL, `unit` VARCHAR(1000) NOT NULL, "
+                    + "`prescription` VARCHAR(1000) NOT NULL, `status` VARCHAR(1000) NOT NULL, "
+                    + "`supplier` VARCHAR(1000) NOT NULL) "
                     + "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
             seedIfNeeded(connection);
         } catch (SQLException exception) {
@@ -184,7 +189,8 @@ public final class ProductDAOImpl implements ProductDAO {
         if (values.size() != COLUMNS.size()) throw new IllegalArgumentException(
                 "Expected " + COLUMNS.size() + " fields for " + TABLE + ".");
         try (PreparedStatement statement = connection.prepareStatement(
-                "INSERT INTO `" + TABLE + "` (entity_id, " + columnList() + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)")) {
+                "INSERT INTO `" + TABLE + "` (entity_id, " + columnList()
+                        + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
             statement.setString(1, CODEC.id(entity).toString());
             bindValues(statement, values, 2);
             statement.executeUpdate();

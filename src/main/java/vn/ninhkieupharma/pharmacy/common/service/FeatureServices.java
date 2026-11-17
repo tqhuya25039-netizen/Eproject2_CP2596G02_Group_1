@@ -21,12 +21,16 @@ import java.util.List;
 
 public final class FeatureServices {
     private final List<FeatureModuleService> services;
+    private final CustomerLoyaltyService customerLoyaltyService;
+    private final SalesService salesService;
 
     public FeatureServices() {
         this(new InMemoryModuleRepository());
     }
 
     public FeatureServices(FeatureModuleDAO repository) {
+        customerLoyaltyService = new CustomerLoyaltyService(repository);
+        salesService = new SalesService(repository);
         services = List.of(
                 new EmployeeAccountsService(repository),
                 new AvailabilityService(repository),
@@ -38,8 +42,8 @@ public final class FeatureServices {
                 new GoodsReceivingService(repository),
                 new StorageLocationsService(repository),
                 new StocktakeAdjustmentsService(repository),
-                new CustomerLoyaltyService(repository),
-                new SalesService(repository),
+                customerLoyaltyService,
+                salesService,
                 new PromotionsLoyaltyService(repository));
     }
 
@@ -49,5 +53,13 @@ public final class FeatureServices {
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException(
                         "No feature service registered for module " + module.id()));
+    }
+
+    public CustomerLoyaltyService customerLoyaltyService() {
+        return customerLoyaltyService;
+    }
+
+    public SalesService salesService() {
+        return salesService;
     }
 }

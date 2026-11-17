@@ -13,6 +13,7 @@ import vn.ninhkieupharma.pharmacy.common.auth.User;
 import vn.ninhkieupharma.pharmacy.common.auth.AuthenticationService;
 import vn.ninhkieupharma.pharmacy.ui.MainController;
 import vn.ninhkieupharma.pharmacy.common.service.FeatureServices;
+import vn.ninhkieupharma.pharmacy.common.service.ExchangeRateService;
 import vn.ninhkieupharma.pharmacy.common.service.Localization;
 
 import java.io.IOException;
@@ -39,15 +40,20 @@ public class LoginController {
 
     private FeatureServices featureServices;
     private AuthenticationService authenticationService;
+    private ExchangeRateService exchangeRateService;
     @FXML
     private void initialize() {
         visiblePasswordField.textProperty().bindBidirectional(passwordField.textProperty());
         applyLanguage();
     }
 
-    public void setServices(FeatureServices featureServices, AuthenticationService authenticationService) {
+    public void setServices(
+            FeatureServices featureServices,
+            AuthenticationService authenticationService,
+            ExchangeRateService exchangeRateService) {
         this.featureServices = Objects.requireNonNull(featureServices);
         this.authenticationService = Objects.requireNonNull(authenticationService);
+        this.exchangeRateService = Objects.requireNonNull(exchangeRateService);
         applyLanguage();
     }
 
@@ -93,7 +99,9 @@ public class LoginController {
                         "/vn/ninhkieupharma/pharmacy/styles/app.css")).toExternalForm());
 
         MainController controller = loader.getController();
-        controller.setSession(user.username(), user.role(), featureServices, authenticationService);
+        controller.setSession(
+                user.id(), user.username(), user.role(),
+                featureServices, authenticationService, exchangeRateService);
 
         Stage stage = (Stage) usernameField.getScene().getWindow();
         stage.setScene(scene);

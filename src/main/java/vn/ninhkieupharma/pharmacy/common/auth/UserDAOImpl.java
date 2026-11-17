@@ -32,7 +32,7 @@ public final class UserDAOImpl implements UserDAO {
                 try (ResultSet resultSet = statement.executeQuery()) {
                     if (!resultSet.next()) {
                         throw new IllegalStateException("The `admin_demo` account is missing from `users`. "
-                                + "Run 01_schema_quan_ly_cua_hang.sql before launching the application.");
+                                + "Run environment/01_schema_quan_ly_cua_hang.sql before launching the application.");
                     }
                     currentHash = resultSet.getString("password_hash");
                 }
@@ -52,7 +52,7 @@ public final class UserDAOImpl implements UserDAO {
             }
             if (findByUsername(SAMPLE_USERNAME).isEmpty()) {
                 throw new IllegalStateException("The `admin_demo` account is missing from `users`. "
-                        + "Run 01_schema_quan_ly_cua_hang.sql before launching the application.");
+                        + "Run environment/01_schema_quan_ly_cua_hang.sql before launching the application.");
             }
         } catch (SQLException exception) {
             throw new DataAccessException("Could not prepare the sample account in the existing `users` table.",

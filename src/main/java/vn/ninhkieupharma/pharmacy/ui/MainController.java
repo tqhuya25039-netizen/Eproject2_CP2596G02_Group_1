@@ -1,5 +1,6 @@
 package vn.ninhkieupharma.pharmacy.ui;
 
+import javafx.application.Platform;
 import javafx.fxml.FXML;
 import javafx.fxml.FXMLLoader;
 import javafx.geometry.Insets;
@@ -23,6 +24,7 @@ import vn.ninhkieupharma.pharmacy.ui.LoginController;
 import vn.ninhkieupharma.pharmacy.common.auth.AuthenticationService;
 import vn.ninhkieupharma.pharmacy.common.model.ModuleRow;
 import vn.ninhkieupharma.pharmacy.common.service.FeatureServices;
+import vn.ninhkieupharma.pharmacy.common.service.ExchangeRateService;
 import vn.ninhkieupharma.pharmacy.common.model.ModuleDefinition;
 import vn.ninhkieupharma.pharmacy.common.auth.UserRole;
 import vn.ninhkieupharma.pharmacy.common.service.ModuleCatalog;
@@ -30,8 +32,11 @@ import vn.ninhkieupharma.pharmacy.common.service.Localization;
 import vn.ninhkieupharma.pharmacy.ui.PageRenderer;
 
 import java.io.IOException;
+import java.text.NumberFormat;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 
 public class MainController {
     @FXML
@@ -54,26 +59,51 @@ public class MainController {
     private Button logoutButton;
     @FXML
     private Button languageButton;
+    @FXML
+    private Label exchangeRateStatusLabel;
 
     private UserRole role;
     private String username;
+    private long authenticatedUserId;
     private Button selectedButton;
     private String selectedModuleId;
     private FeatureServices featureServices;
     private AuthenticationService authenticationService;
+    private ExchangeRateService exchangeRateService;
 
     public void setSession(
             String username, UserRole role, FeatureServices featureServices,
-            AuthenticationService authenticationService) {
+            AuthenticationService authenticationService,
+            ExchangeRateService exchangeRateService) {
+        setSession(-1, username, role, featureServices, authenticationService, exchangeRateService);
+    }
+
+    public void setSession(
+            long authenticatedUserId, String username, UserRole role, FeatureServices featureServices,
+            AuthenticationService authenticationService,
+            ExchangeRateService exchangeRateService) {
+        this.authenticatedUserId = authenticatedUserId;
         this.username = username;
         this.role = role;
         this.featureServices = Objects.requireNonNull(featureServices);
         this.authenticationService = Objects.requireNonNull(authenticationService);
+        this.exchangeRateService = Objects.requireNonNull(exchangeRateService);
         userNameLabel.setText(username);
         roleLabel.setText(role.displayName());
         applyLanguage();
         buildNavigation();
         showDashboard();
+        updateExchangeRateStatus(exchangeRateService.snapshot());
+        CompletableFuture.supplyAsync(exchangeRateService::refreshOncePerDay)
+                .whenComplete((snapshot, failure) -> Platform.runLater(() -> {
+                    if (failure != null) {
+                        exchangeRateStatusLabel.setText(Localization.text("Tỷ giá chưa sẵn sàng"));
+                        exchangeRateStatusLabel.setTooltip(
+                                new javafx.scene.control.Tooltip(failure.getMessage()));
+                    } else {
+                        updateExchangeRateStatus(snapshot);
+                    }
+                }));
     }
 
     @FXML
@@ -98,7 +128,8 @@ public class MainController {
                     NinhKieuPharmaApp.class.getResource(
                             "/vn/ninhkieupharma/pharmacy/view/login.fxml")));
             Parent login = loader.load();
-            loader.<LoginController>getController().setServices(featureServices, authenticationService);
+            loader.<LoginController>getController().setServices(
+                    featureServices, authenticationService, exchangeRateService);
             Stage stage = (Stage) root.getScene().getWindow();
             SceneFactory.setLoginScene(stage, login);
         } catch (IOException exception) {
@@ -126,7 +157,7 @@ public class MainController {
             groupLabel.getStyleClass().add("nav-group-label");
             navigation.getChildren().add(groupLabel);
             for (ModuleDefinition module : groupModules) {
-                Button button = navigationButton(module.id() + "  " + Localization.text(module.title()));
+                Button button = navigationButton(Localization.text(module.title()));
                 button.setOnAction(event -> showModule(module, button));
                 navigation.getChildren().add(button);
             }
@@ -151,7 +182,8 @@ public class MainController {
         ModuleDefinition localizedModule = Localization.localize(module);
         breadcrumbLabel.setText(localizedModule.title());
         contentHost.getChildren().setAll(scrollable(
-                new PageRenderer(featureServices).render(localizedModule)));
+                new PageRenderer(featureServices, exchangeRateService, authenticatedUserId)
+                        .render(localizedModule)));
     }
 
     private void showDashboard() {
@@ -280,7 +312,7 @@ public class MainController {
             if (!module.staffAccessible()) {
                 continue;
             }
-            Button link = new Button(module.id() + "  " + Localization.text(module.title()) + "  →");
+            Button link = new Button(Localization.text(module.title()) + "  →");
             link.getStyleClass().add("button-secondary");
             link.setOnAction(event -> showModule(module, findNavigationButton(module.id())));
             quickLinks.getChildren().add(link);
@@ -362,9 +394,36 @@ public class MainController {
         logoutButton.setText(Localization.text("Đăng xuất"));
         languageButton.setText(Localization.languageButtonText());
         roleLabel.setText(role.displayName());
+        if (exchangeRateService != null) {
+            updateExchangeRateStatus(exchangeRateService.snapshot());
+        }
         if (root.getScene() != null && root.getScene().getWindow() instanceof Stage stage) {
             stage.setTitle("Ninh Kieu Pharma | "
                     + Localization.text("Quản lý vận hành nhà thuốc"));
+        }
+    }
+
+    private void updateExchangeRateStatus(ExchangeRateService.Snapshot snapshot) {
+        if (snapshot == null || !snapshot.available()) {
+            exchangeRateStatusLabel.setText(Localization.text("Tỷ giá chưa sẵn sàng"));
+            exchangeRateStatusLabel.setTooltip(snapshot == null || snapshot.warning().isBlank()
+                    ? null : new javafx.scene.control.Tooltip(snapshot.warning()));
+            return;
+        }
+        NumberFormat rateFormat = NumberFormat.getNumberInstance(
+                Localization.isEnglish() ? Locale.US : Locale.forLanguageTag("vi-VN"));
+        rateFormat.setMaximumFractionDigits(2);
+        String prefix = snapshot.warning().isBlank()
+                ? "" : Localization.text("(đang dùng dữ liệu lưu gần nhất)") + " ";
+        String message = Localization.isEnglish()
+                ? "USD/VND: 1 USD = " + rateFormat.format(snapshot.usdToVnd()) + " VND"
+                : "Tỷ giá USD/VNĐ: 1 USD = " + rateFormat.format(snapshot.usdToVnd()) + " VNĐ";
+        String rateDate = snapshot.rateDate() == null ? "" : " · " + snapshot.rateDate();
+        exchangeRateStatusLabel.setText(prefix + message + rateDate);
+        if (!snapshot.warning().isBlank()) {
+            exchangeRateStatusLabel.setTooltip(new javafx.scene.control.Tooltip(snapshot.warning()));
+        } else {
+            exchangeRateStatusLabel.setTooltip(null);
         }
     }
 

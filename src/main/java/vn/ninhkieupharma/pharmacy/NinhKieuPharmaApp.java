@@ -12,6 +12,7 @@ import vn.ninhkieupharma.pharmacy.common.auth.AuthenticationService;
 import vn.ninhkieupharma.pharmacy.common.dao.DataAccessException;
 import vn.ninhkieupharma.pharmacy.common.dao.RelationalFeatureModuleDAO;
 import vn.ninhkieupharma.pharmacy.common.service.FeatureServices;
+import vn.ninhkieupharma.pharmacy.common.service.ExchangeRateService;
 import vn.ninhkieupharma.pharmacy.ui.LoginController;
 import vn.ninhkieupharma.pharmacy.common.service.Localization;
 
@@ -23,15 +24,25 @@ public class NinhKieuPharmaApp extends Application {
     public void start(Stage stage) throws IOException {
         FeatureServices featureServices;
         AuthenticationService authenticationService;
+        ExchangeRateService exchangeRateService;
         try {
             DatabaseConnection.verifySchema();
             featureServices = new FeatureServices(new RelationalFeatureModuleDAO());
             authenticationService = new AuthenticationService(new UserDAOImpl());
+            exchangeRateService = new ExchangeRateService();
         } catch (DataAccessException exception) {
             Alert alert = new Alert(Alert.AlertType.ERROR);
             alert.setTitle("MySQL connection error");
             alert.setHeaderText("Không thể khởi tạo database MySQL");
             alert.setContentText(exception.getMessage() + "\nChi tiết: " + rootCauseMessage(exception));
+            alert.showAndWait();
+            Platform.exit();
+            return;
+        } catch (DatabaseConnection.MissingSchemaException exception) {
+            Alert alert = new Alert(Alert.AlertType.ERROR);
+            alert.setTitle("Database schema update required");
+            alert.setHeaderText("Cơ sở dữ liệu cần được cập nhật");
+            alert.setContentText(exception.getMessage());
             alert.showAndWait();
             Platform.exit();
             return;
@@ -54,7 +65,8 @@ public class NinhKieuPharmaApp extends Application {
                 NinhKieuPharmaApp.class.getResource("/vn/ninhkieupharma/pharmacy/styles/app.css"))
                 .toExternalForm());
 
-        loader.<LoginController>getController().setServices(featureServices, authenticationService);
+        loader.<LoginController>getController().setServices(
+                featureServices, authenticationService, exchangeRateService);
         stage.setTitle("Ninh Kieu Pharma | "
                 + Localization.text("Quản lý vận hành nhà thuốc"));
         stage.setMinWidth(1080);

@@ -22,12 +22,13 @@ public final class SupplierDAOImpl implements SupplierDAO {
     private static final String TABLE = "Supplier";
     private static final String MODULE_ID = "UC-09";
     private static final String SEED_KEY = "typed-seed-uc-09";
-    private static final List<String> COLUMNS = List.of("supplierCode", "name", "phone", "email", "status");
+    private static final List<String> COLUMNS = List.of(
+            "supplierCode", "name", "phone", "email", "address", "status");
     private static final EntityCodec<Supplier> CODEC = EntityCodecs.of(Supplier::id,
                         value -> List.of(value.supplierCode(), value.name(), value.phone(), value.email(),
-                                value.status()),
+                                value.address(), value.status()),
                         (id, values) -> new Supplier(id, values.get(0), values.get(1), values.get(2),
-                                values.get(3), values.get(4)));
+                                values.get(3), values.get(4), values.get(5)));
 
     public SupplierDAOImpl() {
     }
@@ -44,7 +45,10 @@ public final class SupplierDAOImpl implements SupplierDAO {
                     + "setting_value VARCHAR(500) NOT NULL) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
             statement.execute("CREATE TABLE IF NOT EXISTS `" + TABLE + "` ("
                     + "`entity_id` CHAR(36) NOT NULL PRIMARY KEY, "
-                    + "`entity_order` BIGINT NOT NULL AUTO_INCREMENT UNIQUE, `supplierCode` VARCHAR(1000) NOT NULL, `name` VARCHAR(1000) NOT NULL, `phone` VARCHAR(1000) NOT NULL, `email` VARCHAR(1000) NOT NULL, `status` VARCHAR(1000) NOT NULL) "
+                    + "`entity_order` BIGINT NOT NULL AUTO_INCREMENT UNIQUE, `supplierCode` VARCHAR(1000) NOT NULL, "
+                    + "`name` VARCHAR(1000) NOT NULL, `phone` VARCHAR(1000) NOT NULL, "
+                    + "`email` VARCHAR(1000) NOT NULL, `address` VARCHAR(1000) NOT NULL, "
+                    + "`status` VARCHAR(1000) NOT NULL) "
                     + "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
             seedIfNeeded(connection);
         } catch (SQLException exception) {
@@ -184,7 +188,8 @@ public final class SupplierDAOImpl implements SupplierDAO {
         if (values.size() != COLUMNS.size()) throw new IllegalArgumentException(
                 "Expected " + COLUMNS.size() + " fields for " + TABLE + ".");
         try (PreparedStatement statement = connection.prepareStatement(
-                "INSERT INTO `" + TABLE + "` (entity_id, " + columnList() + ") VALUES (?, ?, ?, ?, ?, ?)")) {
+                "INSERT INTO `" + TABLE + "` (entity_id, " + columnList()
+                        + ") VALUES (?, ?, ?, ?, ?, ?, ?)")) {
             statement.setString(1, CODEC.id(entity).toString());
             bindValues(statement, values, 2);
             statement.executeUpdate();

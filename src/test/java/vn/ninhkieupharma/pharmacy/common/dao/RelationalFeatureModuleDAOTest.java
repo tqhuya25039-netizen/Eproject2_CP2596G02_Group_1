@@ -9,6 +9,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 class RelationalFeatureModuleDAOTest {
     private final RelationalFeatureModuleDAO dao = new RelationalFeatureModuleDAO();
@@ -44,6 +45,78 @@ class RelationalFeatureModuleDAOTest {
     void employeeAccountCreationValidatesPasswordBeforeConnectingToMysql() {
         assertThrows(IllegalArgumentException.class, () -> dao.create("UC-01",
                 List.of("NV-TEST", "Test Employee", "", "", "test_staff", "STAFF", "x".repeat(73))));
+    }
+
+    @Test
+    void customerCreationRequiresNameAndBlockReasonBeforeConnectingToMysql() {
+        IllegalArgumentException missingName = assertThrows(IllegalArgumentException.class,
+                () -> dao.create("UC-16", List.of("", "", "0901234567", "", "", "0", "ACTIVE", "", "")));
+        assertTrue(missingName.getMessage().toLowerCase().contains("tên"));
+
+        IllegalArgumentException missingReason = assertThrows(IllegalArgumentException.class,
+                () -> dao.create("UC-16",
+                        List.of("", "Test Customer", "0901234567", "", "", "0", "BLOCKED", "", "")));
+        assertTrue(missingReason.getMessage().toLowerCase().contains("lý do"));
+    }
+
+    @Test
+    void customerCreationRejectsMalformedPhoneAndDuplicateAllergies() {
+        IllegalArgumentException invalidPhone = assertThrows(IllegalArgumentException.class,
+                () -> dao.create("UC-16",
+                        List.of("", "Test Customer", "phone", "", "", "0", "ACTIVE", "", "")));
+        assertTrue(invalidPhone.getMessage().contains("điện thoại"));
+
+        IllegalArgumentException duplicateAllergy = assertThrows(IllegalArgumentException.class,
+                () -> dao.create("UC-16",
+                        List.of("", "Test Customer", "0901234567", "", "Penicillin\npenicillin",
+                                "0", "ACTIVE", "", "")));
+        assertTrue(duplicateAllergy.getMessage().contains("trùng"));
+    }
+
+    @Test
+    void salesCustomerCreationValidatesStaffEditableFieldsBeforeConnectingToMysql() {
+        IllegalArgumentException missingName = assertThrows(IllegalArgumentException.class,
+                () -> dao.createCustomerFromSale(List.of("", "0901234567", "", "", "")));
+        assertTrue(missingName.getMessage().contains("Tên"));
+
+        IllegalArgumentException invalidPhone = assertThrows(IllegalArgumentException.class,
+                () -> dao.createCustomerFromSale(List.of("Test Customer", "phone", "", "", "")));
+        assertTrue(invalidPhone.getMessage().contains("điện thoại"));
+
+        IllegalArgumentException duplicateAllergy = assertThrows(IllegalArgumentException.class,
+                () -> dao.createCustomerFromSale(
+                        List.of("Test Customer", "0901234567", "", "Penicillin\npenicillin", "")));
+        assertTrue(duplicateAllergy.getMessage().contains("trùng"));
+    }
+
+    @Test
+    void salesCustomerEditingAcceptsOnlyProfileFieldsNotPointsOrRestrictions() {
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.updateCustomerFromSale(UUID.randomUUID(),
+                        List.of("", "", "", "", "9999", "BLOCKED", "reason")));
+    }
+
+    @Test
+    void customerHistoryRequiresARelationalCustomerId() {
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.findCustomerPurchaseHistory(UUID.randomUUID()));
+    }
+
+    @Test
+    void customerManagementIsNotExposedAsAStaffNavigationModule() {
+        var customerModule = ModuleCatalog.MODULES.stream()
+                .filter(module -> module.id().equals("UC-16"))
+                .findFirst()
+                .orElseThrow();
+
+        assertFalse(customerModule.staffAccessible());
+        assertEquals(9, customerModule.columns().size());
+
+        var salesModule = ModuleCatalog.MODULES.stream()
+                .filter(module -> module.id().equals("UC-17"))
+                .findFirst()
+                .orElseThrow();
+        assertTrue(salesModule.staffAccessible());
     }
 
     @Test

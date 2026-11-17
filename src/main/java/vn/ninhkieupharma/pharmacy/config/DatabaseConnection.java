@@ -6,6 +6,7 @@ import java.sql.SQLException;
 import java.util.Properties;
 
 public final class DatabaseConnection {
+    private static final String SCHEMA_MISMATCH_PREFIX = "Database schema is missing required";
     private static final String DEFAULT_HOST = "127.0.0.1";
     private static final int DEFAULT_PORT = 3306;
     private static final String DEFAULT_DATABASE = "quan_ly_cua_hang";
@@ -16,7 +17,14 @@ public final class DatabaseConnection {
             "warehouse_locations", "inventory_batches", "goods_receipts",
             "goods_receipt_items", "stocktakes", "stocktake_items", "customers",
             "customer_allergies", "loyalty_programs", "promotions", "sales",
-            "sale_items", "inventory_movements");
+            "promotion_point_tiers", "sale_items", "inventory_movements", "product_ingredients");
+    private static final java.util.Map<String, java.util.Set<String>> REQUIRED_COLUMNS = java.util.Map.of(
+            "customers", java.util.Set.of("is_blocked", "block_reason", "date_of_birth"),
+            "products", java.util.Set.of("selling_price"),
+            "sales", java.util.Set.of("promotion_discount_amount", "points_discount_amount",
+                    "prescription_code", "prescription_date", "prescribing_doctor",
+                    "clinic", "diagnosis", "note"),
+            "sale_items", java.util.Set.of("dosage_instructions", "treatment_days"));
 
     private DatabaseConnection() {
     }
@@ -36,17 +44,48 @@ public final class DatabaseConnection {
             java.util.Set<String> missing = new java.util.TreeSet<>(REQUIRED_TABLES);
             missing.removeAll(found);
             if (!missing.isEmpty()) {
-                throw new SQLException("Database `" + database + "` is missing required tables: "
-                        + String.join(", ", missing) + ". Run 01_schema_quan_ly_cua_hang.sql first.");
+                throw new MissingSchemaException(SCHEMA_MISMATCH_PREFIX + " tables: "
+                        + String.join(", ", missing)
+                        + ". Back up the existing database, then run the applicable scripts in "
+                        + "environment/migrations/ in order (V2, V3, then V4) using MySQL/phpMyAdmin. "
+                        + "Do not run the full schema script against an existing database.");
+            }
+            for (var entry : REQUIRED_COLUMNS.entrySet()) {
+                java.util.Set<String> foundColumns = new java.util.HashSet<>();
+                try (var statement = connection.prepareStatement(
+                        "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+                                + "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?")) {
+                    statement.setString(1, entry.getKey());
+                    try (var resultSet = statement.executeQuery()) {
+                        while (resultSet.next()) {
+                            foundColumns.add(resultSet.getString(1));
+                        }
+                    }
+                }
+                java.util.Set<String> missingColumns = new java.util.TreeSet<>(entry.getValue());
+                missingColumns.removeAll(foundColumns);
+                if (!missingColumns.isEmpty()) {
+                    throw new MissingSchemaException(SCHEMA_MISMATCH_PREFIX + " "
+                            + entry.getKey() + " columns: " + String.join(", ", missingColumns)
+                            + ". Back up the existing database, then run V2, V3, and "
+                            + "environment/migrations/V4__transactional_sales_checkout.sql in order "
+                            + "using MySQL/phpMyAdmin. Do not run the full schema script against an existing database.");
+                }
             }
         } catch (SQLException exception) {
-            if (exception.getMessage() != null
-                    && exception.getMessage().contains("Run 01_schema_quan_ly_cua_hang.sql first")) {
+            if (exception.getMessage() != null && exception.getMessage().startsWith(SCHEMA_MISMATCH_PREFIX)) {
                 throw exception;
             }
             throw new SQLException("Could not connect to database `" + database
-                    + "`. Start MySQL and run 01_schema_quan_ly_cua_hang.sql before launching the app.",
+                    + "`. Start MySQL and run environment/01_schema_quan_ly_cua_hang.sql "
+                    + "before launching the app.",
                     exception);
+        }
+    }
+
+    public static final class MissingSchemaException extends SQLException {
+        public MissingSchemaException(String message) {
+            super(message);
         }
     }
 

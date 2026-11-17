@@ -66,11 +66,13 @@ class FeatureServicesTest {
         int originalSize = products.findAll(productsModule).size();
 
         ModuleRow created = products.create(productsModule,
-                List.of("TEST01", "Test Product", "Test Category", "Box", "No", "Active", "Test Supplier"));
+                List.of("TEST01", "Test Product", "Test Category", "Tablet", "Box",
+                        "No", "Active", "Test Supplier", "", ""));
         assertEquals(originalSize + 1, products.findAll(productsModule).size());
 
         products.update(productsModule, created.id(),
-                List.of("TEST01", "Updated Product", "Test Category", "Box", "No", "Active", "Test Supplier"));
+                List.of("TEST01", "Updated Product", "Test Category", "Tablet", "Box",
+                        "No", "Active", "Test Supplier", "", ""));
         assertTrue(products.findAll(productsModule).stream()
                 .anyMatch(row -> row.id().equals(created.id())
                         && row.values().get(1).equals("Updated Product")));
@@ -92,18 +94,19 @@ class FeatureServicesTest {
         FeatureModuleService products = services.forModule(productsModule);
 
         ModuleRow created = products.create(productsModule,
-                List.of("TEST02", "Test Product", "Test Category", "Box", "No", "Active", "Test Supplier"));
+                List.of("TEST02", "Test Product", "Test Category", "Tablet", "Box",
+                        "No", "Active", "Test Supplier", "", ""));
         assertTrue(services.forModule(categoryReport).findAll(categoryReport).stream()
-                .anyMatch(row -> row.values().get(0).equals("Test Category")));
+                .anyMatch(row -> row.values().get(1).equals("Test Category")));
         assertTrue(services.forModule(supplierReport).findAll(supplierReport).stream()
-                .anyMatch(row -> row.values().get(0).equals("Test Supplier")));
+                .anyMatch(row -> row.values().get(1).equals("Test Supplier")));
 
         assertThrows(IllegalStateException.class, () ->
                 services.forModule(categoryReport).create(categoryReport,
                         List.of("Category", "1", "100%", "Stable")));
         products.delete(productsModule, created.id());
         assertFalse(services.forModule(categoryReport).findAll(categoryReport).stream()
-                .anyMatch(row -> row.values().get(0).equals("Test Category")));
+                .anyMatch(row -> row.values().get(1).equals("Test Category")));
     }
 
     @Test

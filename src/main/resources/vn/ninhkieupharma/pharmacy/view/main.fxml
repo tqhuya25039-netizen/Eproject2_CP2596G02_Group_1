@@ -47,6 +47,7 @@
         <HBox alignment="CENTER_LEFT" styleClass="topbar">
             <Label fx:id="breadcrumbLabel" text="Tổng quan" styleClass="topbar-title"/>
             <HBox HBox.hgrow="ALWAYS"/>
+            <Label fx:id="exchangeRateStatusLabel" text="" styleClass="helper-text"/>
             <Button fx:id="languageButton" text="English" onAction="#handleToggleLanguage"
                     styleClass="button-secondary"/>
             <Label fx:id="demoBadgeLabel" text="MYSQL" styleClass="demo-badge"/>

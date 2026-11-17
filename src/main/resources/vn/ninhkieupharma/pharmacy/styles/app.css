@@ -118,6 +118,47 @@
     -fx-border-width: 1.5px;
 }
 
+.checkout-line {
+    -fx-padding: 7px;
+    -fx-background-color: #FFFFFF;
+    -fx-background-radius: 6px;
+}
+
+.allergy-warning-line {
+    -fx-border-color: #DC2626;
+    -fx-border-width: 1.5px;
+    -fx-border-radius: 6px;
+}
+
+.allergy-warning {
+    -fx-text-fill: #B91C1C;
+    -fx-font-weight: bold;
+}
+
+.customer-suggestions {
+    -fx-background-color: #FFFFFF;
+    -fx-border-color: #CBD5E1;
+    -fx-border-radius: 7px;
+    -fx-background-radius: 7px;
+}
+
+.customer-suggestions .list-cell {
+    -fx-padding: 10px 12px;
+    -fx-background-color: #FFFFFF;
+}
+
+.customer-suggestions .list-cell:filled:hover,
+.customer-suggestions .list-cell:filled:selected {
+    -fx-background-color: #EFF6FF;
+    -fx-text-fill: #1E3A8A;
+}
+
+.customer-details {
+    -fx-background-color: #F8FAFC;
+    -fx-padding: 12px;
+    -fx-background-radius: 7px;
+}
+
 .login-submit {
     -fx-padding: 13px;
 }

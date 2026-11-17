@@ -39,8 +39,10 @@ class FeatureDaoMappingTest {
         StoreSchedule schedule = new StoreSchedule(id(), "Monday", "Morning", "Employee", "Published", "note");
         Attendance attendance = new Attendance(id(), "Employee", "Morning", "09:00", "17:00", "Present");
         ProductCategory category = new ProductCategory(id(), "C-1", "Category", "Description", "Active");
-        Product product = new Product(id(), "P-1", "Product", "Category", "Box", "No", "Active", "Supplier");
-        Supplier supplier = new Supplier(id(), "S-1", "Supplier", "0902", "s@example.test", "Active");
+        Product product = new Product(
+                id(), "P-1", "Product", "Category", "Tablet", "Box", "No", "Active", "Supplier");
+        Supplier supplier = new Supplier(
+                id(), "S-1", "Supplier", "0902", "s@example.test", "Can Tho", "Active");
         GoodsReceipt receipt = new GoodsReceipt(id(), "R-1", "Supplier", "2026-01-02", "3", "Received");
         StorageLocation location = new StorageLocation(id(), "L-1", "Shelf", "Description", "Active");
         StocktakeAdjustment stocktake = new StocktakeAdjustment(id(), "I-1", "Shelf", "2026-01-03", "1", "Done");
@@ -58,9 +60,9 @@ class FeatureDaoMappingTest {
         assertMapping(ProductCategoryDAOImpl.codec(), category,
                 List.of("C-1", "Category", "Description", "Active"));
         assertMapping(ProductDAOImpl.codec(), product,
-                List.of("P-1", "Product", "Category", "Box", "No", "Active", "Supplier"));
+                List.of("P-1", "Product", "Category", "Tablet", "Box", "No", "Active", "Supplier"));
         assertMapping(SupplierDAOImpl.codec(), supplier,
-                List.of("S-1", "Supplier", "0902", "s@example.test", "Active"));
+                List.of("S-1", "Supplier", "0902", "s@example.test", "Can Tho", "Active"));
         assertMapping(GoodsReceiptDAOImpl.codec(), receipt,
                 List.of("R-1", "Supplier", "2026-01-02", "3", "Received"));
         assertMapping(StorageLocationDAOImpl.codec(), location,
