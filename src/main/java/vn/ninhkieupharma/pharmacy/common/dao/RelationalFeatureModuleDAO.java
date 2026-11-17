@@ -98,15 +98,17 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
                     JOIN shifts s ON s.shift_id = a.shift_id
                     ORDER BY a.work_date, e.full_name
                     """);
-            case "UC-07" -> query(moduleId, """
+           case "UC-07" -> query(moduleId, """
                     SELECT category_id, category_name, COALESCE(description, ''),
                            IF(is_active, 'ACTIVE', 'INACTIVE')
                     FROM product_categories ORDER BY category_id
                     """);
             case "UC-08" -> query(moduleId, """
-                    SELECT p.product_id, p.product_code, p.product_name, c.category_name, p.unit_name,
+                    SELECT p.product_id, p.product_code, p.product_name, c.category_name,
+                           COALESCE(p.dosage_form, ''), p.unit_name,
                            IF(p.requires_prescription, 'Yes', 'No'), IF(p.is_active, 'ACTIVE', 'INACTIVE'),
-                           COALESCE((SELECT MIN(s.supplier_name) FROM supplier_products sp
+                           COALESCE((SELECT GROUP_CONCAT(DISTINCT s.supplier_name ORDER BY s.supplier_name SEPARATOR ', ')
+                                     FROM supplier_products sp
                                      JOIN suppliers s ON s.supplier_id = sp.supplier_id
                                      WHERE sp.product_id = p.product_id), '')
                     FROM products p
@@ -115,28 +117,71 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
                     """);
             case "UC-09" -> query(moduleId, """
                     SELECT supplier_id, supplier_code, supplier_name, COALESCE(phone, ''),
-                           COALESCE(email, ''), IF(is_active, 'ACTIVE', 'INACTIVE')
+                           COALESCE(email, ''), COALESCE(address, ''), IF(is_active, 'ACTIVE', 'INACTIVE')
                     FROM suppliers ORDER BY supplier_id
                     """);
             case "UC-10" -> query(moduleId, """
-                    SELECT c.category_id, c.category_name, COUNT(p.product_id),
-                           CONCAT(ROUND(100.0 * COUNT(p.product_id) /
-                               NULLIF((SELECT COUNT(*) FROM products), 0), 1), '%'),
-                           IF(COUNT(p.product_id) > 0, 'Has products', 'Empty')
+                    SELECT (c.category_id * 100 + MAX(YEAR(p.created_at)) * 10 + MAX(QUARTER(p.created_at))) AS row_key,
+                           CONCAT(MAX(YEAR(p.created_at)), '-Q', MAX(QUARTER(p.created_at))) AS quarter_label,
+                           c.category_name,
+                           CONCAT(COUNT(DISTINCT p.product_id), ' SP (',
+                                  COUNT(DISTINCT COALESCE(NULLIF(p.dosage_form, ''), 'Mặc định')), ' dạng / ',
+                                  COUNT(DISTINCT sp.supplier_id), ' NCC)'),
+                           CONCAT(ROUND(100.0 * COUNT(DISTINCT p.product_id) /
+                               NULLIF((SELECT COUNT(*) FROM products p2
+                                       WHERE YEAR(p2.created_at) = MAX(YEAR(p.created_at))
+                                         AND QUARTER(p2.created_at) = MAX(QUARTER(p.created_at))), 0), 1), '%'),
+                           CASE
+                               WHEN COUNT(DISTINCT p.product_id) >= 5 AND COUNT(DISTINCT sp.supplier_id) >= 2
+                                   THEN 'Nhiều lựa chọn thay thế'
+                               WHEN COUNT(DISTINCT p.product_id) >= 2
+                                   THEN 'Có thể thay thế cơ bản'
+                               ELSE 'Ít mặt hàng - Cần mở rộng'
+                           END
                     FROM product_categories c
-                    LEFT JOIN products p ON p.category_id = c.category_id
-                    GROUP BY c.category_id, c.category_name
-                    ORDER BY c.category_name
+                    JOIN products p ON p.category_id = c.category_id AND p.is_active = 1
+                    LEFT JOIN supplier_products sp ON sp.product_id = p.product_id
+                    GROUP BY YEAR(p.created_at), QUARTER(p.created_at), c.category_id, c.category_name
+                    ORDER BY quarter_label DESC, COUNT(DISTINCT p.product_id) DESC
                     """);
             case "UC-11" -> query(moduleId, """
-                    SELECT s.supplier_id, s.supplier_name, COUNT(sp.product_id),
-                           CONCAT(ROUND(100.0 * COUNT(sp.product_id) /
-                               NULLIF((SELECT COUNT(*) FROM supplier_products), 0), 1), '%'),
-                           IF(COUNT(sp.product_id) > 1, 'Multiple products', 'Limited coverage')
-                    FROM suppliers s
-                    LEFT JOIN supplier_products sp ON sp.supplier_id = s.supplier_id
-                    GROUP BY s.supplier_id, s.supplier_name
-                    ORDER BY s.supplier_name
+                    SELECT (s.supplier_id * 10000 + MAX(YEAR(gr.received_at)) * 100 + MAX(MONTH(gr.received_at))) AS row_key,
+                           DATE_FORMAT(gr.received_at, '%Y-%m') AS month_label,
+                           s.supplier_name,
+                           COUNT(DISTINCT ib.product_id) AS item_count,
+                           CONCAT(ROUND(100.0 * COUNT(DISTINCT ib.product_id) /
+                               NULLIF((SELECT COUNT(DISTINCT ib2.product_id)
+                                       FROM goods_receipts gr2
+                                       JOIN goods_receipt_items gri2 ON gri2.receipt_id = gr2.receipt_id
+                                       JOIN inventory_batches ib2 ON ib2.batch_id = gri2.batch_id
+                                       WHERE gr2.status = 'RECEIVED'
+                                         AND DATE_FORMAT(gr2.received_at, '%Y-%m') = month_label), 0), 1), '%'),
+                           CASE
+                               WHEN (1.0 * COUNT(DISTINCT ib.product_id) /
+                                   NULLIF((SELECT COUNT(DISTINCT ib2.product_id)
+                                           FROM goods_receipts gr2
+                                           JOIN goods_receipt_items gri2 ON gri2.receipt_id = gr2.receipt_id
+                                           JOIN inventory_batches ib2 ON ib2.batch_id = gri2.batch_id
+                                           WHERE gr2.status = 'RECEIVED'
+                                             AND DATE_FORMAT(gr2.received_at, '%Y-%m') = month_label), 0)) >= 0.50
+                                   THEN 'Phụ thuộc lớn (>= 50%)'
+                               WHEN (1.0 * COUNT(DISTINCT ib.product_id) /
+                                   NULLIF((SELECT COUNT(DISTINCT ib2.product_id)
+                                           FROM goods_receipts gr2
+                                           JOIN goods_receipt_items gri2 ON gri2.receipt_id = gr2.receipt_id
+                                           JOIN inventory_batches ib2 ON ib2.batch_id = gri2.batch_id
+                                           WHERE gr2.status = 'RECEIVED'
+                                             AND DATE_FORMAT(gr2.received_at, '%Y-%m') = month_label), 0)) >= 0.25
+                                   THEN 'Tỷ trọng trung bình'
+                               ELSE 'Phân bổ đều / Thấp'
+                           END
+                    FROM goods_receipts gr
+                    JOIN suppliers s ON s.supplier_id = gr.supplier_id
+                    JOIN goods_receipt_items gri ON gri.receipt_id = gr.receipt_id
+                    JOIN inventory_batches ib ON ib.batch_id = gri.batch_id
+                    WHERE gr.status = 'RECEIVED'
+                    GROUP BY DATE_FORMAT(gr.received_at, '%Y-%m'), s.supplier_id, s.supplier_name
+                    ORDER BY month_label DESC, item_count DESC
                     """);
             case "UC-12" -> query(moduleId, """
                     SELECT gr.receipt_id, gr.receipt_code, s.supplier_name,
@@ -349,74 +394,90 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
 
     private ModuleRow createCategory(List<String> values) {
         requireSize("UC-07", values, 3);
+        if (values.get(0).isBlank()) {
+            throw new IllegalArgumentException("Tên danh mục không được để trống.");
+        }
         long id = insert("""
                 INSERT INTO product_categories (category_name, description, is_active)
                 VALUES (?, ?, ?)
                 """, statement -> {
-            statement.setString(1, values.get(0));
-            statement.setString(2, values.get(1));
+            statement.setString(1, values.get(0).trim());
+            setNullableString(statement, 2, values.get(1));
             statement.setBoolean(3, isActive(values.get(2)));
         });
-        return row(id, values);
+        return row(id, List.of(values.get(0).trim(), values.get(1).trim(),
+                isActive(values.get(2)) ? "ACTIVE" : "INACTIVE"));
     }
 
     private ModuleRow updateCategory(long id, List<String> values) {
         requireSize("UC-07", values, 3);
+        if (values.get(0).isBlank()) {
+            throw new IllegalArgumentException("Tên danh mục không được để trống.");
+        }
         execute("""
                 UPDATE product_categories SET category_name = ?, description = ?, is_active = ?
                 WHERE category_id = ?
                 """, statement -> {
-            statement.setString(1, values.get(0));
-            statement.setString(2, values.get(1));
+            statement.setString(1, values.get(0).trim());
+            setNullableString(statement, 2, values.get(1));
             statement.setBoolean(3, isActive(values.get(2)));
             statement.setLong(4, id);
         });
-        return row(id, values);
+        return row(id, List.of(values.get(0).trim(), values.get(1).trim(),
+                isActive(values.get(2)) ? "ACTIVE" : "INACTIVE"));
     }
 
     private ModuleRow createProduct(List<String> values) {
-        requireSize("UC-08", values, 7);
+        requireSize("UC-08", values, 8);
+        if (values.get(0).isBlank() || values.get(1).isBlank() || values.get(2).isBlank() || values.get(4).isBlank()) {
+            throw new IllegalArgumentException("Mã sản phẩm, tên sản phẩm, danh mục và đơn vị tính là bắt buộc.");
+        }
         long categoryId = resolveId("SELECT category_id FROM product_categories WHERE category_name = ?",
-                values.get(2));
+                values.get(2).trim());
         long productId = transaction(connection -> {
             long id = insert(connection, """
                     INSERT INTO products
                         (category_id, product_code, product_name, dosage_form, unit_name,
                          requires_prescription, is_active)
-                    VALUES (?, ?, ?, NULL, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """, statement -> {
                 statement.setLong(1, categoryId);
-                statement.setString(2, values.get(0));
-                statement.setString(3, values.get(1));
-                statement.setString(4, values.get(3));
-                statement.setBoolean(5, affirmative(values.get(4)));
-                statement.setBoolean(6, isActive(values.get(5)));
+                statement.setString(2, values.get(0).trim());
+                statement.setString(3, values.get(1).trim());
+                setNullableString(statement, 4, values.get(3));
+                statement.setString(5, values.get(4).trim());
+                statement.setBoolean(6, affirmative(values.get(5)));
+                statement.setBoolean(7, isActive(values.get(6)));
             });
-            requireNoUnpricedSupplier(values.get(6));
+            requireNoUnpricedSupplier(values.get(7));
             return id;
         });
         return row(productId, values);
     }
 
     private ModuleRow updateProduct(long id, List<String> values) {
-        requireSize("UC-08", values, 7);
+        requireSize("UC-08", values, 8);
+        if (values.get(0).isBlank() || values.get(1).isBlank() || values.get(2).isBlank() || values.get(4).isBlank()) {
+            throw new IllegalArgumentException("Mã sản phẩm, tên sản phẩm, danh mục và đơn vị tính là bắt buộc.");
+        }
         long categoryId = resolveId("SELECT category_id FROM product_categories WHERE category_name = ?",
-                values.get(2));
+                values.get(2).trim());
         transaction(connection -> {
             execute(connection, """
                     UPDATE products SET category_id = ?, product_code = ?, product_name = ?,
-                        unit_name = ?, requires_prescription = ?, is_active = ?
+                        dosage_form = ?, unit_name = ?, requires_prescription = ?, is_active = ?
                     WHERE product_id = ?
                     """, statement -> {
                 statement.setLong(1, categoryId);
-                statement.setString(2, values.get(0));
-                statement.setString(3, values.get(1));
-                statement.setString(4, values.get(3));
-                statement.setBoolean(5, affirmative(values.get(4)));
-                statement.setBoolean(6, isActive(values.get(5)));
-                statement.setLong(7, id);
+                statement.setString(2, values.get(0).trim());
+                statement.setString(3, values.get(1).trim());
+                setNullableString(statement, 4, values.get(3));
+                statement.setString(5, values.get(4).trim());
+                statement.setBoolean(6, affirmative(values.get(5)));
+                statement.setBoolean(7, isActive(values.get(6)));
+                statement.setLong(8, id);
             });
-            requireExistingSupplierLink(connection, id, values.get(6));
+            requireExistingSupplierLink(connection, id, values.get(7));
             return null;
         });
         return row(id, values);
@@ -461,32 +522,40 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
     }
 
     private ModuleRow createSupplier(List<String> values) {
-        requireSize("UC-09", values, 5);
+        requireSize("UC-09", values, 6);
+        if (values.get(0).isBlank() || values.get(1).isBlank()) {
+            throw new IllegalArgumentException("Mã nhà cung cấp và tên nhà cung cấp là bắt buộc.");
+        }
         long id = insert("""
-                INSERT INTO suppliers (supplier_code, supplier_name, phone, email, is_active)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO suppliers (supplier_code, supplier_name, phone, email, address, is_active)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """, statement -> {
-            statement.setString(1, values.get(0));
-            statement.setString(2, values.get(1));
-            statement.setString(3, values.get(2));
-            statement.setString(4, values.get(3));
-            statement.setBoolean(5, isActive(values.get(4)));
+            statement.setString(1, values.get(0).trim());
+            statement.setString(2, values.get(1).trim());
+            setNullableString(statement, 3, values.get(2));
+            setNullableString(statement, 4, values.get(3));
+            setNullableString(statement, 5, values.get(4));
+            statement.setBoolean(6, isActive(values.get(5)));
         });
         return row(id, values);
     }
 
     private ModuleRow updateSupplier(long id, List<String> values) {
-        requireSize("UC-09", values, 5);
+        requireSize("UC-09", values, 6);
+        if (values.get(0).isBlank() || values.get(1).isBlank()) {
+            throw new IllegalArgumentException("Mã nhà cung cấp và tên nhà cung cấp là bắt buộc.");
+        }
         execute("""
-                UPDATE suppliers SET supplier_code = ?, supplier_name = ?, phone = ?, email = ?, is_active = ?
+                UPDATE suppliers SET supplier_code = ?, supplier_name = ?, phone = ?, email = ?, address = ?, is_active = ?
                 WHERE supplier_id = ?
                 """, statement -> {
-            statement.setString(1, values.get(0));
-            statement.setString(2, values.get(1));
-            statement.setString(3, values.get(2));
-            statement.setString(4, values.get(3));
-            statement.setBoolean(5, isActive(values.get(4)));
-            statement.setLong(6, id);
+            statement.setString(1, values.get(0).trim());
+            statement.setString(2, values.get(1).trim());
+            setNullableString(statement, 3, values.get(2));
+            setNullableString(statement, 4, values.get(3));
+            setNullableString(statement, 5, values.get(4));
+            statement.setBoolean(6, isActive(values.get(5)));
+            statement.setLong(7, id);
         });
         return row(id, values);
     }

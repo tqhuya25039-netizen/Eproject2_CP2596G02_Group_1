@@ -259,31 +259,31 @@ public class PageRenderer {
                         "Trạng thái", "Đúng giờ", attendance.size() - lateCount,
                         "Đi trễ", lateCount)));
             }
-            case "UC-10" -> {
+           case "UC-10" -> {
                 List<ModuleRow> categoryRows = featureService.findAll(module);
                 List<String> categories = categoryRows.stream()
-                        .map(row -> Localization.text(row.values().get(0)))
+                        .map(row -> row.values().get(0) + " · " + Localization.text(row.values().get(1)))
                         .toList();
                 List<Number> counts = categoryRows.stream()
-                        .map(row -> (Number) Integer.parseInt(row.values().get(1)))
+                        .map(row -> (Number) Integer.parseInt(row.values().get(2).split("\\s+")[0]))
                         .toList();
-                charts.getChildren().add(chartCard("Số sản phẩm mỗi danh mục", barChart(
-                        "Danh mục", "Số sản phẩm", categories, seriesFromList("Sản phẩm", counts))));
-                charts.getChildren().add(chartCard("Tỷ trọng danh mục",
+                charts.getChildren().add(chartCard("Số sản phẩm theo quý & danh mục", barChart(
+                        "Quý · Danh mục", "Số sản phẩm", categories, seriesFromList("Sản phẩm", counts))));
+                charts.getChildren().add(chartCard("Tỷ trọng ngành hàng",
                         pieChart("Danh mục", seriesPairs(categories, counts))));
             }
             case "UC-11" -> {
                 List<ModuleRow> supplierRows = featureService.findAll(module);
                 List<String> suppliers = supplierRows.stream()
-                        .map(row -> Localization.text(row.values().get(0)))
+                        .map(row -> row.values().get(0) + " · " + Localization.text(row.values().get(1)))
                         .toList();
                 List<Number> itemCounts = supplierRows.stream()
-                        .map(row -> (Number) Integer.parseInt(row.values().get(1)))
+                        .map(row -> (Number) Integer.parseInt(row.values().get(2)))
                         .toList();
-                charts.getChildren().add(chartCard("Sản phẩm theo nhà cung cấp", barChart(
-                        "Nhà cung cấp", "Số mặt hàng", suppliers,
+                charts.getChildren().add(chartCard("Mặt hàng cung ứng theo tháng & NCC", barChart(
+                        "Tháng · Nhà cung cấp", "Số mặt hàng", suppliers,
                         seriesFromList("Mặt hàng", itemCounts))));
-                charts.getChildren().add(chartCard("Tỷ trọng nhà cung cấp",
+                charts.getChildren().add(chartCard("Tỷ trọng độ phủ nhà cung cấp",
                         pieChart("Nhà cung cấp", seriesPairs(suppliers, itemCounts))));
             }
             case "UC-15" -> {
