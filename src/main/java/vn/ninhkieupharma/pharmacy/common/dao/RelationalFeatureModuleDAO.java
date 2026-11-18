@@ -12,8 +12,10 @@ import java.sql.Statement;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -110,7 +112,7 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
                            c.category_name,
                            COALESCE(p.dosage_form, ''),
                            p.unit_name,
-                           REPLACE(FORMAT(p.unit_price, 0), ',', '.'),
+                           CAST(COALESCE(p.selling_price, 0) AS CHAR),
                            CASE WHEN p.requires_prescription = 1 THEN 'Yes' ELSE 'No' END,
                            CASE WHEN p.is_active = 1 THEN 'ACTIVE' ELSE 'INACTIVE' END,
                            COALESCE(GROUP_CONCAT(DISTINCT s.supplier_name ORDER BY s.supplier_name SEPARATOR ', '), '')
@@ -119,7 +121,7 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
                     LEFT JOIN supplier_products sp ON sp.product_id = p.product_id
                     LEFT JOIN suppliers s ON s.supplier_id = sp.supplier_id
                     GROUP BY p.product_id, p.product_code, p.product_name, c.category_name,
-                             p.dosage_form, p.unit_name, p.unit_price, p.requires_prescription, p.is_active
+                             p.dosage_form, p.unit_name, p.selling_price, p.requires_prescription, p.is_active
                     ORDER BY p.product_code
                     """);
             case "UC-09" -> query(moduleId, """
@@ -128,67 +130,88 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
                     FROM suppliers ORDER BY supplier_id
                     """);
             case "UC-10" -> query(moduleId, """
-                    SELECT (c.category_id * 100 + MAX(YEAR(p.created_at)) * 10 + MAX(QUARTER(p.created_at))) AS row_key,
-                           CONCAT(MAX(YEAR(p.created_at)), '-Q', MAX(QUARTER(p.created_at))) AS quarter_label,
-                           c.category_name,
-                           CONCAT(COUNT(DISTINCT p.product_id), ' SP (',
-                                  COUNT(DISTINCT COALESCE(NULLIF(p.dosage_form, ''), 'Mặc định')), ' dạng / ',
-                                  COUNT(DISTINCT sp.supplier_id), ' NCC)'),
-                           CONCAT(ROUND(100.0 * COUNT(DISTINCT p.product_id) /
-                               NULLIF((SELECT COUNT(*) FROM products p2
-                                       WHERE YEAR(p2.created_at) = MAX(YEAR(p.created_at))
-                                         AND QUARTER(p2.created_at) = MAX(QUARTER(p.created_at))), 0), 1), '%'),
+                    WITH category_quarter AS (
+                        SELECT YEAR(p.created_at) AS year_num,
+                               QUARTER(p.created_at) AS quarter_num,
+                               c.category_id,
+                               c.category_name,
+                               COUNT(DISTINCT p.product_id) AS product_count,
+                               COUNT(DISTINCT COALESCE(NULLIF(p.dosage_form, ''), 'Mặc định')) AS dosage_count,
+                               COUNT(DISTINCT sp.supplier_id) AS supplier_count
+                        FROM product_categories c
+                        JOIN products p ON p.category_id = c.category_id AND p.is_active = 1
+                        LEFT JOIN supplier_products sp ON sp.product_id = p.product_id
+                        GROUP BY YEAR(p.created_at), QUARTER(p.created_at), c.category_id, c.category_name
+                    ),
+                    quarter_totals AS (
+                        SELECT year_num, quarter_num, SUM(product_count) AS total_product_count
+                        FROM category_quarter
+                        GROUP BY year_num, quarter_num
+                    )
+                    SELECT ROW_NUMBER() OVER (
+                               ORDER BY cq.year_num DESC, cq.quarter_num DESC,
+                                        cq.product_count DESC, cq.category_id
+                           ) AS row_key,
+                           CONCAT(cq.year_num, '-Q', cq.quarter_num) AS quarter_label,
+                           cq.category_name,
+                           CONCAT(cq.product_count, ' SP (', cq.dosage_count, ' dạng / ',
+                                  cq.supplier_count, ' NCC)'),
+                           CONCAT(ROUND(100.0 * cq.product_count /
+                               NULLIF(qt.total_product_count, 0), 1), '%'),
                            CASE
-                               WHEN COUNT(DISTINCT p.product_id) >= 5 AND COUNT(DISTINCT sp.supplier_id) >= 2
+                               WHEN cq.product_count >= 5 AND cq.supplier_count >= 2
                                    THEN 'Nhiều lựa chọn thay thế'
-                               WHEN COUNT(DISTINCT p.product_id) >= 2
+                               WHEN cq.product_count >= 2
                                    THEN 'Có thể thay thế cơ bản'
                                ELSE 'Ít mặt hàng - Cần mở rộng'
                            END
-                    FROM product_categories c
-                    JOIN products p ON p.category_id = c.category_id AND p.is_active = 1
-                    LEFT JOIN supplier_products sp ON sp.product_id = p.product_id
-                    GROUP BY YEAR(p.created_at), QUARTER(p.created_at), c.category_id, c.category_name
-                    ORDER BY quarter_label DESC, COUNT(DISTINCT p.product_id) DESC
+                    FROM category_quarter cq
+                    JOIN quarter_totals qt
+                      ON qt.year_num = cq.year_num AND qt.quarter_num = cq.quarter_num
+                    ORDER BY cq.year_num DESC, cq.quarter_num DESC, cq.product_count DESC
                     """);
             case "UC-11" -> query(moduleId, """
-                    SELECT (s.supplier_id * 10000 + MAX(YEAR(gr.received_at)) * 100 + MAX(MONTH(gr.received_at))) AS row_key,
-                           DATE_FORMAT(gr.received_at, '%Y-%m') AS month_label,
+                    WITH supplier_month_products AS (
+                        SELECT DATE_FORMAT(gr.received_at, '%Y-%m') AS month_label,
+                               gr.supplier_id,
+                               ib.product_id
+                        FROM goods_receipts gr
+                        JOIN goods_receipt_items gri ON gri.receipt_id = gr.receipt_id
+                        JOIN inventory_batches ib ON ib.batch_id = gri.batch_id
+                        WHERE gr.status = 'RECEIVED'
+                        GROUP BY DATE_FORMAT(gr.received_at, '%Y-%m'), gr.supplier_id, ib.product_id
+                    ),
+                    month_totals AS (
+                        SELECT month_label, COUNT(DISTINCT product_id) AS total_product_count
+                        FROM supplier_month_products
+                        GROUP BY month_label
+                    ),
+                    supplier_month_totals AS (
+                        SELECT month_label, supplier_id, COUNT(*) AS product_count
+                        FROM supplier_month_products
+                        GROUP BY month_label, supplier_id
+                    )
+                    SELECT ROW_NUMBER() OVER (
+                               ORDER BY smt.month_label DESC, smt.product_count DESC, smt.supplier_id
+                           ) AS row_key,
+                           smt.month_label,
                            s.supplier_name,
-                           COUNT(DISTINCT ib.product_id) AS item_count,
-                           CONCAT(ROUND(100.0 * COUNT(DISTINCT ib.product_id) /
-                               NULLIF((SELECT COUNT(DISTINCT ib2.product_id)
-                                       FROM goods_receipts gr2
-                                       JOIN goods_receipt_items gri2 ON gri2.receipt_id = gr2.receipt_id
-                                       JOIN inventory_batches ib2 ON ib2.batch_id = gri2.batch_id
-                                       WHERE gr2.status = 'RECEIVED'
-                                         AND DATE_FORMAT(gr2.received_at, '%Y-%m') = month_label), 0), 1), '%'),
+                           smt.product_count AS item_count,
+                           CONCAT(ROUND(100.0 * smt.product_count /
+                               NULLIF(mt.total_product_count, 0), 1), '%'),
                            CASE
-                               WHEN (1.0 * COUNT(DISTINCT ib.product_id) /
-                                   NULLIF((SELECT COUNT(DISTINCT ib2.product_id)
-                                           FROM goods_receipts gr2
-                                           JOIN goods_receipt_items gri2 ON gri2.receipt_id = gr2.receipt_id
-                                           JOIN inventory_batches ib2 ON ib2.batch_id = gri2.batch_id
-                                           WHERE gr2.status = 'RECEIVED'
-                                             AND DATE_FORMAT(gr2.received_at, '%Y-%m') = month_label), 0)) >= 0.50
+                               WHEN 1.0 * smt.product_count /
+                                   NULLIF(mt.total_product_count, 0) >= 0.50
                                    THEN 'Phụ thuộc lớn (>= 50%)'
-                               WHEN (1.0 * COUNT(DISTINCT ib.product_id) /
-                                   NULLIF((SELECT COUNT(DISTINCT ib2.product_id)
-                                           FROM goods_receipts gr2
-                                           JOIN goods_receipt_items gri2 ON gri2.receipt_id = gr2.receipt_id
-                                           JOIN inventory_batches ib2 ON ib2.batch_id = gri2.batch_id
-                                           WHERE gr2.status = 'RECEIVED'
-                                             AND DATE_FORMAT(gr2.received_at, '%Y-%m') = month_label), 0)) >= 0.25
+                               WHEN 1.0 * smt.product_count /
+                                   NULLIF(mt.total_product_count, 0) >= 0.25
                                    THEN 'Tỷ trọng trung bình'
                                ELSE 'Phân bổ đều / Thấp'
                            END
-                    FROM goods_receipts gr
-                    JOIN suppliers s ON s.supplier_id = gr.supplier_id
-                    JOIN goods_receipt_items gri ON gri.receipt_id = gr.receipt_id
-                    JOIN inventory_batches ib ON ib.batch_id = gri.batch_id
-                    WHERE gr.status = 'RECEIVED'
-                    GROUP BY DATE_FORMAT(gr.received_at, '%Y-%m'), s.supplier_id, s.supplier_name
-                    ORDER BY month_label DESC, item_count DESC
+                    FROM supplier_month_totals smt
+                    JOIN month_totals mt ON mt.month_label = smt.month_label
+                    JOIN suppliers s ON s.supplier_id = smt.supplier_id
+                    ORDER BY smt.month_label DESC, smt.product_count DESC
                     """);
             case "UC-12" -> query(moduleId, """
                     SELECT gr.receipt_id, gr.receipt_code, s.supplier_name,
@@ -349,11 +372,29 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
     @Override
     public void delete(String moduleId, UUID rowId) {
         long id = numericId(rowId);
+        if ("UC-08".equals(moduleId)) {
+            transaction(connection -> {
+                execute(connection, "DELETE FROM supplier_products WHERE product_id = ?",
+                        statement -> statement.setLong(1, id));
+                execute(connection, "DELETE FROM products WHERE product_id = ?",
+                        statement -> statement.setLong(1, id));
+                return null;
+            });
+            return;
+        }
+        if ("UC-09".equals(moduleId)) {
+            transaction(connection -> {
+                execute(connection, "DELETE FROM supplier_products WHERE supplier_id = ?",
+                        statement -> statement.setLong(1, id));
+                execute(connection, "DELETE FROM suppliers WHERE supplier_id = ?",
+                        statement -> statement.setLong(1, id));
+                return null;
+            });
+            return;
+        }
         String sql = switch (moduleId) {
             case "UC-02" -> "DELETE FROM employee_availabilities WHERE availability_id = ?";
             case "UC-07" -> "DELETE FROM product_categories WHERE category_id = ?";
-            case "UC-08" -> "DELETE FROM products WHERE product_id = ?";
-            case "UC-09" -> "DELETE FROM suppliers WHERE supplier_id = ?";
             case "UC-13" -> "DELETE FROM warehouse_locations WHERE location_id = ?";
             case "UC-16" -> "DELETE FROM customers WHERE customer_id = ?";
             case "UC-18" -> "DELETE FROM promotions WHERE promotion_id = ?";
@@ -444,9 +485,9 @@ private ModuleRow createProduct(List<String> values) {
         long productId = transaction(connection -> {
             long id = insert(connection, """
                     INSERT INTO products
-                        (category_id, product_code, product_name, dosage_form, unit_name,
-                         unit_price, requires_prescription, is_active)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        (category_id, product_code, barcode, product_name, dosage_form, unit_name,
+                        selling_price, requires_prescription, is_active)
+                    VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)
                     """, statement -> {
                 statement.setLong(1, categoryId);
                 statement.setString(2, values.get(0).trim());
@@ -457,7 +498,7 @@ private ModuleRow createProduct(List<String> values) {
                 statement.setBoolean(7, affirmative(values.get(6)));
                 statement.setBoolean(8, isActive(values.get(7)));
             });
-            requireNoUnpricedSupplier(values.get(8));
+            synchronizeProductSuppliers(connection, id, values.get(8));
             return id;
         });
         return row(productId, values);
@@ -474,7 +515,7 @@ private ModuleRow createProduct(List<String> values) {
         transaction(connection -> {
             execute(connection, """
                     UPDATE products SET category_id = ?, product_code = ?, product_name = ?,
-                           dosage_form = ?, unit_name = ?, unit_price = ?, requires_prescription = ?, is_active = ?
+                           dosage_form = ?, unit_name = ?,selling_price = ?, requires_prescription = ?, is_active = ?
                     WHERE product_id = ?
                     """, statement -> {
                 statement.setLong(1, categoryId);
@@ -487,98 +528,74 @@ private ModuleRow createProduct(List<String> values) {
                 statement.setBoolean(8, isActive(values.get(7)));
                 statement.setLong(9, id);
             });
-            requireExistingSupplierLink(connection, id, values.get(8));
+            synchronizeProductSuppliers(connection, id, values.get(8));
             return null;
         });
         return row(id, values);
     }
 
     private java.math.BigDecimal parseUnitPrice(String raw) {
-    if (raw == null || raw.isBlank()) {
-        return java.math.BigDecimal.ZERO;
-    }
-    try {
-        String cleaned = raw.replace("VNĐ", "").replace(".", "").replace(",", "").trim();
-        java.math.BigDecimal price = new java.math.BigDecimal(cleaned);
-        if (price.compareTo(java.math.BigDecimal.ZERO) < 0) {
-            throw new IllegalArgumentException("Giá bán không được âm.");
+        if (raw == null || raw.isBlank()) {
+            return java.math.BigDecimal.ZERO;
         }
-        return price;
-    } catch (NumberFormatException ex) {
-        throw new IllegalArgumentException("Giá bán phải là số hợp lệ (ví dụ: 25000).");
-    }
-}
-
-    private void saveSupplierPrice(Connection connection, long productId, String supplierNames, String priceText)
-            throws SQLException {
-        boolean hasSupplier = supplierNames != null && !supplierNames.isBlank();
-        boolean hasPrice = priceText != null && !priceText.isBlank();
-        if (!hasSupplier && !hasPrice) {
-            return;
-        }
-        if (!hasSupplier) {
-            throw new IllegalArgumentException("Vui lòng nhập tên Nhà cung cấp khi khai báo Giá nhập.");
-        }
-        java.math.BigDecimal price;
         try {
-            price = hasPrice ? new java.math.BigDecimal(priceText.trim().replace(",", "")) : java.math.BigDecimal.ZERO;
+            String cleaned = raw.replace("VNĐ", "").replace(".", "").replace(",", "").trim();
+            java.math.BigDecimal price = new java.math.BigDecimal(cleaned);
             if (price.compareTo(java.math.BigDecimal.ZERO) < 0) {
-                throw new IllegalArgumentException("Giá nhập không được âm.");
+                throw new IllegalArgumentException("Giá bán không được âm.");
             }
+            return price;
         } catch (NumberFormatException ex) {
-            throw new IllegalArgumentException("Giá nhập phải là số hợp lệ (ví dụ: 35000).");
+            throw new IllegalArgumentException("Giá bán phải là số hợp lệ (ví dụ: 25000).");
         }
-        for (String part : supplierNames.split(",")) {
-            String singleName = part.trim();
-            if (singleName.isEmpty()) continue;
-            long supplierId = resolveId(connection,
-                    "SELECT supplier_id FROM suppliers WHERE supplier_name = ?", singleName);
+    }
+    private void synchronizeProductSuppliers(Connection connection, long productId, String supplierNames)
+            throws SQLException {
+        List<Long> desiredSupplierIds = new ArrayList<>();
+        Set<String> normalizedNames = new LinkedHashSet<>();
+        if (supplierNames != null && !supplierNames.isBlank()) {
+            for (String part : supplierNames.split(",", -1)) {
+                String name = part.trim();
+                if (name.isEmpty()) {
+                    throw new IllegalArgumentException("Tên nhà cung cấp không được để trống giữa các dấu phẩy.");
+                }
+                if (!normalizedNames.add(name.toLowerCase(Locale.ROOT))) {
+                    throw new IllegalArgumentException("Tên nhà cung cấp bị trùng.");
+                }
+                desiredSupplierIds.add(resolveId(connection,
+                        "SELECT supplier_id FROM suppliers WHERE supplier_name = ?", name));
+            }
+        }
+
+        List<Long> existingSupplierIds = new ArrayList<>();
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT supplier_id FROM supplier_products WHERE product_id = ?")) {
+            statement.setLong(1, productId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    existingSupplierIds.add(resultSet.getLong(1));
+                }
+            }
+        }
+        for (long existingSupplierId : existingSupplierIds) {
+            if (!desiredSupplierIds.contains(existingSupplierId)) {
+                execute(connection,
+                        "DELETE FROM supplier_products WHERE supplier_id = ? AND product_id = ?",
+                        statement -> {
+                            statement.setLong(1, existingSupplierId);
+                            statement.setLong(2, productId);
+                        });
+            }
+        }
+        for (long supplierId : desiredSupplierIds) {
             execute(connection, """
                     INSERT INTO supplier_products (supplier_id, product_id, purchase_price)
-                    VALUES (?, ?, ?)
-                    ON DUPLICATE KEY UPDATE purchase_price = VALUES(purchase_price)
+                    VALUES (?, ?, 0)
+                    ON DUPLICATE KEY UPDATE purchase_price = supplier_products.purchase_price
                     """, statement -> {
                 statement.setLong(1, supplierId);
                 statement.setLong(2, productId);
-                statement.setBigDecimal(3, price);
             });
-        }
-    }
-    private void requireNoUnpricedSupplier(String supplierName) {
-        if (supplierName == null || supplierName.isBlank()) {
-            return;
-        }
-        throw new UnsupportedOperationException("The product form does not collect supplier purchase price; "
-                + "create the product without a supplier and use supplier-product maintenance separately.");
-    }
-
-    private void requireExistingSupplierLink(
-            Connection connection, long productId, String supplierName) throws SQLException {
-        if (supplierName == null || supplierName.isBlank()) {
-            try (PreparedStatement statement = connection.prepareStatement(
-                    "SELECT 1 FROM supplier_products WHERE product_id = ? LIMIT 1")) {
-                statement.setLong(1, productId);
-                try (ResultSet resultSet = statement.executeQuery()) {
-                    if (resultSet.next()) {
-                        throw new UnsupportedOperationException("Removing supplier coverage is not supported "
-                                + "by this form; use supplier-product maintenance.");
-                    }
-                }
-            }
-            return;
-        }
-        long supplierId = resolveId(connection,
-                "SELECT supplier_id FROM suppliers WHERE supplier_name = ?", supplierName);
-        try (PreparedStatement statement = connection.prepareStatement(
-                "SELECT 1 FROM supplier_products WHERE supplier_id = ? AND product_id = ?")) {
-            statement.setLong(1, supplierId);
-            statement.setLong(2, productId);
-            try (ResultSet resultSet = statement.executeQuery()) {
-                if (!resultSet.next()) {
-                    throw new UnsupportedOperationException("Changing supplier coverage requires a purchase price, "
-                            + "which this product form does not collect.");
-                }
-            }
         }
     }
 
