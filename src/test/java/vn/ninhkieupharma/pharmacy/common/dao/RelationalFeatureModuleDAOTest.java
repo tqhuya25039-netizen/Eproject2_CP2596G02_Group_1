@@ -103,6 +103,28 @@ class RelationalFeatureModuleDAOTest {
     }
 
     @Test
+    void catalogModulesAllowStaffReadAccess() {
+        for (String moduleId : List.of("UC-07", "UC-08", "UC-09")) {
+            var module = ModuleCatalog.MODULES.stream()
+                    .filter(candidate -> candidate.id().equals(moduleId))
+                    .findFirst()
+                    .orElseThrow();
+            assertTrue(module.staffAccessible(), moduleId + " should allow staff read access");
+        }
+    }
+
+    @Test
+    void reportModulesRemainUnavailableToStaff() {
+        for (String moduleId : List.of("UC-10", "UC-11")) {
+            var module = ModuleCatalog.MODULES.stream()
+                    .filter(candidate -> candidate.id().equals(moduleId))
+                    .findFirst()
+                    .orElseThrow();
+            assertFalse(module.staffAccessible(), moduleId + " should remain unavailable to staff");
+        }
+    }
+
+    @Test
     void customerManagementIsNotExposedAsAStaffNavigationModule() {
         var customerModule = ModuleCatalog.MODULES.stream()
                 .filter(module -> module.id().equals("UC-16"))

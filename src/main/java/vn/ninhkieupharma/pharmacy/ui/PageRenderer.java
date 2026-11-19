@@ -52,6 +52,7 @@ import vn.ninhkieupharma.pharmacy.common.model.ModuleDefinition;
 import vn.ninhkieupharma.pharmacy.common.service.DemoData;
 import vn.ninhkieupharma.pharmacy.common.service.Localization;
 import vn.ninhkieupharma.pharmacy.common.service.ModuleCatalog;
+import vn.ninhkieupharma.pharmacy.common.auth.UserRole;
 import vn.ninhkieupharma.pharmacy.domain.sales.PromotionsLoyaltyService;
 import vn.ninhkieupharma.pharmacy.domain.sales.CustomerLoyaltyService;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleAllergyWarning;
@@ -125,16 +126,24 @@ public class PageRenderer {
     private final FeatureServices featureServices;
     private final ExchangeRateService exchangeRateService;
     private final long authenticatedUserId;
+    private final UserRole userRole;
 
     public PageRenderer(FeatureServices featureServices, ExchangeRateService exchangeRateService) {
-        this(featureServices, exchangeRateService, -1);
+        this(featureServices, exchangeRateService, -1, UserRole.STAFF);
     }
 
     public PageRenderer(
             FeatureServices featureServices, ExchangeRateService exchangeRateService, long authenticatedUserId) {
+        this(featureServices, exchangeRateService, authenticatedUserId, UserRole.STAFF);
+    }
+
+    public PageRenderer(
+            FeatureServices featureServices, ExchangeRateService exchangeRateService,
+            long authenticatedUserId, UserRole userRole) {
         this.featureServices = Objects.requireNonNull(featureServices);
         this.exchangeRateService = Objects.requireNonNull(exchangeRateService);
         this.authenticatedUserId = authenticatedUserId;
+        this.userRole = Objects.requireNonNull(userRole);
     }
 
     public Node render(ModuleDefinition module) {
@@ -216,7 +225,7 @@ public class PageRenderer {
             refreshSales.getStyleClass().add("button-secondary");
             refreshSales.setOnAction(event -> refreshRows(renderedTable, featureService, module));
             actions.getChildren().add(refreshSales);
-        } else if (isWritableModule(module.id())) {
+        } else if (canWriteModule(module.id(), userRole)) {
             Button addButton = new Button(module.actionLabel());
             addButton.getStyleClass().add("button-primary");
             if ("UC-16".equals(module.id())) {
@@ -301,8 +310,10 @@ public class PageRenderer {
         } else {
             String note = salesCustomerEntry != null
                     ? "Đơn hoàn tất được lưu cùng chi tiết thuốc, ưu đãi, điểm và biến động FEFO trong một giao dịch."
-                    : isWritableModule(module.id())
+                    : canWriteModule(module.id(), userRole)
                             ? "Dữ liệu được đọc và ghi theo các bảng trong schema MySQL đã cung cấp."
+                            : isWritableModule(module.id())
+                                    ? "Nhân viên chỉ có thể xem và tìm kiếm; chỉ quản trị viên được thêm, sửa hoặc xóa."
                             : "Màn hình này hiện chỉ đọc. Thao tác ghi cần thêm thông tin liên quan để bảo toàn dữ liệu.";
             Label supportNote = new Label(Localization.text(note));
             supportNote.getStyleClass().add("helper-text");
@@ -517,6 +528,8 @@ public class PageRenderer {
         table.getStyleClass().add("data-table");
         table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
         table.getSelectionModel().setSelectionMode(SelectionMode.SINGLE);
+        table.setMinHeight(240);
+        table.setPrefHeight(360);
         for (int index = 0; index < module.columns().size(); index++) {
             final int columnIndex = index;
             TableColumn<ModuleRow, String> column = new TableColumn<>(module.columns().get(index));
@@ -533,7 +546,7 @@ public class PageRenderer {
                                     ? Locale.US : Locale.forLanguageTag("vi-VN"))
                             .format(Long.parseLong(value));
                 }
-                if ("UC-08".equals(module.id()) && columnIndex == 8 && !value.isBlank()) {
+                if ("UC-08".equals(module.id()) && columnIndex == 5 && !value.isBlank()) {
                     value = formatSaleMoney(new BigDecimal(value));
                 }
                 return new javafx.beans.property.ReadOnlyStringWrapper(Localization.text(value));
@@ -1503,9 +1516,15 @@ public class PageRenderer {
         }
     }
 
-    private boolean isWritableModule(String moduleId) {
+    private static boolean isWritableModule(String moduleId) {
         return List.of("UC-01", "UC-02", "UC-07", "UC-08", "UC-09", "UC-13", "UC-16", "UC-18")
                 .contains(moduleId);
+    }
+
+    static boolean canWriteModule(String moduleId, UserRole role) {
+        return role != null && isWritableModule(moduleId)
+                && (role == UserRole.ADMIN
+                || role == UserRole.STAFF && !List.of("UC-07", "UC-08", "UC-09").contains(moduleId));
     }
 
     private SalesCustomerEntry createSalesCustomerEntry(

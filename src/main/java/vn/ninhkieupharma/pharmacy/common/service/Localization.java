@@ -51,6 +51,8 @@ public final class Localization {
                 "Danh mục sản phẩm", "Product Categories",
                 "Quản lý ngành hàng và trạng thái hoạt động của danh mục.", "Manage product categories and their active status.",
                 "Thêm danh mục", "Add Category",
+                "Nhân viên chỉ có thể xem và tìm kiếm; chỉ quản trị viên được thêm, sửa hoặc xóa.",
+                "Staff can only view and search; only administrators can create, update, or delete.",
                 "Sản phẩm", "Products",
                 "Quản lý mã hàng, dạng bào chế, đơn vị và thông tin kê đơn.", "Manage SKUs, dosage forms, units, and prescription information.",
                 "Thêm sản phẩm", "Add Product",

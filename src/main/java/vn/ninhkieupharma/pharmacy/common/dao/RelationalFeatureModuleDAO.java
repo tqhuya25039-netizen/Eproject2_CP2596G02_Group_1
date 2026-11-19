@@ -869,13 +869,21 @@ private ModuleRow createProduct(List<String> values) {
                 connection.commit();
                 return result;
             } catch (SQLException | RuntimeException exception) {
-                connection.rollback();
+                try {
+                    connection.rollback();
+                } catch (SQLException rollbackException) {
+                    exception.addSuppressed(rollbackException);
+                }
                 throw exception;
             } finally {
                 connection.setAutoCommit(true);
             }
         } catch (SQLException exception) {
-            throw new DataAccessException("Could not complete the related business-data transaction.", exception);
+            String detail = exception.getMessage();
+            String message = "Could not complete the related business-data transaction "
+                    + "(SQLState " + exception.getSQLState() + ", error " + exception.getErrorCode() + ")"
+                    + (detail == null || detail.isBlank() ? "." : ": " + detail);
+            throw new DataAccessException(message, exception);
         }
     }
 

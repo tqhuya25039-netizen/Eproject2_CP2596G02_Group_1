@@ -1,6 +1,7 @@
 package vn.ninhkieupharma.pharmacy.ui;
 
 import org.junit.jupiter.api.Test;
+import vn.ninhkieupharma.pharmacy.common.auth.UserRole;
 import vn.ninhkieupharma.pharmacy.common.model.ModuleRow;
 
 import java.util.List;
@@ -28,5 +29,13 @@ class PageRendererTest {
                 List.of("Nguyễn Thị Mai", "0912345678", "", "", "125"));
 
         assertTrue(PageRenderer.matchesSalesCustomerQuery(customer, "nguyễn"));
+    }
+
+    @Test
+    void catalogMutationsAreAdminOnly() {
+        for (String moduleId : List.of("UC-07", "UC-08", "UC-09")) {
+            assertTrue(PageRenderer.canWriteModule(moduleId, UserRole.ADMIN));
+            assertFalse(PageRenderer.canWriteModule(moduleId, UserRole.STAFF));
+        }
     }
 }
