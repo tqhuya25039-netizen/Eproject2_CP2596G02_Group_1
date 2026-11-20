@@ -69,12 +69,12 @@ public final class DemoData {
                     List.of("Thực phẩm bổ sung", "Hỗ trợ sức khỏe", "Đang hoạt động"),
                     List.of("Vật tư y tế", "Dụng cụ và vật tư y tế", "Đang hoạt động"))),
             Map.entry("UC-08", List.of(
-                    List.of("SP0001", "Paracetamol 500mg", "Thuốc giảm đau", "Viên nén", "Vỉ", "Không", "Đang bán", "Dược phẩm Hậu Giang", "", "Paracetamol"),
-                    List.of("SP0002", "Vitamin C 500mg", "Vitamin & khoáng chất", "Viên nén", "Hộp", "Không", "Đang bán", "Dược phẩm Hậu Giang", "", "Ascorbic acid"),
-                    List.of("SP0003", "Amoxicillin 500mg", "Thuốc kháng sinh", "Viên nang", "Vỉ", "Có", "Đang bán", "Dược phẩm Hậu Giang", "", "Amoxicillin"),
-                    List.of("SP0004", "Nước muối sinh lý 0,9%", "Vật tư y tế", "Dung dịch", "Chai", "Không", "Đang bán", "Thiết bị y tế Mekong", "", "Sodium chloride"),
-                    List.of("SP0005", "Men vi sinh BioCare", "Thực phẩm bổ sung", "Bột uống", "Hộp", "Không", "Đang bán", "Phân phối An Khang", "", "Probiotic"),
-                    List.of("SP0006", "Khẩu trang y tế 4 lớp", "Vật tư y tế", "Khẩu trang", "Hộp", "Không", "Đang bán", "Thiết bị y tế Mekong", "", ""))),
+                    List.of("SP0001", "Paracetamol 500mg", "Thuốc giảm đau", "Viên nén", "Vỉ", "12000", "No", "ACTIVE", "Dược phẩm Hậu Giang"),
+                    List.of("SP0002", "Vitamin C 500mg", "Vitamin & khoáng chất", "Viên nén", "Hộp", "68000", "No", "ACTIVE", "Dược phẩm Hậu Giang"),
+                    List.of("SP0003", "Amoxicillin 500mg", "Thuốc kháng sinh", "Viên nang", "Vỉ", "45000", "Yes", "ACTIVE", "Dược phẩm Hậu Giang"),
+                    List.of("SP0004", "Nước muối sinh lý 0,9%", "Vật tư y tế", "Dung dịch", "Chai", "8000", "No", "ACTIVE", "Thiết bị y tế Mekong"),
+                    List.of("SP0005", "Men vi sinh BioCare", "Thực phẩm bổ sung", "Bột uống", "Hộp", "125000", "No", "ACTIVE", "Phân phối An Khang"),
+                    List.of("SP0006", "Khẩu trang y tế 4 lớp", "Vật tư y tế", "Khẩu trang", "Hộp", "35000", "No", "ACTIVE", "Thiết bị y tế Mekong"))),
             Map.entry("UC-09", List.of(
                     List.of("NCC001", "Dược phẩm Hậu Giang", "0292 389 0001", "contact@dhg-demo.vn", "Cần Thơ", "Đang hợp tác"),
                     List.of("NCC002", "Thiết bị y tế Mekong", "0292 389 0002", "sales@mekong-demo.vn", "Cần Thơ", "Đang hợp tác"),

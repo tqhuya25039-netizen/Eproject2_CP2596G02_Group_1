@@ -8,12 +8,9 @@ import vn.ninhkieupharma.pharmacy.common.service.Localization;
 
 import java.text.NumberFormat;
 import java.time.LocalDate;
-import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -21,7 +18,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
-import java.util.List;
 
 public final class SalesService extends AbstractFeatureModuleService {
     private static final DateTimeFormatter DATE_FORMAT =
@@ -29,7 +25,7 @@ public final class SalesService extends AbstractFeatureModuleService {
     private final FeatureModuleDAO repository;
 
     public SalesService(FeatureModuleDAO repository) {
-        super(repository, Set.of("UC-10", "UC-17", "UC-19"));
+        super(repository, Set.of("UC-17", "UC-19"));
         this.repository = repository;
     }
 
@@ -48,12 +44,8 @@ public final class SalesService extends AbstractFeatureModuleService {
 
     @Override
     public List<ModuleRow> findAll(ModuleDefinition module) {
-        if (repository.supportsNativeReports()
-                || (!module.id().equals("UC-10") && !module.id().equals("UC-19"))) {
+        if (repository.supportsNativeReports() || !module.id().equals("UC-19")) {
             return super.findAll(module);
-        }
-        if (module.id().equals("UC-10")) {
-            return categoryTrends(module);
         }
         return revenueReport(module);
     }
@@ -96,47 +88,6 @@ public final class SalesService extends AbstractFeatureModuleService {
                     Localization.text("Invoice total is outside the supported range: ") + values.get(4),
                     exception);
         }
-    }
-
-    private List<ModuleRow> categoryTrends(ModuleDefinition module) {
-        Map<String, Integer> counts = new LinkedHashMap<>();
-        Map<String, Set<String>> dosageForms = new LinkedHashMap<>();
-        Map<String, Set<String>> suppliers = new LinkedHashMap<>();
-        for (ModuleRow product : repository.findAll("UC-08")) {
-            List<String> values = product.values();
-            if (values.size() > 2 && !values.get(2).isBlank()) {
-                String category = values.get(2);
-                counts.merge(category, 1, Integer::sum);
-                if (values.size() > 3) {
-                    dosageForms.computeIfAbsent(category, ignored -> new LinkedHashSet<>())
-                            .add(values.get(3).isBlank() ? "Mặc định" : values.get(3));
-                }
-                if (values.size() > 7 && !values.get(7).isBlank()) {
-                    suppliers.computeIfAbsent(category, ignored -> new LinkedHashSet<>())
-                            .add(values.get(7));
-                }
-            }
-        }
-        int total = counts.values().stream().mapToInt(Integer::intValue).sum();
-        NumberFormat percentage = NumberFormat.getPercentInstance(Locale.forLanguageTag("vi-VN"));
-        percentage.setMaximumFractionDigits(1);
-        YearMonth currentMonth = YearMonth.now();
-        String quarter = currentMonth.getYear() + "-Q" + ((currentMonth.getMonthValue() - 1) / 3 + 1);
-        List<List<String>> report = new ArrayList<>();
-        for (Map.Entry<String, Integer> entry : counts.entrySet()) {
-            double share = total == 0 ? 0 : (double) entry.getValue() / total;
-            int supplierCount = suppliers.getOrDefault(entry.getKey(), Set.of()).size();
-            String assessment = entry.getValue() >= 5 && supplierCount >= 2
-                    ? "Nhiều lựa chọn thay thế"
-                    : entry.getValue() >= 2 ? "Có thể thay thế cơ bản" : "Ít mặt hàng - Cần mở rộng";
-            String itemSummary = entry.getValue() + " SP ("
-                    + dosageForms.getOrDefault(entry.getKey(), Set.of()).size() + " dạng / "
-                    + supplierCount + " NCC)";
-            report.add(List.of(quarter, entry.getKey(), itemSummary,
-                    percentage.format(share), assessment));
-        }
-        repository.replaceAll("UC-10", report);
-        return super.findAll(module);
     }
 
     private List<ModuleRow> revenueReport(ModuleDefinition module) {

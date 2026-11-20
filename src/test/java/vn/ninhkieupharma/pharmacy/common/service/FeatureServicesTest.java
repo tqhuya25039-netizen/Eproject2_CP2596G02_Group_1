@@ -19,7 +19,7 @@ class FeatureServicesTest {
     private static final Map<String, String> REPORT_OWNERS = Map.of(
             "UC-05", "UC-04",
             "UC-06", "UC-03",
-            "UC-10", "UC-17",
+            "UC-10", "UC-07",
             "UC-11", "UC-09",
             "UC-15", "UC-14",
             "UC-19", "UC-17");
@@ -67,12 +67,12 @@ class FeatureServicesTest {
 
         ModuleRow created = products.create(productsModule,
                 List.of("TEST01", "Test Product", "Test Category", "Tablet", "Box",
-                        "No", "Active", "Test Supplier", "", ""));
+                        "12000", "No", "ACTIVE", "Test Supplier"));
         assertEquals(originalSize + 1, products.findAll(productsModule).size());
 
         products.update(productsModule, created.id(),
                 List.of("TEST01", "Updated Product", "Test Category", "Tablet", "Box",
-                        "No", "Active", "Test Supplier", "", ""));
+                        "12000", "No", "ACTIVE", "Test Supplier"));
         assertTrue(products.findAll(productsModule).stream()
                 .anyMatch(row -> row.id().equals(created.id())
                         && row.values().get(1).equals("Updated Product")));
@@ -95,11 +95,14 @@ class FeatureServicesTest {
 
         ModuleRow created = products.create(productsModule,
                 List.of("TEST02", "Test Product", "Test Category", "Tablet", "Box",
-                        "No", "Active", "Test Supplier", "", ""));
-        assertTrue(services.forModule(categoryReport).findAll(categoryReport).stream()
-                .anyMatch(row -> row.values().get(1).equals("Test Category")));
-        assertTrue(services.forModule(supplierReport).findAll(supplierReport).stream()
-                .anyMatch(row -> row.values().get(1).equals("Test Supplier")));
+                        "12000", "No", "ACTIVE", "Test Supplier A, Test Supplier B"));
+        List<ModuleRow> categoryRows = services.forModule(categoryReport).findAll(categoryReport);
+        assertTrue(categoryRows.stream()
+                .anyMatch(row -> row.values().get(1).equals("Test Category")
+                        && row.values().get(2).contains("2 NCC")));
+        List<ModuleRow> supplierRows = services.forModule(supplierReport).findAll(supplierReport);
+        assertTrue(supplierRows.stream().anyMatch(row -> row.values().get(1).equals("Test Supplier A")));
+        assertTrue(supplierRows.stream().anyMatch(row -> row.values().get(1).equals("Test Supplier B")));
 
         assertThrows(IllegalStateException.class, () ->
                 services.forModule(categoryReport).create(categoryReport,
