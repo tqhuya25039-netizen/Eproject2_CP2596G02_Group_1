@@ -72,33 +72,57 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
                     ORDER BY ar.check_in_at DESC, ar.attendance_id DESC
                     """);
             case "UC-05" -> query(moduleId, """
-                    SELECT e.employee_id, e.full_name, 'All time',
-                           COUNT(DISTINCT a.assignment_id),
+                    SELECT e.employee_id,
+                           e.full_name,
+                           'All time',
+                           CONCAT(
+                               SUM(CASE WHEN a.status = 'COMPLETED' THEN 1 ELSE 0 END),
+                               '/',
+                               COUNT(DISTINCT a.assignment_id),
+                               ' ca (Phủ ',
+                               COALESCE(ROUND(
+                                   SUM(CASE WHEN a.status = 'COMPLETED' THEN 1 ELSE 0 END) * 100.0
+                                   / NULLIF(COUNT(DISTINCT a.assignment_id), 0), 1
+                               ), 0),
+                               '%)'
+                           ),
                            COALESCE(ROUND(SUM(
                                CASE WHEN ar.check_in_at IS NOT NULL AND ar.check_out_at IS NOT NULL
-                                    THEN TIMESTAMPDIFF(MINUTE, ar.check_in_at, ar.check_out_at) / 60.0
+                                    THEN GREATEST(0, TIMESTAMPDIFF(MINUTE, ar.check_in_at, ar.check_out_at) - s.break_minutes) / 60.0
                                     ELSE 0 END), 2), 0),
-                           'Calculated from attendance'
+                           CASE WHEN COUNT(DISTINCT a.assignment_id) = 0 THEN 'Chưa phân ca'
+                                ELSE 'Đã tổng hợp từ chấm công' END
                     FROM employees e
-                    LEFT JOIN schedule_assignments a ON a.employee_id = e.employee_id
+                    LEFT JOIN schedule_assignments a ON a.employee_id = e.employee_id AND a.status <> 'CANCELLED'
+                    LEFT JOIN shifts s ON s.shift_id = a.shift_id
                     LEFT JOIN attendance_records ar ON ar.assignment_id = a.assignment_id
                     GROUP BY e.employee_id, e.full_name
                     ORDER BY e.full_name
                     """);
             case "UC-06" -> query(moduleId, """
-                    SELECT ar.attendance_id, e.full_name, s.shift_name,
-                           DATE_FORMAT(CONCAT(a.work_date, ' ', s.start_time), '%Y-%m-%d %H:%i'),
-                           COALESCE(DATE_FORMAT(ar.check_in_at, '%Y-%m-%d %H:%i'), 'Not checked in'),
-                           CASE WHEN ar.check_in_at IS NULL THEN 'Missing check-in'
-                                WHEN ar.check_in_at <= TIMESTAMP(a.work_date, s.start_time)
-                                    THEN 'On time'
-                                ELSE CONCAT('Late ', TIMESTAMPDIFF(MINUTE,
-                                    TIMESTAMP(a.work_date, s.start_time), ar.check_in_at), ' min') END
-                    FROM attendance_records ar
-                    JOIN schedule_assignments a ON a.assignment_id = ar.assignment_id
+                    SELECT a.assignment_id,
+                           e.full_name,
+                           CONCAT(s.shift_name, ' (', a.work_date, ')'),
+                           CONCAT(TIME_FORMAT(s.start_time, '%H:%i'), ' - ', TIME_FORMAT(s.end_time, '%H:%i')),
+                           CONCAT(
+                               COALESCE(DATE_FORMAT(ar.check_in_at, '%H:%i'), 'Chưa vào'),
+                               ' - ',
+                               COALESCE(DATE_FORMAT(ar.check_out_at, '%H:%i'), 'Chưa ra')
+                           ),
+                           CASE
+                               WHEN ar.check_in_at IS NULL THEN 'Vắng mặt / Chưa chấm công'
+                               WHEN TIME(ar.check_in_at) > s.start_time
+                                    THEN CONCAT('Đi muộn ', TIMESTAMPDIFF(MINUTE, s.start_time, TIME(ar.check_in_at)), ' phút')
+                               WHEN ar.check_out_at IS NOT NULL AND TIME(ar.check_out_at) < s.end_time
+                                    THEN CONCAT('Về sớm ', TIMESTAMPDIFF(MINUTE, TIME(ar.check_out_at), s.end_time), ' phút')
+                               ELSE 'Đúng giờ'
+                           END
+                    FROM schedule_assignments a
                     JOIN employees e ON e.employee_id = a.employee_id
                     JOIN shifts s ON s.shift_id = a.shift_id
-                    ORDER BY a.work_date, e.full_name
+                    LEFT JOIN attendance_records ar ON ar.assignment_id = a.assignment_id
+                    WHERE a.status <> 'CANCELLED'
+                    ORDER BY a.work_date DESC, s.start_time ASC, e.full_name ASC
                     """);
            case "UC-07" -> query(moduleId, """
                     SELECT category_id, category_name, COALESCE(description, ''),
@@ -314,6 +338,8 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
         return switch (moduleId) {
             case "UC-01" -> createEmployeeAccount(values);
             case "UC-02" -> createAvailability(values);
+            case "UC-03" -> createStoreSchedule(values);
+            case "UC-04" -> createAttendance(values);
             case "UC-07" -> createCategory(values);
             case "UC-08" -> createProduct(values);
             case "UC-09" -> createSupplier(values);
@@ -335,20 +361,10 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
         if (values.get(6).getBytes(StandardCharsets.UTF_8).length > 72) {
             throw new IllegalArgumentException("Mật khẩu không được dài quá 72 byte UTF-8.");
         }
-        if (!"STAFF".equalsIgnoreCase(values.get(5))) {
-            throw new IllegalArgumentException("Tài khoản nhân viên mới chỉ được gán vai trò Nhân viên.");
-        }
+        final String roleCode = normalizeRoleCode(values.get(5));
         String passwordHash = PasswordHasher.hash(values.get(6));
         long employeeId = transaction(connection -> {
-            long roleId;
-            try (PreparedStatement statement = connection.prepareStatement(
-                    "SELECT role_id FROM roles WHERE role_code = 'STAFF'");
-                 ResultSet resultSet = statement.executeQuery()) {
-                if (!resultSet.next()) {
-                    throw new SQLException("Required STAFF role is missing from the roles table.");
-                }
-                roleId = resultSet.getLong("role_id");
-            }
+            long roleId = resolveId(connection, "SELECT role_id FROM roles WHERE role_code = ?", roleCode);
             long userId = insert(connection, """
                     INSERT INTO users (role_id, username, password_hash, is_active)
                     VALUES (?, ?, ?, 1)
@@ -371,13 +387,81 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
         });
         return row(employeeId, List.of(
                 values.get(0).trim(), values.get(1).trim(), values.get(2).trim(), values.get(3).trim(),
-                values.get(4).trim(), "Nhân viên", "Đang hoạt động"));
+                values.get(4).trim(), "ADMIN".equals(roleCode) ? "Quản trị viên" : "Nhân viên", "Đang hoạt động"));
+    }
+
+    private ModuleRow updateEmployeeAccount(long employeeId, List<String> values) {
+        requireSize("UC-01", values, 7);
+        if (values.get(0).isBlank() || values.get(1).isBlank() || values.get(4).isBlank()) {
+            throw new IllegalArgumentException("Mã nhân viên, họ tên và tên đăng nhập là bắt buộc.");
+        }
+        String roleCode = normalizeRoleCode(values.get(5));
+        final String username = values.get(4).trim();
+        final long capturedEmployeeId = employeeId;
+        final String employeeCode = values.get(0).trim();
+        final String fullName = values.get(1).trim();
+        final String phone = values.get(2);
+        final String email = values.get(3);
+        transaction(connection -> {
+            final long roleId = resolveId(connection, "SELECT role_id FROM roles WHERE role_code = ?", roleCode);
+            Long userId = null;
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "SELECT user_id FROM employees WHERE employee_id = ?")) {
+                ps.setLong(1, capturedEmployeeId);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        long raw = rs.getLong(1);
+                        if (!rs.wasNull()) userId = raw;
+                    }
+                }
+            }
+            final Long linkedUserId = userId;
+            if (linkedUserId != null) {
+                execute(connection, "UPDATE users SET role_id = ?, username = ? WHERE user_id = ?", st -> {
+                    st.setLong(1, roleId);
+                    st.setString(2, username);
+                    st.setLong(3, linkedUserId);
+                });
+                if (!values.get(6).isBlank()) {
+                    final String newHash = PasswordHasher.hash(values.get(6));
+                    execute(connection, "UPDATE users SET password_hash = ? WHERE user_id = ?", st -> {
+                        st.setString(1, newHash);
+                        st.setLong(2, linkedUserId);
+                    });
+                }
+            }
+            execute(connection, """
+                    UPDATE employees SET employee_code = ?, full_name = ?, phone = ?, email = ?
+                    WHERE employee_id = ?
+                    """, st -> {
+                st.setString(1, employeeCode);
+                st.setString(2, fullName);
+                setNullableString(st, 3, phone);
+                setNullableString(st, 4, email);
+                st.setLong(5, capturedEmployeeId);
+            });
+            return null;
+        });
+        return row(employeeId, List.of(
+                values.get(0).trim(), values.get(1).trim(), values.get(2).trim(), values.get(3).trim(),
+                values.get(4).trim(), "ADMIN".equals(roleCode) ? "Quản trị viên" : "Nhân viên", "Đang hoạt động"));
+    }
+
+    private static String normalizeRoleCode(String rawRole) {
+        if (rawRole == null || rawRole.isBlank()) return "STAFF";
+        String upper = rawRole.trim().toUpperCase(Locale.ROOT);
+        if ("ADMIN".equals(upper) || "QUẢN TRỊ VIÊN".equals(upper)) return "ADMIN";
+        if ("STAFF".equals(upper) || "NHÂN VIÊN".equals(upper)) return "STAFF";
+        throw new IllegalArgumentException("Vai trò chỉ được chọn Quản trị viên (ADMIN) hoặc Nhân viên (STAFF).");
     }
 
     @Override
     public ModuleRow update(String moduleId, UUID rowId, List<String> values) {
         long id = numericId(rowId);
         return switch (moduleId) {
+            case "UC-01" -> updateEmployeeAccount(id, values);
+            case "UC-03" -> updateStoreSchedule(id, values);
+            case "UC-04" -> updateAttendance(id, values);
             case "UC-02" -> updateAvailability(id, values);
             case "UC-07" -> updateCategory(id, values);
             case "UC-08" -> updateProduct(id, values);
@@ -414,6 +498,8 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
         }
         String sql = switch (moduleId) {
             case "UC-02" -> "DELETE FROM employee_availabilities WHERE availability_id = ?";
+            case "UC-03" -> "DELETE FROM schedule_assignments WHERE assignment_id = ?";
+            case "UC-04" -> "DELETE FROM attendance_records WHERE attendance_id = ?";
             case "UC-07" -> "DELETE FROM product_categories WHERE category_id = ?";
             case "UC-13" -> "DELETE FROM warehouse_locations WHERE location_id = ?";
             case "UC-16" -> "DELETE FROM customers WHERE customer_id = ?";
@@ -426,38 +512,313 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
     private ModuleRow createAvailability(List<String> values) {
         requireSize("UC-02", values, 5);
         long employeeId = resolveId("SELECT employee_id FROM employees WHERE full_name = ? ORDER BY employee_id",
-                values.get(0));
+                values.get(0).trim());
+        LocalDate date = parseIsoDate(values.get(1), "Ngày khả dụng");
+        java.time.LocalTime start = parseIsoTime(values.get(2), "Giờ bắt đầu");
+        java.time.LocalTime end = parseIsoTime(values.get(3), "Giờ kết thúc");
+        if (!start.isBefore(end)) {
+            throw new IllegalArgumentException("Giờ bắt đầu phải sớm hơn giờ kết thúc.");
+        }
+        checkAvailabilityOverlap(employeeId, date, start, end, -1L);
         long id = insert("""
                 INSERT INTO employee_availabilities
                     (employee_id, available_date, start_time, end_time, note)
                 VALUES (?, ?, ?, ?, ?)
                 """, statement -> {
             statement.setLong(1, employeeId);
-            statement.setString(2, values.get(1));
-            statement.setString(3, values.get(2));
-            statement.setString(4, values.get(3));
-            statement.setString(5, values.get(4));
+            statement.setString(2, date.toString());
+            statement.setString(3, start.toString());
+            statement.setString(4, end.toString());
+            setNullableString(statement, 5, values.get(4));
         });
-        return row(id, values);
+        return row(id, List.of(values.get(0).trim(), date.toString(), start.toString(), end.toString(), values.get(4).trim()));
     }
 
     private ModuleRow updateAvailability(long id, List<String> values) {
         requireSize("UC-02", values, 5);
         long employeeId = resolveId("SELECT employee_id FROM employees WHERE full_name = ? ORDER BY employee_id",
-                values.get(0));
+                values.get(0).trim());
+        LocalDate date = parseIsoDate(values.get(1), "Ngày khả dụng");
+        java.time.LocalTime start = parseIsoTime(values.get(2), "Giờ bắt đầu");
+        java.time.LocalTime end = parseIsoTime(values.get(3), "Giờ kết thúc");
+        if (!start.isBefore(end)) {
+            throw new IllegalArgumentException("Giờ bắt đầu phải sớm hơn giờ kết thúc.");
+        }
+        checkAvailabilityOverlap(employeeId, date, start, end, id);
         execute("""
                 UPDATE employee_availabilities
                 SET employee_id = ?, available_date = ?, start_time = ?, end_time = ?, note = ?
                 WHERE availability_id = ?
                 """, statement -> {
             statement.setLong(1, employeeId);
-            statement.setString(2, values.get(1));
-            statement.setString(3, values.get(2));
-            statement.setString(4, values.get(3));
-            statement.setString(5, values.get(4));
+            statement.setString(2, date.toString());
+            statement.setString(3, start.toString());
+            statement.setString(4, end.toString());
+            setNullableString(statement, 5, values.get(4));
             statement.setLong(6, id);
         });
-        return row(id, values);
+        return row(id, List.of(values.get(0).trim(), date.toString(), start.toString(), end.toString(), values.get(4).trim()));
+    }
+
+    private void checkAvailabilityOverlap(long employeeId, LocalDate date,
+                                          java.time.LocalTime start, java.time.LocalTime end, long excludeId) {
+        try (Connection connection = DatabaseConnection.getConnection();
+             PreparedStatement ps = connection.prepareStatement("""
+                     SELECT COUNT(*) FROM employee_availabilities
+                     WHERE employee_id = ? AND available_date = ?
+                       AND availability_id <> ?
+                       AND start_time < ? AND end_time > ?
+                     """)) {
+            ps.setLong(1, employeeId);
+            ps.setString(2, date.toString());
+            ps.setLong(3, excludeId);
+            ps.setString(4, end.toString());
+            ps.setString(5, start.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next() && rs.getInt(1) > 0) {
+                    throw new IllegalArgumentException("Nhân viên đã đăng ký khung giờ rảnh bị trùng vào ngày " + date + ".");
+                }
+            }
+        } catch (SQLException e) {
+            throw new DataAccessException("Không thể kiểm tra trùng lịch khả dụng.", e);
+        }
+    }
+
+    // --- UC-03: Quản lý lịch làm cửa hàng (Xếp lịch khả dụng + Xử lý trùng lịch & thiếu ca) ---
+    private ModuleRow createStoreSchedule(List<String> values) {
+        requireSize("UC-03", values, 5);
+        LocalDate weekStart = parseIsoDate(values.get(0), "Tuần bắt đầu");
+        LocalDate workDate = parseIsoDate(values.get(1), "Ngày làm");
+        String shiftName = values.get(2).trim();
+        String employeeName = values.get(3).trim();
+        String note = values.get(4).trim();
+
+        long employeeId = resolveId("SELECT employee_id FROM employees WHERE full_name = ? ORDER BY employee_id", employeeName);
+        long shiftId = resolveId("SELECT shift_id FROM shifts WHERE shift_name = ? ORDER BY shift_id", shiftName);
+
+        String finalNote = validateScheduleAndAvailability(employeeId, employeeName, shiftId, workDate, note, -1L);
+        long assignmentId = transaction(connection -> {
+            long scheduleId = ensureWorkSchedule(connection, weekStart);
+            return insert(connection, """
+                    INSERT INTO schedule_assignments (schedule_id, employee_id, shift_id, work_date, status, note)
+                    VALUES (?, ?, ?, ?, 'PLANNED', ?)
+                    """, st -> {
+                st.setLong(1, scheduleId);
+                st.setLong(2, employeeId);
+                st.setLong(3, shiftId);
+                st.setString(4, workDate.toString());
+                setNullableString(st, 5, finalNote);
+            });
+        });
+        return row(assignmentId, List.of(workDate.toString(), shiftName, employeeName, "PLANNED", finalNote));
+    }
+
+    private ModuleRow updateStoreSchedule(long assignmentId, List<String> values) {
+        requireSize("UC-03", values, 5);
+        LocalDate weekStart = parseIsoDate(values.get(0), "Tuần bắt đầu");
+        LocalDate workDate = parseIsoDate(values.get(1), "Ngày làm");
+        String shiftName = values.get(2).trim();
+        String employeeName = values.get(3).trim();
+        String note = values.get(4).trim();
+
+        long employeeId = resolveId("SELECT employee_id FROM employees WHERE full_name = ? ORDER BY employee_id", employeeName);
+        long shiftId = resolveId("SELECT shift_id FROM shifts WHERE shift_name = ? ORDER BY shift_id", shiftName);
+
+        String finalNote = validateScheduleAndAvailability(employeeId, employeeName, shiftId, workDate, note, assignmentId);
+        transaction(connection -> {
+            long scheduleId = ensureWorkSchedule(connection, weekStart);
+            execute(connection, """
+                    UPDATE schedule_assignments
+                    SET schedule_id = ?, employee_id = ?, shift_id = ?, work_date = ?, note = ?
+                    WHERE assignment_id = ?
+                    """, st -> {
+                st.setLong(1, scheduleId);
+                st.setLong(2, employeeId);
+                st.setLong(3, shiftId);
+                st.setString(4, workDate.toString());
+                setNullableString(st, 5, finalNote);
+                st.setLong(6, assignmentId);
+            });
+            return null;
+        });
+        return row(assignmentId, List.of(workDate.toString(), shiftName, employeeName, "PLANNED", finalNote));
+    }
+
+    private String validateScheduleAndAvailability(long employeeId, String employeeName,
+                                                   long shiftId, LocalDate workDate, String note, long excludeAssignmentId) {
+        try (Connection connection = DatabaseConnection.getConnection()) {
+            // 1. Bắt lỗi trùng ca làm trong cùng ngày
+            try (PreparedStatement ps = connection.prepareStatement("""
+                    SELECT s2.shift_name
+                    FROM schedule_assignments sa
+                    JOIN shifts s1 ON s1.shift_id = ?
+                    JOIN shifts s2 ON sa.shift_id = s2.shift_id
+                    WHERE sa.employee_id = ? AND sa.work_date = ?
+                      AND sa.assignment_id <> ?
+                      AND sa.status <> 'CANCELLED'
+                      AND s1.start_time < s2.end_time AND s1.end_time > s2.start_time
+                    """)) {
+                ps.setLong(1, shiftId);
+                ps.setLong(2, employeeId);
+                ps.setString(3, workDate.toString());
+                ps.setLong(4, excludeAssignmentId);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        throw new IllegalArgumentException("Trùng lịch: Nhân viên " + employeeName
+                                + " đã được xếp '" + rs.getString(1) + "' trùng giờ vào ngày " + workDate + ".");
+                    }
+                }
+            }
+            // 2. Đối chiếu lịch khả dụng của nhân viên
+            boolean hasAvailability = false;
+            try (PreparedStatement ps = connection.prepareStatement("""
+                    SELECT COUNT(*) FROM employee_availabilities ea
+                    JOIN shifts s ON s.shift_id = ?
+                    WHERE ea.employee_id = ? AND ea.available_date = ?
+                      AND ea.start_time <= s.start_time AND ea.end_time >= s.end_time
+                    """)) {
+                ps.setLong(1, shiftId);
+                ps.setLong(2, employeeId);
+                ps.setString(3, workDate.toString());
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next() && rs.getInt(1) > 0) {
+                        hasAvailability = true;
+                    }
+                }
+            }
+            if (!hasAvailability && !note.contains("[Ngoài giờ đăng ký rảnh]")) {
+                return note.isEmpty() ? "[Ngoài giờ đăng ký rảnh]" : note + " [Ngoài giờ đăng ký rảnh]";
+            }
+            return note;
+        } catch (SQLException e) {
+            throw new DataAccessException("Không thể kiểm tra ràng buộc lịch làm.", e);
+        }
+    }
+
+    private long ensureWorkSchedule(Connection connection, LocalDate weekStart) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT schedule_id FROM work_schedules WHERE week_start_date = ?")) {
+            ps.setString(1, weekStart.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) return rs.getLong(1);
+            }
+        }
+        long creatorId;
+        try (PreparedStatement ps = connection.prepareStatement("SELECT user_id FROM users ORDER BY user_id LIMIT 1");
+             ResultSet rs = ps.executeQuery()) {
+            if (!rs.next()) throw new SQLException("Chưa có tài khoản quản trị trong bảng users.");
+            creatorId = rs.getLong(1);
+        }
+        return insert(connection,
+                "INSERT INTO work_schedules (week_start_date, status, created_by) VALUES (?, 'PUBLISHED', ?)",
+                st -> {
+                    st.setString(1, weekStart.toString());
+                    st.setLong(2, creatorId);
+                });
+    }
+
+    // --- UC-04: Quản lý bảng chấm công ---
+    private ModuleRow createAttendance(List<String> values) {
+        requireSize("UC-04", values, 5);
+        String employeeName = values.get(0).trim();
+        String shiftName = values.get(1).trim();
+        String checkIn = values.get(2).trim();
+        String checkOut = values.get(3).trim();
+        String note = values.get(4).trim();
+
+        if (checkIn.isEmpty()) {
+            throw new IllegalArgumentException("Giờ vào (YYYY-MM-DD HH:mm) là bắt buộc.");
+        }
+        long assignmentId = resolveLatestAssignmentId(employeeName, shiftName);
+        long attendanceId = transaction(connection -> {
+            long id = insert(connection, """
+                    INSERT INTO attendance_records (assignment_id, check_in_at, check_out_at, note)
+                    VALUES (?, ?, ?, ?)
+                    """, st -> {
+                st.setLong(1, assignmentId);
+                st.setString(2, checkIn);
+                setNullableString(st, 3, checkOut);
+                setNullableString(st, 4, note);
+            });
+            if (!checkOut.isEmpty()) {
+                execute(connection, "UPDATE schedule_assignments SET status = 'COMPLETED' WHERE assignment_id = ?",
+                        st -> st.setLong(1, assignmentId));
+            }
+            return id;
+        });
+        return row(attendanceId, List.of(employeeName, shiftName, checkIn, checkOut, note));
+    }
+
+    private ModuleRow updateAttendance(long attendanceId, List<String> values) {
+        requireSize("UC-04", values, 5);
+        String employeeName = values.get(0).trim();
+        String shiftName = values.get(1).trim();
+        String checkIn = values.get(2).trim();
+        String checkOut = values.get(3).trim();
+        String note = values.get(4).trim();
+
+        transaction(connection -> {
+            execute(connection, """
+                    UPDATE attendance_records SET check_in_at = ?, check_out_at = ?, note = ?
+                    WHERE attendance_id = ?
+                    """, st -> {
+                st.setString(1, checkIn);
+                setNullableString(st, 2, checkOut);
+                setNullableString(st, 3, note);
+                st.setLong(4, attendanceId);
+            });
+            if (!checkOut.isEmpty()) {
+                execute(connection, """
+                        UPDATE schedule_assignments sa
+                        JOIN attendance_records ar ON ar.assignment_id = sa.assignment_id
+                        SET sa.status = 'COMPLETED'
+                        WHERE ar.attendance_id = ?
+                        """, st -> st.setLong(1, attendanceId));
+            }
+            return null;
+        });
+        return row(attendanceId, List.of(employeeName, shiftName, checkIn, checkOut, note));
+    }
+
+    private long resolveLatestAssignmentId(String employeeName, String shiftName) {
+        try (Connection connection = DatabaseConnection.getConnection();
+             PreparedStatement ps = connection.prepareStatement("""
+                     SELECT sa.assignment_id
+                     FROM schedule_assignments sa
+                     JOIN employees e ON e.employee_id = sa.employee_id
+                     JOIN shifts s ON s.shift_id = sa.shift_id
+                     WHERE e.full_name = ? AND s.shift_name = ? AND sa.status <> 'CANCELLED'
+                     ORDER BY sa.work_date DESC, sa.assignment_id DESC LIMIT 1
+                     """)) {
+            ps.setString(1, employeeName);
+            ps.setString(2, shiftName);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    throw new IllegalArgumentException("Không tìm thấy ca được phân phù hợp cho nhân viên " + employeeName + ".");
+                }
+                return rs.getLong(1);
+            }
+        } catch (SQLException e) {
+            throw new DataAccessException("Không thể tra cứu ca phân công để chấm công.", e);
+        }
+    }
+
+    private static LocalDate parseIsoDate(String raw, String label) {
+        try {
+            return LocalDate.parse(raw.trim());
+        } catch (java.time.format.DateTimeParseException e) {
+            throw new IllegalArgumentException(label + " phải đúng định dạng YYYY-MM-DD (ví dụ: 2026-11-20).");
+        }
+    }
+
+    private static java.time.LocalTime parseIsoTime(String raw, String label) {
+        try {
+            String trimmed = raw.trim();
+            if (trimmed.length() == 5) trimmed += ":00";
+            return java.time.LocalTime.parse(trimmed);
+        } catch (java.time.format.DateTimeParseException e) {
+            throw new IllegalArgumentException(label + " phải đúng định dạng HH:mm (ví dụ: 08:00).");
+        }
     }
 
     private ModuleRow createCategory(List<String> values) {
