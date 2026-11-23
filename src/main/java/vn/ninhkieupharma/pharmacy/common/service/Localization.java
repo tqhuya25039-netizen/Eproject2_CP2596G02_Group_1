@@ -4,6 +4,7 @@ import vn.ninhkieupharma.pharmacy.common.model.ModuleDefinition;
 
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 public final class Localization {
@@ -74,6 +75,45 @@ public final class Localization {
                 "Tạo phiên kiểm kê", "Create Stocktake",
                 "Biến động & hạn sử dụng", "Inventory Movements & Expiry",
                 "Theo dõi luân chuyển kho, hàng hư hỏng và sản phẩm hết hạn.", "Track inventory movements, damaged goods, and expired products.",
+                "Ghi nhận hư hỏng / hết hạn", "Record Damaged / Expired Stock",
+                "RECEIPT", "Goods Receipt", "SALE", "Sale", "ADJUSTMENT", "Adjustment",
+                "DAMAGED", "Damaged", "EXPIRED", "Expired",
+                "Nhập hàng", "Goods Receipt", "Bán hàng", "Sale", "Điều chỉnh", "Adjustment",
+                "Hư hỏng", "Damaged", "Hết hạn", "Expired",
+                "Nhập hàng vào kho", "Receive Goods into Inventory",
+                "Mỗi dòng nhập lưu sản phẩm, mã lô, hạn sử dụng, vị trí, số lượng và giá nhập.",
+                "Each receipt line records a product, batch, expiry date, location, quantity, and unit cost.",
+                "Tìm nhà cung cấp...", "Search suppliers...",
+                "Tìm sản phẩm...", "Search products...",
+                "Tìm kệ / vị trí...", "Search shelves / locations...",
+                "Thêm mặt hàng", "Add Item", "Bỏ", "Remove",
+                "Số hóa đơn nhà cung cấp / ghi chú", "Supplier Invoice No. / Notes",
+                "Mã lô", "Batch Code", "Hạn dùng", "Expiry Date", "Giá nhập", "Unit Cost",
+                "Số lượng thực tế", "Counted Quantity", "Số lượng cần trừ", "Quantity to Remove",
+                "Lý do / ghi chú", "Reason / Notes", "Ghi chú kiểm kê", "Stocktake Notes",
+                "Vị trí này chưa có lô tồn kho để kiểm kê.", "There are no inventory batches at this location.",
+                "Phiên sẽ chốt tồn và ghi biến động cho các chênh lệch.",
+                "Completing the stocktake updates on-hand quantities and records every variance.",
+                "Biến động từ ngày", "Movement From", "Tất cả biến động", "All Movements",
+                "Tất cả hạn sử dụng", "All Expiry Dates", "Còn hạn trên 30 ngày", "Expires in More Than 30 Days",
+                "Sắp hết hạn trong 30 ngày", "Expires Within 30 Days",
+                "Đã hết hạn", "Expired", "Chưa có hạn sử dụng", "No Expiry Date",
+                "Hạn sử dụng", "Expiry Date", "Hạn dùng", "Expiry Date",
+                "Tất cả vị trí", "All Locations", "Không có HSD", "No Expiry Date",
+                "Bộ lọc", "Filter",
+                "Ngày bắt đầu không được sau ngày kết thúc.",
+                "Start date must not be after end date.",
+                "Chưa thể nhập hàng", "Cannot Receive Goods",
+                "Cần có nhà cung cấp, sản phẩm đang hoạt động và vị trí kho đang sử dụng.",
+                "An active supplier, product, and storage location are required.",
+                "Chưa thể kiểm kê", "Cannot Start Stocktake",
+                "Hãy tạo và kích hoạt vị trí kho trước khi kiểm kê.",
+                "Create and activate a storage location before taking stock.",
+                "Không có lô tồn để điều chỉnh", "No Stocked Batches to Adjust",
+                "Nhập hàng trước khi ghi nhận hư hỏng hoặc hết hạn.",
+                "Receive goods before recording damaged or expired stock.",
+                "Số lượng được trừ khỏi tồn kho và ghi vào nhật ký.",
+                "The quantity is deducted from stock and recorded in the movement log.",
                 "Khách hàng & tích điểm", "Customers & Loyalty",
                 "Quản lý hồ sơ khách hàng, dị ứng và lịch sử điểm thành viên.", "Manage customer profiles, allergies, and loyalty point history.",
                 "Thêm khách hàng", "Add Customer",
@@ -285,7 +325,11 @@ public final class Localization {
                 "Ổn định", "Stable", "Có thể mở rộng", "Room to Expand",
                 "Ít mặt hàng", "Few Items", "Cao", "High",
                 "Trung bình", "Medium", "Thấp", "Low", "Đã nhận", "Received",
-                "Đang kiểm", "Under Review", "Đang sử dụng", "In Use",
+                "Đã hủy", "Cancelled", "Đang kiểm", "Under Review", "Đang sử dụng", "In Use",
+                "Ngừng sử dụng", "Out of Use",
+                "Chưa chọn vị trí", "No Storage Location Selected",
+                "Hãy nhấp chọn một dòng trong bảng rồi bấm Chỉnh sửa.",
+                "Click a row in the table, then click Edit.",
                 "Vỉ", "Blister Pack", "Hộp", "Box", "Chai", "Bottle",
                 "Thuốc giảm đau", "Pain Relief", "Vitamin & khoáng chất", "Vitamins & Minerals",
                 "Thuốc kháng sinh", "Antibiotics", "Vật tư y tế", "Medical Supplies",
@@ -376,6 +420,8 @@ public final class Localization {
                 "Thời điểm", "Date & Time", "Tổng tiền", "Total",
                 "Tìm theo mã, tên hoặc nội dung...", "Search by code, name, or content...",
                 "Xuất báo cáo", "Export Report",
+                "Đã xuất báo cáo thành công.", "Report exported successfully.",
+                "Không thể xuất báo cáo.", "Could not export the report.",
                 "Áp dụng", "Apply", "Không tìm thấy dữ liệu phù hợp.", "No matching data found.",
                 "BẢN GHI", "RECORDS", " dòng", " rows", "PHẠM VI", "SCOPE",
                 "TRẠNG THÁI", "STATUS",
@@ -591,6 +637,20 @@ public final class Localization {
             return translated;
         }
         return translateQuantity(vietnamese);
+    }
+
+    public static String movementTypeText(String movementType) {
+        if (movementType == null) {
+            return "";
+        }
+        return switch (movementType.trim().toUpperCase(Locale.ROOT)) {
+            case "RECEIPT" -> english ? "Goods Receipt" : "Nhập hàng";
+            case "SALE" -> english ? "Sale" : "Bán hàng";
+            case "ADJUSTMENT" -> english ? "Adjustment" : "Điều chỉnh";
+            case "DAMAGED" -> english ? "Damaged" : "Hư hỏng";
+            case "EXPIRED" -> english ? "Expired" : "Hết hạn";
+            default -> movementType;
+        };
     }
 
     public static ModuleDefinition localize(ModuleDefinition module) {

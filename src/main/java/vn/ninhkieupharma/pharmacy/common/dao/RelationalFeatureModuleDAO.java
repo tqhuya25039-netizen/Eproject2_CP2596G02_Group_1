@@ -3,18 +3,23 @@ package vn.ninhkieupharma.pharmacy.common.dao;
 import vn.ninhkieupharma.pharmacy.config.DatabaseConnection;
 import vn.ninhkieupharma.pharmacy.common.model.ModuleRow;
 import vn.ninhkieupharma.pharmacy.common.auth.PasswordHasher;
+import vn.ninhkieupharma.pharmacy.common.dao.InventoryWorkflowDAO;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.sql.Timestamp;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -22,7 +27,7 @@ import java.util.UUID;
  * Maps the feature screens to the normalized tables in 01_schema_quan_ly_cua_hang.sql.
  * The application deliberately does not own schema creation or demo business data.
  */
-public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
+public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, InventoryWorkflowDAO {
     private static final long ROW_ID_PREFIX = 0x4e4b504841524d41L;
 
     @Override
@@ -250,7 +255,8 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
             case "UC-12" -> query(moduleId, """
                     SELECT gr.receipt_id, gr.receipt_code, s.supplier_name,
                            DATE_FORMAT(gr.received_at, '%Y-%m-%d'),
-                           COUNT(gri.receipt_item_id), gr.status
+                           COUNT(gri.receipt_item_id),
+                           CASE WHEN gr.status = 'RECEIVED' THEN 'Đã nhận' ELSE 'Đã hủy' END
                     FROM goods_receipts gr
                     JOIN suppliers s ON s.supplier_id = gr.supplier_id
                     LEFT JOIN goods_receipt_items gri ON gri.receipt_id = gr.receipt_id
@@ -260,7 +266,7 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
             case "UC-13" -> query(moduleId, """
                     SELECT location_id, location_code, location_name, COALESCE(description, ''),
                            IF(is_active, 'ACTIVE', 'INACTIVE')
-                    FROM warehouse_locations ORDER BY location_id
+                    FROM warehouse_locations ORDER BY location_code
                     """);
             case "UC-14" -> query(moduleId, """
                     SELECT st.stocktake_id, CONCAT('ST-', st.stocktake_id), wl.location_name,
@@ -274,10 +280,14 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
             case "UC-15" -> query(moduleId, """
                     SELECT im.movement_id, DATE_FORMAT(im.moved_at, '%Y-%m-%d %H:%i'),
                            CONCAT(p.product_name, ' / ', b.batch_code),
-                           im.movement_type, im.quantity_delta, COALESCE(im.note, '')
+                           im.movement_type, CAST(im.quantity_delta AS CHAR),
+                           COALESCE(im.note, ''),
+                           COALESCE(DATE_FORMAT(b.expiry_date, '%Y-%m-%d'), '—'),
+                           CONCAT(wl.location_code, ' · ', wl.location_name)
                     FROM inventory_movements im
                     JOIN inventory_batches b ON b.batch_id = im.batch_id
                     JOIN products p ON p.product_id = b.product_id
+                    JOIN warehouse_locations wl ON wl.location_id = b.location_id
                     ORDER BY im.moved_at DESC
                     """);
             case "UC-16" -> query(moduleId, """
@@ -326,6 +336,345 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
                     """);
             default -> throw new IllegalArgumentException("Unknown feature module: " + moduleId);
         };
+    }
+
+    @Override
+    public List<SupplierOption> findInventorySuppliers() {
+        return queryOptions(
+                "SELECT supplier_id, supplier_code, supplier_name FROM suppliers "
+                        + "WHERE is_active = 1 ORDER BY supplier_name",
+                resultSet -> new SupplierOption(
+                        resultSet.getLong("supplier_id"),
+                        resultSet.getString("supplier_code"),
+                        resultSet.getString("supplier_name")));
+    }
+
+    @Override
+    public List<ProductOption> findInventoryProducts() {
+        return queryOptions(
+                "SELECT product_id, product_code, product_name, unit_name FROM products "
+                        + "WHERE is_active = 1 ORDER BY product_name, product_code",
+                resultSet -> new ProductOption(
+                        resultSet.getLong("product_id"),
+                        resultSet.getString("product_code"),
+                        resultSet.getString("product_name"),
+                        resultSet.getString("unit_name")));
+    }
+
+    @Override
+    public List<LocationOption> findInventoryLocations() {
+        return queryOptions(
+                "SELECT location_id, location_code, location_name FROM warehouse_locations "
+                        + "WHERE is_active = 1 ORDER BY location_code",
+                resultSet -> new LocationOption(
+                        resultSet.getLong("location_id"),
+                        resultSet.getString("location_code"),
+                        resultSet.getString("location_name")));
+    }
+
+    @Override
+    public List<BatchOption> findInventoryBatches(Long locationId) {
+        String sql = """
+                SELECT b.batch_id, p.product_id, b.location_id, p.product_code, p.product_name,
+                       b.batch_code, b.expiry_date, b.quantity_on_hand,
+                       wl.location_code, wl.location_name
+                FROM inventory_batches b
+                JOIN products p ON p.product_id = b.product_id
+                JOIN warehouse_locations wl ON wl.location_id = b.location_id
+                """ + (locationId == null ? "" : "WHERE b.location_id = ? ")
+                + "ORDER BY p.product_code, b.expiry_date, b.batch_code";
+        try (Connection connection = DatabaseConnection.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            if (locationId != null) {
+                statement.setLong(1, locationId);
+            }
+            try (ResultSet resultSet = statement.executeQuery()) {
+                List<BatchOption> batches = new ArrayList<>();
+                while (resultSet.next()) {
+                    java.sql.Date expiry = resultSet.getDate("expiry_date");
+                    batches.add(new BatchOption(
+                            resultSet.getLong("batch_id"),
+                            resultSet.getLong("product_id"),
+                            resultSet.getLong("location_id"),
+                            resultSet.getString("product_code"),
+                            resultSet.getString("product_name"),
+                            resultSet.getString("batch_code"),
+                            expiry == null ? null : expiry.toLocalDate(),
+                            resultSet.getBigDecimal("quantity_on_hand"),
+                            resultSet.getString("location_code"),
+                            resultSet.getString("location_name")));
+                }
+                return List.copyOf(batches);
+            }
+        } catch (SQLException exception) {
+            throw new DataAccessException("Could not load inventory batches.", exception);
+        }
+    }
+
+    @Override
+    public List<ReceiptDetail> findGoodsReceiptDetails(UUID receiptId) {
+        long id = numericId(receiptId);
+        try (Connection connection = DatabaseConnection.getConnection();
+             PreparedStatement statement = connection.prepareStatement("""
+                     SELECT p.product_code, p.product_name, p.unit_name,
+                            b.batch_code, b.expiry_date, gri.quantity, gri.unit_cost,
+                            wl.location_code, wl.location_name
+                     FROM goods_receipt_items gri
+                     JOIN inventory_batches b ON b.batch_id = gri.batch_id
+                     JOIN products p ON p.product_id = b.product_id
+                     JOIN warehouse_locations wl ON wl.location_id = b.location_id
+                     WHERE gri.receipt_id = ?
+                     ORDER BY p.product_code, b.expiry_date, b.batch_code
+                     """)) {
+            statement.setLong(1, id);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                List<ReceiptDetail> details = new ArrayList<>();
+                while (resultSet.next()) {
+                    java.sql.Date expiry = resultSet.getDate("expiry_date");
+                    details.add(new ReceiptDetail(
+                            resultSet.getString("product_code"),
+                            resultSet.getString("product_name"),
+                            resultSet.getString("unit_name"),
+                            resultSet.getString("batch_code"),
+                            expiry == null ? null : expiry.toLocalDate(),
+                            resultSet.getBigDecimal("quantity"),
+                            resultSet.getBigDecimal("unit_cost"),
+                            resultSet.getString("location_code"),
+                            resultSet.getString("location_name")));
+                }
+                return List.copyOf(details);
+            }
+        } catch (SQLException exception) {
+            throw new DataAccessException("Could not load goods receipt details.", exception);
+        }
+    }
+
+    @Override
+    public List<StocktakeDetail> findStocktakeDetails(UUID stocktakeId) {
+        long id = numericId(stocktakeId);
+        try (Connection connection = DatabaseConnection.getConnection();
+             PreparedStatement statement = connection.prepareStatement("""
+                     SELECT p.product_code, p.product_name, p.unit_name,
+                            b.batch_code, b.expiry_date,
+                            sti.expected_quantity, sti.counted_quantity, sti.difference_quantity,
+                            wl.location_code, wl.location_name
+                     FROM stocktake_items sti
+                     JOIN inventory_batches b ON b.batch_id = sti.batch_id
+                     JOIN products p ON p.product_id = b.product_id
+                     JOIN warehouse_locations wl ON wl.location_id = b.location_id
+                     WHERE sti.stocktake_id = ?
+                     ORDER BY p.product_code, b.expiry_date, b.batch_code
+                     """)) {
+            statement.setLong(1, id);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                List<StocktakeDetail> details = new ArrayList<>();
+                while (resultSet.next()) {
+                    java.sql.Date expiry = resultSet.getDate("expiry_date");
+                    details.add(new StocktakeDetail(
+                            resultSet.getString("product_code"),
+                            resultSet.getString("product_name"),
+                            resultSet.getString("unit_name"),
+                            resultSet.getString("batch_code"),
+                            expiry == null ? null : expiry.toLocalDate(),
+                            resultSet.getBigDecimal("expected_quantity"),
+                            resultSet.getBigDecimal("counted_quantity"),
+                            resultSet.getBigDecimal("difference_quantity"),
+                            resultSet.getString("location_code"),
+                            resultSet.getString("location_name")));
+                }
+                return List.copyOf(details);
+            }
+        } catch (SQLException exception) {
+            throw new DataAccessException("Could not load stocktake details.", exception);
+        }
+    }
+
+    @Override
+    public ModuleRow receiveGoods(long authenticatedUserId, ReceiptRequest request) {
+        validateReceiptRequest(authenticatedUserId, request);
+        return transaction(connection -> {
+            requireActiveRecord(connection,
+                    "SELECT is_active FROM suppliers WHERE supplier_id = ?", request.supplierId(),
+                    "Nhà cung cấp đã chọn không còn hoạt động.");
+            for (ReceiptLine line : request.lines()) {
+                requireActiveRecord(connection,
+                        "SELECT is_active FROM products WHERE product_id = ?", line.productId(),
+                        "Sản phẩm đã chọn không còn hoạt động.");
+                requireActiveRecord(connection,
+                        "SELECT is_active FROM warehouse_locations WHERE location_id = ?", line.locationId(),
+                        "Vị trí kho đã chọn không còn hoạt động.");
+            }
+            String receiptCode = "PN-" + LocalDate.now().toString().replace("-", "")
+                    + "-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(Locale.ROOT);
+            long receiptId = insert(connection, """
+                    INSERT INTO goods_receipts
+                        (receipt_code, supplier_id, received_by, received_at, status, note)
+                    VALUES (?, ?, ?, ?, 'RECEIVED', ?)
+                    """, statement -> {
+                statement.setString(1, receiptCode);
+                statement.setLong(2, request.supplierId());
+                statement.setLong(3, authenticatedUserId);
+                statement.setTimestamp(4, Timestamp.valueOf(request.receivedDate().atStartOfDay()));
+                setNullableString(statement, 5, request.note());
+            });
+
+            for (ReceiptLine line : request.lines()) {
+                long batchId = addReceivedQuantity(connection, line);
+                insert(connection, """
+                        INSERT INTO goods_receipt_items (receipt_id, batch_id, quantity, unit_cost)
+                        VALUES (?, ?, ?, ?)
+                        """, statement -> {
+                    statement.setLong(1, receiptId);
+                    statement.setLong(2, batchId);
+                    statement.setBigDecimal(3, line.quantity());
+                    statement.setBigDecimal(4, line.unitCost());
+                });
+                insertInventoryMovement(connection, batchId, "RECEIPT", line.quantity(),
+                        "GOODS_RECEIPT", receiptId, request.receivedDate(), authenticatedUserId,
+                        "Nhập hàng " + receiptCode);
+            }
+
+            String supplierName = resolveName(connection,
+                    "SELECT supplier_name FROM suppliers WHERE supplier_id = ?", request.supplierId());
+            return row(receiptId, List.of(receiptCode, supplierName,
+                    request.receivedDate().toString(), request.lines().size() + " mặt hàng", "Đã nhận"));
+        });
+    }
+
+    @Override
+    public ModuleRow completeStocktake(long authenticatedUserId, StocktakeRequest request) {
+        validateStocktakeRequest(authenticatedUserId, request);
+        return transaction(connection -> {
+            requireActiveRecord(connection,
+                    "SELECT is_active FROM warehouse_locations WHERE location_id = ?", request.locationId(),
+                    "Vị trí kho đã chọn không còn hoạt động.");
+            String locationName = resolveName(connection,
+                    "SELECT location_name FROM warehouse_locations WHERE location_id = ?", request.locationId());
+            Map<Long, BigDecimal> currentQuantities = new java.util.LinkedHashMap<>();
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT batch_id, quantity_on_hand
+                    FROM inventory_batches
+                    WHERE location_id = ?
+                    ORDER BY batch_id
+                    FOR UPDATE
+                    """)) {
+                statement.setLong(1, request.locationId());
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    while (resultSet.next()) {
+                        currentQuantities.put(resultSet.getLong("batch_id"),
+                                resultSet.getBigDecimal("quantity_on_hand"));
+                    }
+                }
+            }
+            Set<Long> submittedBatchIds = new HashSet<>();
+            for (StocktakeCount count : request.counts()) {
+                if (!submittedBatchIds.add(count.batchId())) {
+                    throw new IllegalArgumentException("Không được kiểm kê trùng một lô hàng.");
+                }
+            }
+            if (currentQuantities.isEmpty() || !submittedBatchIds.equals(currentQuantities.keySet())) {
+                throw new IllegalArgumentException(
+                        "Danh sách lô tại vị trí đã thay đổi hoặc đang trống. Tải lại danh sách trước khi kiểm kê.");
+            }
+
+            long stocktakeId = insert(connection, """
+                    INSERT INTO stocktakes (location_id, stocktake_date, status, created_by, note)
+                    VALUES (?, ?, 'DRAFT', ?, ?)
+                    """, statement -> {
+                statement.setLong(1, request.locationId());
+                statement.setDate(2, java.sql.Date.valueOf(request.stocktakeDate()));
+                statement.setLong(3, authenticatedUserId);
+                setNullableString(statement, 4, request.note());
+            });
+            BigDecimal totalVariance = BigDecimal.ZERO;
+            for (StocktakeCount count : request.counts()) {
+                BigDecimal expected = currentQuantities.get(count.batchId());
+                BigDecimal difference = count.countedQuantity().subtract(expected);
+                if (!isValidQuantity(difference)) {
+                    throw new IllegalArgumentException(
+                            "Chênh lệch vượt quá giới hạn lưu trữ; vui lòng kiểm kê lô này riêng.");
+                }
+                totalVariance = totalVariance.add(difference);
+                insert(connection, """
+                        INSERT INTO stocktake_items
+                            (stocktake_id, batch_id, expected_quantity, counted_quantity, difference_quantity)
+                        VALUES (?, ?, ?, ?, ?)
+                        """, statement -> {
+                    statement.setLong(1, stocktakeId);
+                    statement.setLong(2, count.batchId());
+                    statement.setBigDecimal(3, expected);
+                    statement.setBigDecimal(4, count.countedQuantity());
+                    statement.setBigDecimal(5, difference);
+                });
+                if (difference.signum() != 0) {
+                    execute(connection, """
+                            UPDATE inventory_batches SET quantity_on_hand = ?
+                            WHERE batch_id = ? AND location_id = ?
+                            """, statement -> {
+                        statement.setBigDecimal(1, count.countedQuantity());
+                        statement.setLong(2, count.batchId());
+                        statement.setLong(3, request.locationId());
+                    });
+                    insertInventoryMovement(connection, count.batchId(), "ADJUSTMENT", difference,
+                            "STOCKTAKE", stocktakeId, request.stocktakeDate(), authenticatedUserId,
+                            "Điều chỉnh từ phiên KK-" + stocktakeId);
+                }
+            }
+            execute(connection, "UPDATE stocktakes SET status = 'COMPLETED' WHERE stocktake_id = ?",
+                    statement -> statement.setLong(1, stocktakeId));
+            String variance = totalVariance.signum() > 0 ? "+" + formatQuantity(totalVariance)
+                    : formatQuantity(totalVariance);
+            return row(stocktakeId, List.of("KK-" + stocktakeId, locationName,
+                    request.stocktakeDate().toString(), variance, "COMPLETED"));
+        });
+    }
+
+    @Override
+    public void recordInventoryLoss(
+            long authenticatedUserId, long batchId, LossType lossType, BigDecimal quantity, String note) {
+        if (note != null && note.length() > 255) {
+            throw new IllegalArgumentException("Ghi chú điều chỉnh không được vượt quá 255 ký tự.");
+        }
+        if (authenticatedUserId < 1 || batchId < 1 || lossType == null
+                || !isValidQuantity(quantity) || quantity.signum() <= 0) {
+            throw new IllegalArgumentException("Chọn lô hợp lệ và nhập số lượng hủy lớn hơn 0.");
+        }
+        transaction(connection -> {
+            BigDecimal available;
+            LocalDate expiryDate;
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT quantity_on_hand, expiry_date
+                    FROM inventory_batches
+                    WHERE batch_id = ?
+                    FOR UPDATE
+                    """)) {
+                statement.setLong(1, batchId);
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    if (!resultSet.next()) {
+                        throw new IllegalArgumentException("Không tìm thấy lô hàng đã chọn.");
+                    }
+                    available = resultSet.getBigDecimal("quantity_on_hand");
+                    java.sql.Date expiry = resultSet.getDate("expiry_date");
+                    expiryDate = expiry == null ? null : expiry.toLocalDate();
+                }
+            }
+            if (quantity.compareTo(available) > 0) {
+                throw new IllegalArgumentException("Số lượng hủy vượt quá tồn kho hiện tại.");
+            }
+            if (lossType == LossType.EXPIRED
+                    && (expiryDate == null || expiryDate.isAfter(LocalDate.now()))) {
+                throw new IllegalArgumentException("Chỉ ghi nhận hết hạn cho lô đã đến hạn sử dụng.");
+            }
+            execute(connection,
+                    "UPDATE inventory_batches SET quantity_on_hand = quantity_on_hand - ? WHERE batch_id = ?",
+                    statement -> {
+                        statement.setBigDecimal(1, quantity);
+                        statement.setLong(2, batchId);
+                    });
+            insertInventoryMovement(connection, batchId, lossType.name(), quantity.negate(),
+                    "MANUAL", null, LocalDate.now(), authenticatedUserId, note);
+            return null;
+        });
     }
 
     @Override
@@ -496,17 +845,214 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
             });
             return;
         }
+        if ("UC-13".equals(moduleId)) {
+            execute("""
+                    UPDATE warehouse_locations SET is_active = 0
+                    WHERE location_id = ?
+                    """, statement -> statement.setLong(1, id));
+            return;
+        }
         String sql = switch (moduleId) {
             case "UC-02" -> "DELETE FROM employee_availabilities WHERE availability_id = ?";
             case "UC-03" -> "DELETE FROM schedule_assignments WHERE assignment_id = ?";
             case "UC-04" -> "DELETE FROM attendance_records WHERE attendance_id = ?";
             case "UC-07" -> "DELETE FROM product_categories WHERE category_id = ?";
-            case "UC-13" -> "DELETE FROM warehouse_locations WHERE location_id = ?";
             case "UC-16" -> "DELETE FROM customers WHERE customer_id = ?";
             case "UC-18" -> "DELETE FROM promotions WHERE promotion_id = ?";
             default -> throw readOnly(moduleId);
         };
         executeOne(sql, id);
+    }
+
+    private <T> List<T> queryOptions(String sql, RowMapper<T> mapper) {
+        try (Connection connection = DatabaseConnection.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql);
+             ResultSet resultSet = statement.executeQuery()) {
+            List<T> options = new ArrayList<>();
+            while (resultSet.next()) {
+                options.add(mapper.read(resultSet));
+            }
+            return List.copyOf(options);
+        } catch (SQLException exception) {
+            throw new DataAccessException("Could not load inventory workflow options.", exception);
+        }
+    }
+
+    private void validateReceiptRequest(long authenticatedUserId, ReceiptRequest request) {
+        if (authenticatedUserId < 1 || request == null || request.supplierId() < 1
+                || request.receivedDate() == null || request.lines().isEmpty()) {
+            throw new IllegalArgumentException("Nhà cung cấp, ngày nhập và ít nhất một dòng hàng là bắt buộc.");
+        }
+        if (request.receivedDate().isAfter(LocalDate.now())) {
+            throw new IllegalArgumentException("Ngày nhập không được nằm trong tương lai.");
+        }
+        if (request.note() != null && request.note().length() > 255) {
+            throw new IllegalArgumentException("Ghi chú phiếu nhập không được vượt quá 255 ký tự.");
+        }
+        Set<String> batchKeys = new HashSet<>();
+        for (ReceiptLine line : request.lines()) {
+            if (line == null || line.productId() < 1 || line.locationId() < 1
+                    || line.batchCode() == null || line.batchCode().isBlank()
+                    || line.batchCode().trim().length() > 50
+                    || !isValidQuantity(line.quantity()) || line.quantity().signum() <= 0
+                    || !isValidMoney(line.unitCost()) || line.unitCost().signum() < 0
+                    || (line.expiryDate() != null && line.expiryDate().isBefore(request.receivedDate()))) {
+                throw new IllegalArgumentException(
+                        "Mỗi dòng nhập cần sản phẩm, vị trí, mã lô, số lượng hợp lệ và hạn dùng không trước ngày nhập.");
+            }
+            String key = line.productId() + ":" + line.locationId() + ":"
+                    + line.batchCode().trim().toLowerCase(Locale.ROOT);
+            if (!batchKeys.add(key)) {
+                throw new IllegalArgumentException("Không được nhập trùng sản phẩm, vị trí và mã lô.");
+            }
+        }
+    }
+
+    private void validateStocktakeRequest(long authenticatedUserId, StocktakeRequest request) {
+        if (authenticatedUserId < 1 || request == null || request.locationId() < 1
+                || request.stocktakeDate() == null || request.counts().isEmpty()) {
+            throw new IllegalArgumentException("Vị trí, ngày kiểm kê và danh sách lô là bắt buộc.");
+        }
+        if (request.stocktakeDate().isAfter(LocalDate.now())) {
+            throw new IllegalArgumentException("Ngày kiểm kê không được nằm trong tương lai.");
+        }
+        if (request.note() != null && request.note().length() > 255) {
+            throw new IllegalArgumentException("Ghi chú kiểm kê không được vượt quá 255 ký tự.");
+        }
+        for (StocktakeCount count : request.counts()) {
+            if (count == null || count.batchId() < 1
+                    || !isValidQuantity(count.countedQuantity())
+                    || count.countedQuantity().signum() < 0) {
+                throw new IllegalArgumentException("Số lượng kiểm kê phải là số không âm, tối đa 3 chữ số thập phân.");
+            }
+        }
+    }
+
+    private long addReceivedQuantity(Connection connection, ReceiptLine line) throws SQLException {
+        long existingBatchId = 0;
+        BigDecimal existingQuantity = null;
+        LocalDate storedExpiry = null;
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT batch_id, expiry_date, quantity_on_hand
+                FROM inventory_batches
+                WHERE product_id = ? AND location_id = ? AND batch_code = ?
+                FOR UPDATE
+                """)) {
+            statement.setLong(1, line.productId());
+            statement.setLong(2, line.locationId());
+            statement.setString(3, line.batchCode().trim());
+            try (ResultSet resultSet = statement.executeQuery()) {
+                if (resultSet.next()) {
+                    java.sql.Date existingExpiry = resultSet.getDate("expiry_date");
+                    storedExpiry = existingExpiry == null ? null : existingExpiry.toLocalDate();
+                    existingBatchId = resultSet.getLong("batch_id");
+                    existingQuantity = resultSet.getBigDecimal("quantity_on_hand");
+                }
+            }
+        }
+        if (existingBatchId > 0) {
+            long batchId = existingBatchId;
+            if (!java.util.Objects.equals(storedExpiry, line.expiryDate())) {
+                throw new IllegalArgumentException(
+                        "Mã lô đã tồn tại tại vị trí này nhưng có hạn sử dụng khác.");
+            }
+            if (!isValidQuantity(existingQuantity.add(line.quantity()))) {
+                throw new IllegalArgumentException("Tổng tồn lô vượt quá giới hạn lưu trữ.");
+            }
+            execute(connection, """
+                    UPDATE inventory_batches
+                    SET quantity_on_hand = quantity_on_hand + ?
+                    WHERE batch_id = ?
+                    """, update -> {
+                update.setBigDecimal(1, line.quantity());
+                update.setLong(2, batchId);
+            });
+            return batchId;
+        }
+        return insert(connection, """
+                INSERT INTO inventory_batches
+                    (product_id, location_id, batch_code, expiry_date, quantity_on_hand)
+                VALUES (?, ?, ?, ?, ?)
+                """, statement -> {
+            statement.setLong(1, line.productId());
+            statement.setLong(2, line.locationId());
+            statement.setString(3, line.batchCode().trim());
+            if (line.expiryDate() == null) {
+                statement.setNull(4, java.sql.Types.DATE);
+            } else {
+                statement.setDate(4, java.sql.Date.valueOf(line.expiryDate()));
+            }
+            statement.setBigDecimal(5, line.quantity());
+        });
+    }
+
+    private void insertInventoryMovement(
+            Connection connection, long batchId, String movementType, BigDecimal quantity,
+            String sourceType, Long sourceId, LocalDate movedOn, long userId, String note) throws SQLException {
+        insert(connection, """
+                INSERT INTO inventory_movements
+                    (batch_id, movement_type, quantity_delta, source_type, source_id,
+                     moved_at, created_by, note)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, statement -> {
+            statement.setLong(1, batchId);
+            statement.setString(2, movementType);
+            statement.setBigDecimal(3, quantity);
+            statement.setString(4, sourceType);
+            if (sourceId == null) {
+                statement.setNull(5, java.sql.Types.BIGINT);
+            } else {
+                statement.setLong(5, sourceId);
+            }
+            statement.setTimestamp(6, Timestamp.valueOf(movedOn.atStartOfDay()));
+            statement.setLong(7, userId);
+            setNullableString(statement, 8, note);
+        });
+    }
+
+    private String resolveName(Connection connection, String sql, long id) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setLong(1, id);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    throw new IllegalArgumentException("Không tìm thấy dữ liệu liên quan đã chọn.");
+                }
+                return resultSet.getString(1);
+            }
+        }
+    }
+
+    private void requireActiveRecord(Connection connection, String sql, long id, String message)
+            throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setLong(1, id);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                if (!resultSet.next() || !resultSet.getBoolean(1)) {
+                    throw new IllegalArgumentException(message);
+                }
+            }
+        }
+    }
+
+    private static boolean isValidQuantity(BigDecimal quantity) {
+        if (quantity == null) {
+            return false;
+        }
+        BigDecimal normalized = quantity.stripTrailingZeros();
+        return normalized.scale() <= 3 && normalized.precision() - normalized.scale() <= 9;
+    }
+
+    private static boolean isValidMoney(BigDecimal amount) {
+        if (amount == null) {
+            return false;
+        }
+        BigDecimal normalized = amount.stripTrailingZeros();
+        return normalized.scale() <= 2 && normalized.precision() - normalized.scale() <= 10;
+    }
+
+    private static String formatQuantity(BigDecimal quantity) {
+        return quantity.setScale(3, java.math.RoundingMode.UNNECESSARY)
+                .stripTrailingZeros().toPlainString();
     }
 
     private ModuleRow createAvailability(List<String> values) {
@@ -1031,31 +1577,49 @@ private ModuleRow createProduct(List<String> values) {
 
     private ModuleRow createLocation(List<String> values) {
         requireSize("UC-13", values, 4);
+        validateLocation(values);
         long id = insert("""
                 INSERT INTO warehouse_locations (location_code, location_name, description, is_active)
                 VALUES (?, ?, ?, ?)
                 """, statement -> {
-            statement.setString(1, values.get(0));
-            statement.setString(2, values.get(1));
-            statement.setString(3, values.get(2));
+            statement.setString(1, values.get(0).trim());
+            statement.setString(2, values.get(1).trim());
+            setNullableString(statement, 3, values.get(2));
             statement.setBoolean(4, isActive(values.get(3)));
         });
-        return row(id, values);
+        return row(id, List.of(values.get(0).trim(), values.get(1).trim(), values.get(2).trim(),
+                isActive(values.get(3)) ? "ACTIVE" : "INACTIVE"));
     }
 
     private ModuleRow updateLocation(long id, List<String> values) {
         requireSize("UC-13", values, 4);
+        validateLocation(values);
         execute("""
                 UPDATE warehouse_locations SET location_code = ?, location_name = ?,
                     description = ?, is_active = ? WHERE location_id = ?
                 """, statement -> {
-            statement.setString(1, values.get(0));
-            statement.setString(2, values.get(1));
-            statement.setString(3, values.get(2));
+            statement.setString(1, values.get(0).trim());
+            statement.setString(2, values.get(1).trim());
+            setNullableString(statement, 3, values.get(2));
             statement.setBoolean(4, isActive(values.get(3)));
             statement.setLong(5, id);
         });
-        return row(id, values);
+        return row(id, List.of(values.get(0).trim(), values.get(1).trim(), values.get(2).trim(),
+                isActive(values.get(3)) ? "ACTIVE" : "INACTIVE"));
+    }
+
+    private void validateLocation(List<String> values) {
+        if (values.get(0).isBlank() || values.get(1).isBlank()) {
+            throw new IllegalArgumentException("Mã vị trí và tên vị trí kho không được để trống.");
+        }
+        if (values.get(0).trim().length() > 30 || values.get(1).trim().length() > 100
+                || values.get(2).length() > 255) {
+            throw new IllegalArgumentException("Mã, tên hoặc mô tả vị trí vượt quá độ dài cho phép.");
+        }
+        if (!"ACTIVE".equalsIgnoreCase(values.get(3))
+                && !"INACTIVE".equalsIgnoreCase(values.get(3))) {
+            throw new IllegalArgumentException("Trạng thái vị trí chỉ được là Đang sử dụng hoặc Ngừng sử dụng.");
+        }
     }
 
     private ModuleRow createCustomer(List<String> values) {
@@ -1491,6 +2055,11 @@ private ModuleRow createProduct(List<String> values) {
     @FunctionalInterface
     private interface Binder {
         void bind(PreparedStatement statement) throws SQLException;
+    }
+
+    @FunctionalInterface
+    private interface RowMapper<T> {
+        T read(ResultSet resultSet) throws SQLException;
     }
 
     @FunctionalInterface

@@ -2,7 +2,10 @@ package vn.ninhkieupharma.pharmacy.common.dao;
 
 import org.junit.jupiter.api.Test;
 import vn.ninhkieupharma.pharmacy.common.service.ModuleCatalog;
+import vn.ninhkieupharma.pharmacy.common.dao.InventoryWorkflowDAO;
 
+import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -33,6 +36,57 @@ class RelationalFeatureModuleDAOTest {
                     () -> dao.create(moduleId, List.of()));
             assertTrue(error.getMessage().contains(moduleId));
         }
+    }
+
+    @Test
+    void storageLocationRequiresCodeNameAndValidFieldLengths() {
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.create("UC-13", List.of("", "Kệ A", "", "ACTIVE")));
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.create("UC-13", List.of("K-A", "", "", "ACTIVE")));
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.update("UC-13", UUID.randomUUID(),
+                        List.of("", "Kệ A", "", "ACTIVE")));
+    }
+
+    @Test
+    void inventoryWorkflowsRejectIncompleteAndInvalidRequestsBeforeConnectingToMysql() {
+        assertThrows(IllegalArgumentException.class, () -> dao.create("UC-13",
+                List.of("", "Kệ A · Tầng 1", "", "ACTIVE")));
+        assertThrows(IllegalArgumentException.class, () -> dao.receiveGoods(1,
+                new InventoryWorkflowDAO.ReceiptRequest(1, LocalDate.now(), "", List.of())));
+        assertThrows(IllegalArgumentException.class, () -> dao.receiveGoods(1,
+                new InventoryWorkflowDAO.ReceiptRequest(1, LocalDate.now(), "",
+                        List.of(new InventoryWorkflowDAO.ReceiptLine(
+                                1, 1, "LOT-1", LocalDate.now().plusDays(30),
+                                new BigDecimal("-1"), BigDecimal.ZERO)))));
+        assertThrows(IllegalArgumentException.class, () -> dao.receiveGoods(1,
+                new InventoryWorkflowDAO.ReceiptRequest(1, LocalDate.now().plusDays(1), "",
+                        List.of(new InventoryWorkflowDAO.ReceiptLine(
+                                1, 1, "LOT-1", LocalDate.now().plusDays(30),
+                                new BigDecimal("1"), BigDecimal.ZERO)))));
+        assertThrows(IllegalArgumentException.class, () -> dao.receiveGoods(1,
+                new InventoryWorkflowDAO.ReceiptRequest(1, LocalDate.now(), "",
+                        List.of(new InventoryWorkflowDAO.ReceiptLine(
+                                1, 1, "LOT-1", LocalDate.now().plusDays(30),
+                                new BigDecimal("1"), BigDecimal.ZERO),
+                                new InventoryWorkflowDAO.ReceiptLine(
+                                        1, 1, "LOT-1", LocalDate.now().plusDays(30),
+                                        new BigDecimal("2"), new BigDecimal("1000"))))));
+        assertThrows(IllegalArgumentException.class, () -> dao.receiveGoods(1,
+                new InventoryWorkflowDAO.ReceiptRequest(1, LocalDate.now(), "",
+                        List.of(new InventoryWorkflowDAO.ReceiptLine(
+                                1, 1, "LOT-1", LocalDate.now().plusDays(30),
+                                new BigDecimal("1"), new BigDecimal("1.001"))))));
+        assertThrows(IllegalArgumentException.class, () -> dao.receiveGoods(1,
+                new InventoryWorkflowDAO.ReceiptRequest(1, LocalDate.now(), "",
+                        List.of(new InventoryWorkflowDAO.ReceiptLine(
+                                1, 1, "LOT-1", LocalDate.now().minusDays(1),
+                                new BigDecimal("1"), BigDecimal.ZERO)))));
+        assertThrows(IllegalArgumentException.class, () -> dao.completeStocktake(1,
+                new InventoryWorkflowDAO.StocktakeRequest(1, LocalDate.now(), "", List.of())));
+        assertThrows(IllegalArgumentException.class, () -> dao.recordInventoryLoss(
+                1, 1, InventoryWorkflowDAO.LossType.DAMAGED, BigDecimal.ZERO, ""));
     }
 
     @Test

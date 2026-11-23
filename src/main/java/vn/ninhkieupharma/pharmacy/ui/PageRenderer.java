@@ -44,6 +44,7 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.stage.Modality;
 import javafx.stage.Popup;
+import javafx.stage.FileChooser;
 import vn.ninhkieupharma.pharmacy.common.model.ModuleRow;
 import vn.ninhkieupharma.pharmacy.common.service.FeatureModuleService;
 import vn.ninhkieupharma.pharmacy.common.service.FeatureServices;
@@ -53,6 +54,8 @@ import vn.ninhkieupharma.pharmacy.common.service.DemoData;
 import vn.ninhkieupharma.pharmacy.common.service.Localization;
 import vn.ninhkieupharma.pharmacy.common.service.ModuleCatalog;
 import vn.ninhkieupharma.pharmacy.common.auth.UserRole;
+import vn.ninhkieupharma.pharmacy.common.dao.InventoryWorkflowDAO;
+import vn.ninhkieupharma.pharmacy.domain.inventory.InventoryWorkflowService;
 import vn.ninhkieupharma.pharmacy.domain.sales.PromotionsLoyaltyService;
 import vn.ninhkieupharma.pharmacy.domain.sales.CustomerLoyaltyService;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleAllergyWarning;
@@ -63,10 +66,14 @@ import vn.ninhkieupharma.pharmacy.domain.sales.SaleReceipt;
 import vn.ninhkieupharma.pharmacy.domain.sales.SalesService;
 
 import java.awt.Desktop;
+import java.io.BufferedWriter;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.text.NumberFormat;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -123,6 +130,30 @@ public class PageRenderer {
     private record CustomerFilters(VBox container, ComboBox<String> status, Button applyButton) {
     }
 
+    private record InventoryFilters(
+            VBox container,
+            DatePicker movementFrom,
+            DatePicker movementTo,
+            ComboBox<String> movementType,
+            ComboBox<String> expiryStatus,
+            ComboBox<String> location,
+            Button applyButton) {
+    }
+
+    private record ReceiptLineInput(
+            ComboBox<InventoryWorkflowDAO.ProductOption> product,
+            TextField batchCode,
+            DatePicker expiryDate,
+            ComboBox<InventoryWorkflowDAO.LocationOption> location,
+            TextField quantity,
+            TextField unitCost,
+            Node row) {
+    }
+
+    private record InventoryLossInput(
+            long batchId, InventoryWorkflowDAO.LossType lossType, BigDecimal quantity, String note) {
+    }
+
     private final FeatureServices featureServices;
     private final ExchangeRateService exchangeRateService;
     private final long authenticatedUserId;
@@ -170,9 +201,18 @@ public class PageRenderer {
         List<Node> filterInputs = new ArrayList<>();
         PromotionFilters promotionFilters = null;
         CustomerFilters customerFilters = null;
+        InventoryFilters inventoryFilters = null;
         Node filters = null;
         if (module.report()) {
-            filters = createFilters(module, filterInputs, renderedTable.filteredRows(), search);
+            if ("UC-15".equals(module.id())) {
+                inventoryFilters = createInventoryFilters();
+                filters = inventoryFilters.container();
+                InventoryFilters capturedFilters = inventoryFilters;
+                capturedFilters.applyButton().setOnAction(event -> applyInventoryFilters(
+                        renderedTable.filteredRows(), search, capturedFilters));
+            } else {
+                filters = createFilters(module, filterInputs, renderedTable.filteredRows(), search);
+            }
         } else if ("UC-18".equals(module.id())) {
             promotionFilters = createPromotionFilters();
             filters = promotionFilters.container();
@@ -189,8 +229,12 @@ public class PageRenderer {
         if (renderedTable != null) {
             PromotionFilters capturedFilters = promotionFilters;
             CustomerFilters capturedCustomerFilters = customerFilters;
+            InventoryFilters capturedInventoryFilters = inventoryFilters;
             search.textProperty().addListener((observable, oldValue, newValue) -> {
-                if (capturedFilters == null) {
+                if (capturedInventoryFilters != null) {
+                    applyInventoryFilters(
+                            renderedTable.filteredRows(), search, capturedInventoryFilters);
+                } else if (capturedFilters == null) {
                     if (capturedCustomerFilters == null) {
                         applyFilters(renderedTable.filteredRows(), search, filterInputs);
                     } else {
@@ -209,22 +253,65 @@ public class PageRenderer {
         if (module.report()) {
             Button exportButton = new Button(Localization.text("Xuất báo cáo"));
             exportButton.getStyleClass().add("button-secondary");
-            exportButton.setOnAction(event -> showInformation(
-                    Localization.text("Xuất báo cáo"),
-                    Localization.text("Chức năng xuất tệp chưa được triển khai. Bảng đang hiển thị dữ liệu đã lưu.")));
+            exportButton.setOnAction(event -> exportReport(
+                    module, renderedTable.filteredRows(), renderedTable.table().getScene().getWindow()));
             actions.getChildren().add(exportButton);
             Button refreshButton = new Button(Localization.text("Làm mới"));
             refreshButton.getStyleClass().add("button-secondary");
+            InventoryFilters capturedInventoryFilters = inventoryFilters;
             refreshButton.setOnAction(event -> {
                 refreshRows(renderedTable, featureService, module);
-                applyFilters(renderedTable.filteredRows(), search, filterInputs);
+                if (capturedInventoryFilters != null) {
+                    applyInventoryFilters(renderedTable.filteredRows(), search, capturedInventoryFilters);
+                } else {
+                    applyFilters(renderedTable.filteredRows(), search, filterInputs);
+                }
             });
             actions.getChildren().add(refreshButton);
+            if ("UC-15".equals(module.id())) {
+                Button lossButton = new Button(Localization.text("Ghi nhận hư hỏng / hết hạn"));
+                lossButton.getStyleClass().add("button-primary");
+                lossButton.setOnAction(event -> createInventoryLossDialog()
+                        .ifPresent(input -> runMutation(
+                                () -> featureServices.inventoryWorkflowService().recordInventoryLoss(
+                                        authenticatedUserId, input.batchId(), input.lossType(),
+                                        input.quantity(), input.note()),
+                                () -> refreshRows(renderedTable, featureService, module))));
+                actions.getChildren().add(lossButton);
+            }
         } else if (salesCustomerEntry != null) {
             Button refreshSales = new Button(Localization.text("Làm mới"));
             refreshSales.getStyleClass().add("button-secondary");
             refreshSales.setOnAction(event -> refreshRows(renderedTable, featureService, module));
             actions.getChildren().add(refreshSales);
+        } else if ("UC-12".equals(module.id())) {
+            Button receiveButton = new Button(module.actionLabel());
+            receiveButton.getStyleClass().add("button-primary");
+            receiveButton.setOnAction(event -> createGoodsReceiptDialog()
+                    .ifPresent(request -> runMutation(
+                            () -> featureServices.inventoryWorkflowService()
+                                    .receiveGoods(authenticatedUserId, request),
+                            () -> refreshRows(renderedTable, featureService, module))));
+            Button detailButton = new Button(Localization.text("Xem lô hàng"));
+            detailButton.getStyleClass().add("button-secondary");
+            detailButton.disableProperty().bind(
+                    renderedTable.table().getSelectionModel().selectedItemProperty().isNull());
+            detailButton.setOnAction(event -> {
+                ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+                if (selected != null) {
+                    showGoodsReceiptDetails(selected);
+                }
+            });
+            actions.getChildren().addAll(receiveButton, detailButton);
+        } else if ("UC-14".equals(module.id())) {
+            Button stocktakeButton = new Button(module.actionLabel());
+            stocktakeButton.getStyleClass().add("button-primary");
+            stocktakeButton.setOnAction(event -> createStocktakeDialog()
+                    .ifPresent(request -> runMutation(
+                            () -> featureServices.inventoryWorkflowService()
+                                    .completeStocktake(authenticatedUserId, request),
+                            () -> refreshRows(renderedTable, featureService, module))));
+            actions.getChildren().add(stocktakeButton);
         } else if (canWriteModule(module.id(), userRole)) {
             Button addButton = new Button(module.actionLabel());
             addButton.getStyleClass().add("button-primary");
@@ -241,8 +328,10 @@ public class PageRenderer {
             if (!"UC-01".equals(module.id())) {
                 Button editButton = new Button(Localization.text("Chỉnh sửa"));
                 editButton.getStyleClass().add("button-secondary");
-                editButton.disableProperty().bind(
-                        renderedTable.table().getSelectionModel().selectedItemProperty().isNull());
+                if (!"UC-13".equals(module.id())) {
+                    editButton.disableProperty().bind(
+                            renderedTable.table().getSelectionModel().selectedItemProperty().isNull());
+                }
                 editButton.setOnAction(event -> {
                     ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
                     if (selected != null) {
@@ -254,23 +343,72 @@ public class PageRenderer {
                                             () -> featureService.update(module, selected.id(), values),
                                             () -> refreshRows(renderedTable, featureService, module)));
                         }
+                    } else if ("UC-13".equals(module.id())) {
+                        showInformation(
+                                Localization.text("Chưa chọn vị trí"),
+                                Localization.text("Hãy nhấp chọn một dòng trong bảng rồi bấm Chỉnh sửa."));
                     }
                 });
 
-                Button deleteButton = new Button(Localization.text(
-                        "UC-18".equals(module.id()) ? "Vô hiệu hóa"
-                                : "UC-16".equals(module.id()) ? "Lưu trữ" : "Xóa"));
-                deleteButton.getStyleClass().add("button-secondary");
-                deleteButton.disableProperty().bind(
-                        renderedTable.table().getSelectionModel().selectedItemProperty().isNull());
-                deleteButton.setOnAction(event -> {
-                    ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
-                    if (selected != null && confirmDelete(module)) {
-                        runMutation(() -> featureService.delete(module, selected.id()),
+                if ("UC-13".equals(module.id())) {
+                    ComboBox<String> statusSelector = new ComboBox<>();
+                    statusSelector.getStyleClass().add("button-secondary");
+                    statusSelector.setPromptText(Localization.text("Trạng thái"));
+                    statusSelector.getItems().addAll(
+                            Localization.text("Đang sử dụng"),
+                            Localization.text("Ngừng sử dụng"));
+                    statusSelector.disableProperty().bind(
+                            renderedTable.table().getSelectionModel().selectedItemProperty().isNull());
+                    final boolean[] syncingStatus = {false};
+                    renderedTable.table().getSelectionModel().selectedItemProperty()
+                            .addListener((observable, oldValue, selected) -> {
+                                syncingStatus[0] = true;
+                                if (selected == null) {
+                                    statusSelector.getSelectionModel().clearSelection();
+                                } else {
+                                    statusSelector.getSelectionModel().select(
+                                            "INACTIVE".equalsIgnoreCase(selected.values().get(3)) ? 1 : 0);
+                                }
+                                syncingStatus[0] = false;
+                            });
+                    statusSelector.setOnAction(event -> {
+                        if (syncingStatus[0]) {
+                            return;
+                        }
+                        ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+                        if (selected == null || statusSelector.getValue() == null) {
+                            return;
+                        }
+                        String status = statusSelector.getSelectionModel().getSelectedIndex() == 0
+                                ? "ACTIVE" : "INACTIVE";
+                        String currentStatus = selected.values().get(3);
+                        if (status.equalsIgnoreCase(currentStatus)) {
+                            return;
+                        }
+                        List<String> updatedValues = new ArrayList<>(selected.values());
+                        updatedValues.set(3, status);
+                        runMutation(
+                                () -> featureService.update(module, selected.id(), updatedValues),
                                 () -> refreshRows(renderedTable, featureService, module));
-                    }
-                });
-                actions.getChildren().addAll(editButton, deleteButton);
+                    });
+                    actions.getChildren().addAll(editButton, statusSelector);
+                } else {
+                    Button deleteButton = new Button(Localization.text(
+                            "UC-18".equals(module.id()) ? "Vô hiệu hóa"
+                                    : "UC-16".equals(module.id()) ? "Lưu trữ"
+                                    : "Xóa"));
+                    deleteButton.getStyleClass().add("button-secondary");
+                    deleteButton.disableProperty().bind(
+                            renderedTable.table().getSelectionModel().selectedItemProperty().isNull());
+                    deleteButton.setOnAction(event -> {
+                        ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+                        if (selected != null && confirmDelete(module)) {
+                            runMutation(() -> featureService.delete(module, selected.id()),
+                                    () -> refreshRows(renderedTable, featureService, module));
+                        }
+                    });
+                    actions.getChildren().addAll(editButton, deleteButton);
+                }
                 if ("UC-16".equals(module.id())) {
                     Button historyButton = new Button(Localization.text("Lịch sử mua"));
                     historyButton.getStyleClass().add("button-secondary");
@@ -352,6 +490,252 @@ public class PageRenderer {
         applyButton.setOnAction(event -> applyFilters(rows, search, filterInputs));
         filters.getChildren().add(applyButton);
         return filters;
+    }
+
+    private InventoryFilters createInventoryFilters() {
+        DatePicker movementFrom = new DatePicker();
+        movementFrom.setPromptText(Localization.text("Biến động từ ngày"));
+        DatePicker movementTo = new DatePicker();
+        movementTo.setPromptText(Localization.text("Đến ngày"));
+
+        ComboBox<String> movementType = new ComboBox<>(FXCollections.observableArrayList(
+                "ALL", "RECEIPT", "SALE", "ADJUSTMENT", "DAMAGED", "EXPIRED"));
+        movementType.getSelectionModel().selectFirst();
+        movementType.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(String value) {
+                return switch (value == null ? "ALL" : value) {
+                    case "RECEIPT" -> Localization.text("Nhập hàng");
+                    case "SALE" -> Localization.text("Bán hàng");
+                    case "ADJUSTMENT" -> Localization.text("Điều chỉnh");
+                    case "DAMAGED" -> Localization.text("Hư hỏng");
+                    case "EXPIRED" -> Localization.text("Hết hạn");
+                    default -> Localization.text("Tất cả biến động");
+                };
+            }
+
+            @Override
+            public String fromString(String value) {
+                return value;
+            }
+        });
+
+        ComboBox<String> expiryStatus = new ComboBox<>(FXCollections.observableArrayList(
+                "ALL", "VALID", "EXPIRING", "EXPIRED", "NO_DATE"));
+        expiryStatus.getSelectionModel().selectFirst();
+        expiryStatus.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(String value) {
+                return switch (value == null ? "ALL" : value) {
+                    case "VALID" -> Localization.text("Còn hạn trên 30 ngày");
+                    case "EXPIRING" -> Localization.text("Sắp hết hạn trong 30 ngày");
+                    case "EXPIRED" -> Localization.text("Đã hết hạn");
+                    case "NO_DATE" -> Localization.text("Chưa có hạn sử dụng");
+                    default -> Localization.text("Tất cả hạn sử dụng");
+                };
+            }
+
+            @Override
+            public String fromString(String value) {
+                return value;
+            }
+        });
+
+        ComboBox<String> location = new ComboBox<>();
+        location.getItems().add("ALL");
+        featureServices.inventoryWorkflowService().findLocations().stream()
+                .map(InventoryWorkflowDAO.LocationOption::toString)
+                .forEach(location.getItems()::add);
+        location.getSelectionModel().selectFirst();
+        location.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(String value) {
+                return "ALL".equals(value) ? Localization.text("Tất cả vị trí")
+                        : value == null ? "" : value;
+            }
+
+            @Override
+            public String fromString(String value) {
+                return value;
+            }
+        });
+
+        Button applyButton = new Button(Localization.text("Áp dụng bộ lọc"));
+        applyButton.getStyleClass().add("button-secondary");
+        HBox filters = new HBox(10, movementFrom, movementTo, movementType, expiryStatus, location, applyButton);
+        filters.setAlignment(Pos.CENTER_LEFT);
+        filters.getStyleClass().add("filter-bar");
+        return new InventoryFilters(
+                new VBox(filters), movementFrom, movementTo, movementType, expiryStatus, location, applyButton);
+    }
+
+    private void applyInventoryFilters(
+            FilteredList<ModuleRow> rows, TextField search, InventoryFilters filters) {
+        String query = normalize(search.getText());
+        LocalDate movementFrom = filters.movementFrom().getValue();
+        LocalDate movementTo = filters.movementTo().getValue();
+        if (movementFrom != null && movementTo != null && movementFrom.isAfter(movementTo)) {
+            showInformation(
+                    Localization.text("Bộ lọc"),
+                    Localization.text("Ngày bắt đầu không được sau ngày kết thúc."));
+            return;
+        }
+        String movementType = filters.movementType().getValue();
+        String expiryStatus = filters.expiryStatus().getValue();
+        String location = filters.location().getValue();
+        LocalDate today = LocalDate.now();
+        rows.setPredicate(row -> {
+            List<String> values = row.values();
+            return matchesInventoryRow(
+                    values, query, movementFrom, movementTo, movementType, expiryStatus, location, today);
+        });
+    }
+
+    static boolean matchesInventoryRow(
+            List<String> values,
+            String query,
+            LocalDate movementFrom,
+            LocalDate movementTo,
+            String movementType,
+            String expiryStatus,
+            String location,
+            LocalDate today) {
+        if (values == null || values.size() < 7) {
+            return false;
+        }
+        String searchable = normalize(String.join(" ", values));
+        String normalizedQuery = normalize(query);
+        if (!normalizedQuery.isBlank() && !searchable.contains(normalizedQuery)) {
+            return false;
+        }
+
+        LocalDate movementDate = parseInventoryDateSafe(values.get(0));
+        if (movementDate != null
+                && ((movementFrom != null && movementDate.isBefore(movementFrom))
+                || (movementTo != null && movementDate.isAfter(movementTo)))) {
+            return false;
+        }
+        if (movementType != null && !"ALL".equals(movementType)
+                && !matchesMovementType(movementType, values.get(2))) {
+            return false;
+        }
+        if (location != null && !"ALL".equals(location)
+                && !normalize(location).equals(normalize(values.get(6)))) {
+            return false;
+        }
+
+        LocalDate expiryDate = parseInventoryExpiry(values.get(5));
+        return switch (expiryStatus == null ? "ALL" : expiryStatus) {
+            case "VALID" -> expiryDate != null && expiryDate.isAfter(today.plusDays(30));
+            case "EXPIRING" -> expiryDate != null && expiryDate.isAfter(today)
+                    && !expiryDate.isAfter(today.plusDays(30));
+            case "EXPIRED" -> expiryDate != null && !expiryDate.isAfter(today);
+            case "NO_DATE" -> expiryDate == null;
+            default -> true;
+        };
+    }
+
+    private static LocalDate parseInventoryDateSafe(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        String date = value.substring(0, Math.min(10, value.length()));
+        try {
+            return LocalDate.parse(date);
+        } catch (java.time.format.DateTimeParseException ignored) {
+            try {
+                return LocalDate.parse(date,
+                        java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy"));
+            } catch (java.time.format.DateTimeParseException invalidFormat) {
+                return null;
+            }
+        }
+    }
+
+    private static LocalDate parseInventoryExpiry(String value) {
+        if (value == null || value.isBlank()
+                || "—".equals(value.trim()) || "-".equals(value.trim())) {
+            return null;
+        }
+        return parseInventoryDateSafe(value);
+    }
+
+    private LocalDate parseInventoryDate(String value) {
+        String date = value.substring(0, Math.min(10, value.length()));
+        try {
+            return LocalDate.parse(date);
+        } catch (java.time.format.DateTimeParseException ignored) {
+            return LocalDate.parse(date, java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy"));
+        }
+    }
+
+    private void exportReport(
+            ModuleDefinition module, FilteredList<ModuleRow> rows, javafx.stage.Window owner) {
+        FileChooser chooser = new FileChooser();
+        chooser.setTitle(Localization.text("Xuất báo cáo"));
+        chooser.setInitialFileName(module.id() + "-" + LocalDate.now() + ".csv");
+        chooser.getExtensionFilters().add(
+                new FileChooser.ExtensionFilter(Localization.text("CSV"), "*.csv"));
+        java.io.File selectedFile = chooser.showSaveDialog(owner);
+        if (selectedFile == null) {
+            return;
+        }
+        Path file = selectedFile.toPath();
+        if (file == null) {
+            return;
+        }
+        if (!file.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".csv")) {
+            file = file.resolveSibling(file.getFileName() + ".csv");
+        }
+        try {
+            writeCsvReport(file, module, rows.stream().toList());
+            showInformation(Localization.text("Xuất báo cáo"),
+                    Localization.text("Đã xuất báo cáo thành công.") + "\n" + file);
+        } catch (IOException exception) {
+            showInformation(Localization.text("Xuất báo cáo"),
+                    Localization.text("Không thể xuất báo cáo.") + "\n" + exception.getMessage());
+        }
+    }
+
+    static void writeCsvReport(Path file, ModuleDefinition module, List<ModuleRow> rows)
+            throws IOException {
+        try (BufferedWriter writer = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
+            writer.write("\uFEFF");
+            writer.write(module.columns().stream().map(PageRenderer::csvValue).toList()
+                    .stream().collect(java.util.stream.Collectors.joining(",")));
+            writer.newLine();
+            for (ModuleRow row : rows) {
+                writer.write(row.values().stream()
+                        .map(PageRenderer::csvValue)
+                        .collect(java.util.stream.Collectors.joining(",")));
+                writer.newLine();
+            }
+        }
+    }
+
+    private static String csvValue(String value) {
+        String safe = value == null ? "" : value;
+        if (safe.indexOf(',') >= 0 || safe.indexOf('"') >= 0
+                || safe.indexOf('\n') >= 0 || safe.indexOf('\r') >= 0) {
+            return "\"" + safe.replace("\"", "\"\"") + "\"";
+        }
+        return safe;
+    }
+
+    private static boolean matchesMovementType(String selectedType, String displayedType) {
+        return switch (selectedType) {
+            case "RECEIPT" -> displayedType.equals("RECEIPT")
+                    || displayedType.equals("Nhập hàng") || displayedType.equals("Goods Receipt");
+            case "SALE" -> displayedType.equals("SALE")
+                    || displayedType.equals("Bán hàng") || displayedType.equals("Sale");
+            case "ADJUSTMENT" -> displayedType.equals("ADJUSTMENT")
+                    || displayedType.equals("Điều chỉnh") || displayedType.equals("Adjustment");
+            case "DAMAGED" -> displayedType.equals("DAMAGED")
+                    || displayedType.equals("Hư hỏng") || displayedType.equals("Damaged");
+            case "EXPIRED" -> displayedType.equals("EXPIRED")
+                    || displayedType.equals("Hết hạn") || displayedType.equals("Expired");
+            default -> true;
+        };
     }
 
     private PromotionFilters createPromotionFilters() {
@@ -453,7 +837,7 @@ public class PageRenderer {
         });
     }
 
-    private String normalize(String value) {
+    private static String normalize(String value) {
         return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
     }
 
@@ -547,6 +931,9 @@ public class PageRenderer {
                             .format(Long.parseLong(value));
                 }
                 if ("UC-08".equals(module.id()) && columnIndex == 5 && !value.isBlank()) {
+                if ("UC-15".equals(module.id()) && columnIndex == 2) {
+                    value = Localization.movementTypeText(value);
+                }
                     value = formatSaleMoney(new BigDecimal(value));
                 }
                 return new javafx.beans.property.ReadOnlyStringWrapper(Localization.text(value));
@@ -558,6 +945,34 @@ public class PageRenderer {
                 FXCollections.observableArrayList(featureService.findAll(module));
         FilteredList<ModuleRow> filteredRows = new FilteredList<>(source, row -> true);
         table.setItems(filteredRows);
+        if ("UC-12".equals(module.id()) || "UC-13".equals(module.id()) || "UC-14".equals(module.id())) {
+            table.setRowFactory(view -> {
+                javafx.scene.control.TableRow<ModuleRow> row =
+                        new javafx.scene.control.TableRow<>();
+                row.setOnMouseClicked(event -> {
+                    if (row.isEmpty()) {
+                        return;
+                    }
+                    table.getSelectionModel().select(row.getItem());
+                    if (event.getButton() == javafx.scene.input.MouseButton.PRIMARY
+                            && event.getClickCount() == 2) {
+                        if ("UC-12".equals(module.id())) {
+                            showGoodsReceiptDetails(row.getItem());
+                        } else if ("UC-14".equals(module.id())) {
+                            showStocktakeDetails(row.getItem());
+                        } else {
+                            if ("UC-13".equals(module.id())) {
+                                editRow(module, featureService, row.getItem())
+                                        .ifPresent(values -> runMutation(
+                                                () -> featureService.update(module, row.getItem().id(), values),
+                                                () -> source.setAll(featureService.findAll(module))));
+                            }
+                        }
+                    }
+                });
+                return row;
+            });
+        }
         Label emptyState = new Label(Localization.text("Không tìm thấy dữ liệu phù hợp."));
         emptyState.getStyleClass().add("table-empty-state");
         emptyState.setWrapText(true);
@@ -645,7 +1060,7 @@ public class PageRenderer {
                 Map<String, Double> quantitiesByType = new LinkedHashMap<>();
                 Map<String, Integer> countsByType = new LinkedHashMap<>();
                 for (ModuleRow row : movementRows) {
-                    String type = Localization.text(row.values().get(2));
+                    String type = Localization.movementTypeText(row.values().get(2));
                     quantitiesByType.merge(type, parseSignedQuantity(row.values().get(3)), Double::sum);
                     countsByType.merge(type, 1, Integer::sum);
                 }
@@ -882,12 +1297,655 @@ public class PageRenderer {
         renderedTable.source().setAll(featureService.findAll(module));
     }
 
+    private void showGoodsReceiptDetails(ModuleRow receipt) {
+        List<InventoryWorkflowDAO.ReceiptDetail> details;
+        try {
+            details = featureServices.inventoryWorkflowService().findReceiptDetails(receipt.id());
+        } catch (IllegalArgumentException | IllegalStateException
+                 | vn.ninhkieupharma.pharmacy.common.dao.DataAccessException exception) {
+            showInformation(
+                    Localization.text("Không thể xem lô hàng"),
+                    Localization.text(exception.getMessage()));
+            return;
+        }
+
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.setTitle(Localization.text("Chi tiết lô hàng nhập"));
+        dialog.setHeaderText(Localization.text(
+                "Phiếu " + receipt.values().get(0) + " · " + receipt.values().get(1)));
+        dialog.initModality(Modality.APPLICATION_MODAL);
+        dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        dialog.getDialogPane().getStyleClass().add("form-dialog");
+        dialog.getDialogPane().setPrefWidth(980);
+
+        TableView<InventoryWorkflowDAO.ReceiptDetail> table = new TableView<>();
+        table.getStyleClass().add("data-table");
+        table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
+        table.setItems(FXCollections.observableArrayList(details));
+        table.setPrefHeight(Math.min(420, 90 + details.size() * 42));
+
+        addReceiptDetailColumn(table, "Mã sản phẩm", detail -> detail.productCode(), 110);
+        addReceiptDetailColumn(table, "Tên sản phẩm", detail -> detail.productName(), 180);
+        addReceiptDetailColumn(table, "Đơn vị", detail -> detail.unitName(), 80);
+        addReceiptDetailColumn(table, "Mã lô", detail -> detail.batchCode(), 110);
+        addReceiptDetailColumn(table, "Hạn sử dụng",
+                detail -> detail.expiryDate() == null ? "Không có" : detail.expiryDate().toString(), 115);
+        addReceiptDetailColumn(table, "Số lượng",
+                detail -> detail.quantity().stripTrailingZeros().toPlainString(), 90);
+        addReceiptDetailColumn(table, "Đơn giá",
+                detail -> formatSaleMoney(detail.unitCost()), 110);
+        addReceiptDetailColumn(table, "Vị trí kho",
+                detail -> detail.locationCode() + " · " + detail.locationName(), 170);
+
+        Label emptyState = new Label(Localization.text("Phiếu nhập này chưa có lô hàng."));
+        emptyState.getStyleClass().add("table-empty-state");
+        table.setPlaceholder(emptyState);
+
+        VBox content = new VBox(12, table);
+        content.setPadding(new Insets(12, 0, 8, 0));
+        dialog.getDialogPane().setContent(content);
+        dialog.showAndWait();
+    }
+
+    private void addReceiptDetailColumn(
+            TableView<InventoryWorkflowDAO.ReceiptDetail> table,
+            String title,
+            java.util.function.Function<InventoryWorkflowDAO.ReceiptDetail, String> value,
+            double width) {
+        TableColumn<InventoryWorkflowDAO.ReceiptDetail, String> column =
+                new TableColumn<>(Localization.text(title));
+        column.setCellValueFactory(cell ->
+                new javafx.beans.property.ReadOnlyStringWrapper(
+                        Localization.text(value.apply(cell.getValue()))));
+        column.setPrefWidth(width);
+        table.getColumns().add(column);
+    }
+
+    private void showStocktakeDetails(ModuleRow stocktake) {
+        List<InventoryWorkflowDAO.StocktakeDetail> details;
+        try {
+            details = featureServices.inventoryWorkflowService().findStocktakeDetails(stocktake.id());
+        } catch (IllegalArgumentException | IllegalStateException
+                 | vn.ninhkieupharma.pharmacy.common.dao.DataAccessException exception) {
+            showInformation(
+                    Localization.text("Không thể xem phiên kiểm kê"),
+                    Localization.text(exception.getMessage()));
+            return;
+        }
+
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.setTitle(Localization.text("Chi tiết kiểm kê"));
+        dialog.setHeaderText(Localization.text(
+                "Phiên " + stocktake.values().get(0)
+                        + " · " + stocktake.values().get(1)));
+        dialog.initModality(Modality.APPLICATION_MODAL);
+        dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        dialog.getDialogPane().getStyleClass().add("form-dialog");
+        dialog.getDialogPane().setPrefWidth(1040);
+
+        GridPane summary = new GridPane();
+        summary.setHgap(18);
+        summary.setVgap(8);
+        addCustomerField(summary, 0, "Ngày kiểm kê", new Label(stocktake.values().get(2)));
+        addCustomerField(summary, 1, "Chênh lệch", new Label(stocktake.values().get(3)));
+        addCustomerField(summary, 2, "Trạng thái", new Label(
+                Localization.text(stocktake.values().get(4))));
+
+        TableView<InventoryWorkflowDAO.StocktakeDetail> table = new TableView<>();
+        table.getStyleClass().add("data-table");
+        table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
+        table.setItems(FXCollections.observableArrayList(details));
+        table.setPrefHeight(Math.min(420, 90 + details.size() * 42));
+
+        addStocktakeDetailColumn(table, "Mã sản phẩm", detail -> detail.productCode(), 110);
+        addStocktakeDetailColumn(table, "Tên sản phẩm", detail -> detail.productName(), 180);
+        addStocktakeDetailColumn(table, "Đơn vị", detail -> detail.unitName(), 70);
+        addStocktakeDetailColumn(table, "Mã lô", detail -> detail.batchCode(), 100);
+        addStocktakeDetailColumn(table, "Hạn sử dụng",
+                detail -> detail.expiryDate() == null ? "Không có" : detail.expiryDate().toString(), 115);
+        addStocktakeDetailColumn(table, "Tồn hệ thống",
+                detail -> detail.expectedQuantity().stripTrailingZeros().toPlainString(), 100);
+        addStocktakeDetailColumn(table, "Tồn đếm",
+                detail -> detail.countedQuantity().stripTrailingZeros().toPlainString(), 90);
+        addStocktakeDetailColumn(table, "Chênh lệch",
+                detail -> formatSignedQuantity(detail.differenceQuantity()), 90);
+        addStocktakeDetailColumn(table, "Vị trí",
+                detail -> detail.locationCode() + " · " + detail.locationName(), 170);
+
+        Label emptyState = new Label(Localization.text("Phiên kiểm kê này chưa có chi tiết lô hàng."));
+        emptyState.getStyleClass().add("table-empty-state");
+        table.setPlaceholder(emptyState);
+
+        VBox content = new VBox(12, summary, table);
+        content.setPadding(new Insets(12, 0, 8, 0));
+        dialog.getDialogPane().setContent(content);
+        dialog.showAndWait();
+    }
+
+    private String formatSignedQuantity(BigDecimal quantity) {
+        String formatted = quantity.stripTrailingZeros().toPlainString();
+        if (quantity.signum() > 0) {
+            return "+" + formatted;
+        }
+        return formatted;
+    }
+
+    private void addStocktakeDetailColumn(
+            TableView<InventoryWorkflowDAO.StocktakeDetail> table,
+            String title,
+            java.util.function.Function<InventoryWorkflowDAO.StocktakeDetail, String> value,
+            double width) {
+        TableColumn<InventoryWorkflowDAO.StocktakeDetail, String> column =
+                new TableColumn<>(Localization.text(title));
+        column.setCellValueFactory(cell ->
+                new javafx.beans.property.ReadOnlyStringWrapper(
+                        Localization.text(value.apply(cell.getValue()))));
+        column.setPrefWidth(width);
+        table.getColumns().add(column);
+    }
+
+    private java.util.Optional<InventoryWorkflowDAO.ReceiptRequest> createGoodsReceiptDialog() {
+        InventoryWorkflowService service = featureServices.inventoryWorkflowService();
+        List<InventoryWorkflowDAO.SupplierOption> suppliers = service.findSuppliers();
+        List<InventoryWorkflowDAO.ProductOption> products = service.findProducts();
+        List<InventoryWorkflowDAO.LocationOption> locations = service.findLocations();
+        if (suppliers.isEmpty() || products.isEmpty() || locations.isEmpty()) {
+            showInformation(Localization.text("Chưa thể nhập hàng"),
+                    Localization.text("Cần có nhà cung cấp, sản phẩm đang hoạt động và vị trí kho đang sử dụng."));
+            return java.util.Optional.empty();
+        }
+
+        Dialog<InventoryWorkflowDAO.ReceiptRequest> dialog = new Dialog<>();
+        dialog.setTitle(Localization.text("Tạo phiếu nhập"));
+        dialog.setHeaderText(Localization.text("Nhập hàng vào kho"));
+        dialog.initModality(Modality.APPLICATION_MODAL);
+        dialog.getDialogPane().getButtonTypes().addAll(ButtonType.CANCEL, ButtonType.OK);
+        dialog.getDialogPane().getStyleClass().add("form-dialog");
+        dialog.getDialogPane().setPrefWidth(1040);
+
+        ComboBox<InventoryWorkflowDAO.SupplierOption> supplier = new ComboBox<>(
+                FXCollections.observableArrayList(suppliers));
+        supplier.getSelectionModel().selectFirst();
+        supplier.setMaxWidth(Double.MAX_VALUE);
+        Node supplierSelector = searchableInventorySelector(
+                supplier, "Tìm nhà cung cấp...", 460);
+        DatePicker receivedDate = new DatePicker(LocalDate.now());
+        TextArea note = new TextArea();
+        note.setPromptText(Localization.text("Số hóa đơn nhà cung cấp / ghi chú"));
+        note.setPrefRowCount(2);
+        note.setWrapText(true);
+        note.getStyleClass().add("text-input");
+
+        GridPane header = new GridPane();
+        header.setHgap(16);
+        header.setVgap(10);
+        addCustomerField(header, 0, "Nhà cung cấp", supplierSelector);
+        addCustomerField(header, 1, "Ngày nhập", receivedDate);
+        addCustomerField(header, 2, "Số hóa đơn NCC / Ghi chú", note);
+
+        VBox lineRows = new VBox(8);
+        ScrollPane lineScroll = new ScrollPane(lineRows);
+        lineScroll.setFitToWidth(true);
+        lineScroll.setPrefViewportHeight(260);
+        List<ReceiptLineInput> lines = new ArrayList<>();
+        Button addLine = new Button(Localization.text("Thêm mặt hàng"));
+        addLine.getStyleClass().add("button-secondary");
+        addLine.setOnAction(event -> addReceiptLine(lines, lineRows, products));
+        addReceiptLine(lines, lineRows, products);
+
+        VBox content = new VBox(12,
+                header,
+                new Label(Localization.text(
+                        "Mỗi dòng nhập lưu sản phẩm, mã lô, hạn sử dụng, vị trí, số lượng và giá nhập.")),
+                lineScroll,
+                addLine);
+        content.setPadding(new Insets(10, 0, 0, 0));
+        dialog.getDialogPane().setContent(content);
+
+        Button okButton = (Button) dialog.getDialogPane().lookupButton(ButtonType.OK);
+        okButton.addEventFilter(ActionEvent.ACTION, event -> {
+            try {
+                buildReceiptRequest(supplier, receivedDate, note, lines);
+            } catch (IllegalArgumentException exception) {
+                showInformation(Localization.text("Thông tin phiếu nhập chưa hợp lệ"),
+                        Localization.text(exception.getMessage()));
+                event.consume();
+            }
+        });
+        dialog.setResultConverter(button -> button == ButtonType.OK
+                ? buildReceiptRequest(supplier, receivedDate, note, lines) : null);
+        return dialog.showAndWait();
+    }
+
+    private <T> VBox searchableInventorySelector(ComboBox<T> combo, String prompt, double width) {
+        TextField search = new TextField();
+        search.setPromptText(Localization.text(prompt));
+        search.setPrefWidth(width);
+        search.getStyleClass().add("text-input");
+
+        FilteredList<T> filteredItems = new FilteredList<>(combo.getItems(), item -> true);
+        combo.setItems(filteredItems);
+        combo.setPrefWidth(width);
+        combo.setMaxWidth(Double.MAX_VALUE);
+        search.textProperty().addListener((observable, oldValue, newValue) -> {
+            String query = normalize(newValue);
+            filteredItems.setPredicate(item ->
+                    query.isBlank() || normalize(String.valueOf(item)).contains(query));
+            T selected = combo.getValue();
+            if (selected != null && !filteredItems.contains(selected)) {
+                combo.getSelectionModel().clearSelection();
+            }
+        });
+        combo.valueProperty().addListener((observable, oldValue, newValue) -> {
+            if (newValue != null && !search.getText().isBlank()) {
+                search.clear();
+            }
+        });
+
+        VBox selector = new VBox(4, search, combo);
+        selector.setPrefWidth(width);
+        selector.setMinWidth(0);
+        return selector;
+    }
+
+    private void addReceiptLine(
+            List<ReceiptLineInput> lines,
+            VBox lineRows,
+            List<InventoryWorkflowDAO.ProductOption> products) {
+        ComboBox<InventoryWorkflowDAO.ProductOption> product =
+                new ComboBox<>(FXCollections.observableArrayList(products));
+        product.setPromptText(Localization.text("Sản phẩm"));
+        Node productSelector = searchableInventorySelector(product, "Tìm sản phẩm...", 220);
+        List<InventoryWorkflowDAO.LocationOption> locations =
+                featureServices.inventoryWorkflowService().findLocations();
+        ComboBox<InventoryWorkflowDAO.LocationOption> location =
+                new ComboBox<>(FXCollections.observableArrayList(locations));
+        location.getSelectionModel().selectFirst();
+        Node locationSelector = searchableInventorySelector(location, "Tìm kệ / vị trí...", 150);
+        TextField batchCode = new TextField();
+        batchCode.setPromptText(Localization.text("Mã lô"));
+        batchCode.setPrefWidth(110);
+        DatePicker expiryDate = new DatePicker();
+        expiryDate.setPromptText(Localization.text("Hạn dùng"));
+        expiryDate.setPrefWidth(140);
+        TextField quantity = new TextField();
+        quantity.setPromptText(Localization.text("Số lượng"));
+        quantity.setPrefWidth(90);
+        TextField unitCost = new TextField();
+        unitCost.setPromptText(Localization.text("Giá nhập"));
+        unitCost.setPrefWidth(100);
+        Button remove = new Button(Localization.text("Bỏ"));
+        HBox row = new HBox(
+                8, productSelector, batchCode, expiryDate, locationSelector, quantity, unitCost, remove);
+        row.setAlignment(Pos.CENTER_LEFT);
+        ReceiptLineInput line = new ReceiptLineInput(
+                product, batchCode, expiryDate, location, quantity, unitCost, row);
+        remove.setOnAction(event -> {
+            lines.remove(line);
+            lineRows.getChildren().remove(row);
+        });
+        lines.add(line);
+        lineRows.getChildren().add(row);
+    }
+
+    private InventoryWorkflowDAO.ReceiptRequest buildReceiptRequest(
+            ComboBox<InventoryWorkflowDAO.SupplierOption> supplier,
+            DatePicker receivedDate,
+            TextArea note,
+            List<ReceiptLineInput> lines) {
+        if (supplier.getValue() == null || receivedDate.getValue() == null || lines.isEmpty()) {
+            throw new IllegalArgumentException("Chọn nhà cung cấp, ngày nhập và nhập ít nhất một mặt hàng.");
+        }
+        if (receivedDate.getValue().isAfter(LocalDate.now()) || note.getText().length() > 255) {
+            throw new IllegalArgumentException("Ngày nhập không được trong tương lai; ghi chú tối đa 255 ký tự.");
+        }
+        List<InventoryWorkflowDAO.ReceiptLine> requestLines = new ArrayList<>();
+        java.util.Set<String> batchKeys = new java.util.HashSet<>();
+        for (ReceiptLineInput line : lines) {
+            if (line.product().getValue() == null || line.location().getValue() == null
+                    || line.batchCode().getText().isBlank() || line.batchCode().getText().trim().length() > 50) {
+                throw new IllegalArgumentException("Mỗi dòng phải có sản phẩm, vị trí và mã lô.");
+            }
+            BigDecimal quantity = parseInventoryDecimal(line.quantity().getText(), "Số lượng");
+            BigDecimal unitCost = parseInventoryDecimal(line.unitCost().getText(), "Giá nhập");
+            if (quantity.signum() <= 0 || unitCost.signum() < 0
+                    || line.expiryDate().getValue() != null
+                    && line.expiryDate().getValue().isBefore(receivedDate.getValue())) {
+                throw new IllegalArgumentException(
+                        "Số lượng phải lớn hơn 0, giá nhập không âm và hạn dùng không trước ngày nhập.");
+            }
+            if (!isValidInventoryQuantity(quantity)) {
+                throw new IllegalArgumentException(
+                        "Số lượng tối đa 9 chữ số phần nguyên và 3 chữ số thập phân.");
+            }
+            if (!isValidInventoryMoney(unitCost)) {
+                throw new IllegalArgumentException(
+                        "Giá nhập tối đa 10 chữ số phần nguyên và 2 chữ số thập phân.");
+            }
+            String batchKey = line.product().getValue().id() + ":" + line.location().getValue().id() + ":"
+                    + line.batchCode().getText().trim().toLowerCase(Locale.ROOT);
+            if (!batchKeys.add(batchKey)) {
+                throw new IllegalArgumentException("Không được nhập trùng sản phẩm, vị trí và mã lô.");
+            }
+            requestLines.add(new InventoryWorkflowDAO.ReceiptLine(
+                    line.product().getValue().id(),
+                    line.location().getValue().id(),
+                    line.batchCode().getText().trim(),
+                    line.expiryDate().getValue(),
+                    quantity, unitCost));
+        }
+        return new InventoryWorkflowDAO.ReceiptRequest(
+                supplier.getValue().id(), receivedDate.getValue(), note.getText().trim(), requestLines);
+    }
+
+    private java.util.Optional<InventoryWorkflowDAO.StocktakeRequest> createStocktakeDialog() {
+        InventoryWorkflowService service = featureServices.inventoryWorkflowService();
+        List<InventoryWorkflowDAO.LocationOption> locations = service.findLocations();
+        if (locations.isEmpty()) {
+            showInformation(Localization.text("Chưa thể kiểm kê"),
+                    Localization.text("Hãy tạo và kích hoạt vị trí kho trước khi kiểm kê."));
+            return java.util.Optional.empty();
+        }
+
+        Dialog<InventoryWorkflowDAO.StocktakeRequest> dialog = new Dialog<>();
+        dialog.setTitle(Localization.text("Tạo phiên kiểm kê"));
+        dialog.setHeaderText(Localization.text("Ghi nhận tồn thực tế theo từng lô"));
+        dialog.initModality(Modality.APPLICATION_MODAL);
+        dialog.getDialogPane().getButtonTypes().addAll(ButtonType.CANCEL, ButtonType.OK);
+        dialog.getDialogPane().getStyleClass().add("form-dialog");
+        dialog.getDialogPane().setPrefWidth(900);
+
+        ComboBox<InventoryWorkflowDAO.LocationOption> location = new ComboBox<>(
+                FXCollections.observableArrayList(locations));
+        location.getSelectionModel().selectFirst();
+        DatePicker stocktakeDate = new DatePicker(LocalDate.now());
+        TextArea note = new TextArea();
+        note.setPromptText(Localization.text("Ghi chú kiểm kê"));
+        note.setPrefRowCount(2);
+        note.setWrapText(true);
+        GridPane header = new GridPane();
+        header.setHgap(16);
+        header.setVgap(10);
+        addCustomerField(header, 0, "Vị trí kho", location);
+        addCustomerField(header, 1, "Ngày kiểm kê", stocktakeDate);
+        addCustomerField(header, 2, "Ghi chú", note);
+
+        VBox batchRows = new VBox(6);
+        Map<Long, TextField> countedQuantities = new java.util.LinkedHashMap<>();
+        Label batchStatus = new Label();
+        Runnable reloadBatches = () -> {
+            batchRows.getChildren().clear();
+            countedQuantities.clear();
+            batchRows.getChildren().add(new HBox(12,
+                    inventoryColumnHeader("Sản phẩm / lô", 360),
+                    inventoryColumnHeader("Hạn dùng", 110),
+                    inventoryColumnHeader("Tồn hệ thống", 120),
+                    inventoryColumnHeader("Đếm thực tế", 120)));
+            List<InventoryWorkflowDAO.BatchOption> batches = location.getValue() == null
+                    ? List.of() : service.findBatches(location.getValue().id());
+            for (InventoryWorkflowDAO.BatchOption batch : batches) {
+                TextField counted = new TextField(batch.quantityOnHand().stripTrailingZeros().toPlainString());
+                counted.setPromptText(Localization.text("Số lượng thực tế"));
+                counted.setPrefWidth(120);
+                countedQuantities.put(batch.id(), counted);
+                batchRows.getChildren().add(new HBox(12,
+                        inventoryColumnValue(batch.productCode() + " · " + batch.productName()
+                                + " · " + batch.batchCode(), 360),
+                        inventoryColumnValue(batch.expiryDate() == null ? "—" : batch.expiryDate().toString(), 110),
+                        inventoryColumnValue(batch.quantityOnHand().stripTrailingZeros().toPlainString(), 120),
+                        counted));
+            }
+            batchStatus.setText(batches.isEmpty()
+                    ? Localization.text("Vị trí này chưa có lô tồn kho để kiểm kê.")
+                    : Localization.text("Phiên sẽ chốt tồn và ghi biến động cho các chênh lệch."));
+        };
+        location.valueProperty().addListener((observable, oldValue, newValue) -> reloadBatches.run());
+        reloadBatches.run();
+
+        ScrollPane batchScroll = new ScrollPane(batchRows);
+        batchScroll.setFitToWidth(true);
+        batchScroll.setPrefViewportHeight(340);
+        VBox content = new VBox(10, header, batchStatus, batchScroll);
+        content.setPadding(new Insets(10, 0, 0, 0));
+        dialog.getDialogPane().setContent(content);
+
+        Button okButton = (Button) dialog.getDialogPane().lookupButton(ButtonType.OK);
+        okButton.addEventFilter(ActionEvent.ACTION, event -> {
+            try {
+                buildStocktakeRequest(location, stocktakeDate, note, countedQuantities);
+            } catch (IllegalArgumentException exception) {
+                showInformation(Localization.text("Thông tin kiểm kê chưa hợp lệ"),
+                        Localization.text(exception.getMessage()));
+                event.consume();
+            }
+        });
+        dialog.setResultConverter(button -> button == ButtonType.OK
+                ? buildStocktakeRequest(location, stocktakeDate, note, countedQuantities) : null);
+        return dialog.showAndWait();
+    }
+
+    private InventoryWorkflowDAO.StocktakeRequest buildStocktakeRequest(
+            ComboBox<InventoryWorkflowDAO.LocationOption> location,
+            DatePicker stocktakeDate,
+            TextArea note,
+            Map<Long, TextField> countedQuantities) {
+        if (location.getValue() == null || stocktakeDate.getValue() == null || countedQuantities.isEmpty()) {
+            throw new IllegalArgumentException("Chọn vị trí có lô tồn kho và ngày kiểm kê.");
+        }
+        if (stocktakeDate.getValue().isAfter(LocalDate.now()) || note.getText().length() > 255) {
+            throw new IllegalArgumentException("Ngày kiểm kê không được trong tương lai; ghi chú tối đa 255 ký tự.");
+        }
+        List<InventoryWorkflowDAO.StocktakeCount> counts = countedQuantities.entrySet().stream()
+                .map(entry -> {
+                    BigDecimal quantity = parseInventoryDecimal(entry.getValue().getText(), "Số lượng thực tế");
+                    if (quantity.signum() < 0) {
+                        throw new IllegalArgumentException("Số lượng kiểm kê không được âm.");
+                    }
+                    return new InventoryWorkflowDAO.StocktakeCount(entry.getKey(), quantity);
+                })
+                .toList();
+        return new InventoryWorkflowDAO.StocktakeRequest(
+                location.getValue().id(), stocktakeDate.getValue(), note.getText().trim(), counts);
+    }
+
+    private java.util.Optional<InventoryLossInput> createInventoryLossDialog() {
+        InventoryWorkflowService service = featureServices.inventoryWorkflowService();
+        List<InventoryWorkflowDAO.BatchOption> batches = service.findBatches(null).stream()
+                .filter(batch -> batch.quantityOnHand().signum() > 0)
+                .toList();
+        if (batches.isEmpty()) {
+            showInformation(Localization.text("Không có lô tồn để điều chỉnh"),
+                    Localization.text("Nhập hàng trước khi ghi nhận hư hỏng hoặc hết hạn."));
+            return java.util.Optional.empty();
+        }
+
+        Dialog<InventoryLossInput> dialog = new Dialog<>();
+        dialog.setTitle(Localization.text("Ghi nhận hư hỏng / hết hạn"));
+        dialog.setHeaderText(Localization.text("Số lượng được trừ khỏi tồn kho và ghi vào nhật ký."));
+        dialog.initModality(Modality.APPLICATION_MODAL);
+        dialog.getDialogPane().getButtonTypes().addAll(ButtonType.CANCEL, ButtonType.OK);
+        dialog.getDialogPane().getStyleClass().add("form-dialog");
+
+        ComboBox<InventoryWorkflowDAO.BatchOption> batch = new ComboBox<>(
+                FXCollections.observableArrayList(batches));
+        batch.setMaxWidth(Double.MAX_VALUE);
+        batch.getSelectionModel().selectFirst();
+        batch.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(InventoryWorkflowDAO.BatchOption value) {
+                return value == null ? "" : value.label();
+            }
+
+            @Override
+            public InventoryWorkflowDAO.BatchOption fromString(String value) {
+                return null;
+            }
+        });
+        ComboBox<InventoryWorkflowDAO.LossType> lossType = new ComboBox<>(
+                FXCollections.observableArrayList(InventoryWorkflowDAO.LossType.values()));
+        lossType.getSelectionModel().selectFirst();
+        lossType.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(InventoryWorkflowDAO.LossType value) {
+                return value == InventoryWorkflowDAO.LossType.EXPIRED
+                        ? Localization.text("Hết hạn") : Localization.text("Hư hỏng");
+            }
+
+            @Override
+            public InventoryWorkflowDAO.LossType fromString(String value) {
+                return null;
+            }
+        });
+        TextField quantity = new TextField();
+        quantity.setPromptText(Localization.text("Số lượng cần trừ"));
+        TextArea note = new TextArea();
+        note.setPromptText(Localization.text("Lý do / ghi chú"));
+        note.setPrefRowCount(3);
+        note.setWrapText(true);
+
+        GridPane fields = new GridPane();
+        fields.setHgap(16);
+        fields.setVgap(12);
+        addCustomerField(fields, 0, "Lô hàng", batch);
+        addCustomerField(fields, 1, "Loại biến động", lossType);
+        addCustomerField(fields, 2, "Số lượng", quantity);
+        addCustomerField(fields, 3, "Ghi chú", note);
+        dialog.getDialogPane().setContent(fields);
+
+        Button okButton = (Button) dialog.getDialogPane().lookupButton(ButtonType.OK);
+        okButton.addEventFilter(ActionEvent.ACTION, event -> {
+            try {
+                buildInventoryLossInput(batch, lossType, quantity, note);
+            } catch (IllegalArgumentException exception) {
+                showInformation(Localization.text("Thông tin điều chỉnh chưa hợp lệ"),
+                        Localization.text(exception.getMessage()));
+                event.consume();
+            }
+        });
+        dialog.setResultConverter(button -> button == ButtonType.OK
+                ? buildInventoryLossInput(batch, lossType, quantity, note) : null);
+        return dialog.showAndWait();
+    }
+
+    private InventoryLossInput buildInventoryLossInput(
+            ComboBox<InventoryWorkflowDAO.BatchOption> batch,
+            ComboBox<InventoryWorkflowDAO.LossType> lossType,
+            TextField quantity,
+            TextArea note) {
+        if (batch.getValue() == null || lossType.getValue() == null) {
+            throw new IllegalArgumentException("Chọn lô hàng và loại biến động.");
+        }
+        BigDecimal parsedQuantity = parseInventoryDecimal(quantity.getText(), "Số lượng");
+        if (parsedQuantity.signum() <= 0 || parsedQuantity.compareTo(batch.getValue().quantityOnHand()) > 0) {
+            throw new IllegalArgumentException("Số lượng phải lớn hơn 0 và không vượt quá tồn hiện tại.");
+        }
+        if (note.getText().length() > 255) {
+            throw new IllegalArgumentException("Ghi chú điều chỉnh không được vượt quá 255 ký tự.");
+        }
+        if (lossType.getValue() == InventoryWorkflowDAO.LossType.EXPIRED
+                && (batch.getValue().expiryDate() == null
+                || batch.getValue().expiryDate().isAfter(LocalDate.now()))) {
+            throw new IllegalArgumentException("Chỉ ghi nhận hết hạn cho lô đã đến hạn sử dụng.");
+        }
+        return new InventoryLossInput(
+                batch.getValue().id(), lossType.getValue(), parsedQuantity, note.getText().trim());
+    }
+
+    private BigDecimal parseInventoryDecimal(String raw, String field) {
+        try {
+            return new BigDecimal(raw == null ? "" : raw.trim().replace(",", "."));
+        } catch (NumberFormatException exception) {
+            throw new IllegalArgumentException(field + " phải là số hợp lệ.");
+        }
+    }
+
+    private boolean isValidInventoryQuantity(BigDecimal quantity) {
+        BigDecimal normalized = quantity.stripTrailingZeros();
+        return normalized.scale() <= 3
+                && normalized.precision() - normalized.scale() <= 9;
+    }
+
+    private boolean isValidInventoryMoney(BigDecimal amount) {
+        BigDecimal normalized = amount.stripTrailingZeros();
+        return normalized.scale() <= 2
+                && normalized.precision() - normalized.scale() <= 10;
+    }
+
+    private Label inventoryColumnHeader(String text, double width) {
+        Label label = new Label(Localization.text(text));
+        label.setPrefWidth(width);
+        label.getStyleClass().add("field-label");
+        return label;
+    }
+
+    private Label inventoryColumnValue(String text, double width) {
+        Label label = new Label(text);
+        label.setPrefWidth(width);
+        label.setWrapText(true);
+        return label;
+    }
+
+    private java.util.Optional<List<String>> createLocationDialog(ModuleRow existingRow) {
+        List<String> oldValues = existingRow == null
+                ? List.of("", "", "", "ACTIVE")
+                : existingRow.values();
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.setTitle(Localization.text(existingRow == null
+                ? "Thêm vị trí" : "Chỉnh sửa vị trí"));
+        dialog.setHeaderText(Localization.text(existingRow == null
+                ? "Tạo vị trí kho" : "Cập nhật vị trí kho"));
+        dialog.initModality(Modality.APPLICATION_MODAL);
+        dialog.getDialogPane().getButtonTypes().addAll(ButtonType.CANCEL, ButtonType.OK);
+        dialog.getDialogPane().getStyleClass().add("form-dialog");
+
+        TextField code = new TextField(oldValues.get(0));
+        code.setPromptText(Localization.text("Mã vị trí"));
+        code.getStyleClass().add("text-input");
+        TextField name = new TextField(oldValues.get(1));
+        name.setPromptText(Localization.text("Tên vị trí"));
+        name.getStyleClass().add("text-input");
+        TextArea description = new TextArea(oldValues.get(2));
+        description.setPromptText(Localization.text("Mô tả"));
+        description.setPrefRowCount(3);
+        description.setWrapText(true);
+        description.getStyleClass().add("text-input");
+        ComboBox<String> status = new ComboBox<>();
+        status.getItems().addAll(
+                Localization.text("Đang sử dụng"), Localization.text("Ngừng sử dụng"));
+        status.getSelectionModel().select(
+                "INACTIVE".equalsIgnoreCase(oldValues.get(3)) ? 1 : 0);
+
+        GridPane fields = new GridPane();
+        fields.setHgap(16);
+        fields.setVgap(12);
+        fields.setPadding(new Insets(12, 0, 8, 0));
+        addCustomerField(fields, 0, "Mã vị trí", code);
+        addCustomerField(fields, 1, "Tên vị trí", name);
+        addCustomerField(fields, 2, "Mô tả", description);
+        addCustomerField(fields, 3, "Trạng thái", status);
+
+        VBox content = new VBox(12, fields);
+        content.setPrefWidth(620);
+        dialog.getDialogPane().setContent(content);
+        dialog.setResultConverter(button -> button == ButtonType.OK ? ButtonType.OK : null);
+        return dialog.showAndWait()
+                .filter(ButtonType.OK::equals)
+                .map(ignored -> List.of(
+                        code.getText().trim(),
+                        name.getText().trim(),
+                        description.getText().trim(),
+                        status.getSelectionModel().getSelectedIndex() == 0 ? "ACTIVE" : "INACTIVE"));
+    }
+
     private java.util.Optional<List<String>> editRow(
             ModuleDefinition module,
             FeatureModuleService featureService,
             ModuleRow existingRow) {
         if ("UC-01".equals(module.id())) {
             return createEmployeeAccountDialog(module);
+        }
+        if ("UC-13".equals(module.id())) {
+            return createLocationDialog(existingRow);
         }
         if ("UC-18".equals(module.id())) {
             return createPromotionDialog(
@@ -1481,12 +2539,15 @@ public class PageRenderer {
         Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
         boolean promotion = "UC-18".equals(module.id());
         boolean customer = "UC-16".equals(module.id());
+        boolean location = "UC-13".equals(module.id());
         alert.setTitle(Localization.text(promotion ? "Xác nhận vô hiệu hóa"
-                : customer ? "Xác nhận lưu trữ" : "Xác nhận xóa"));
+                : customer ? "Xác nhận lưu trữ"
+                : location ? "Xác nhận ngừng sử dụng" : "Xác nhận xóa"));
         alert.setHeaderText(module.title());
         alert.setContentText(Localization.text(promotion
                 ? "Bạn có chắc muốn vô hiệu hóa chương trình đang chọn?"
                 : customer ? "Hồ sơ được lưu trữ, lịch sử mua hàng và điểm vẫn được giữ."
+                        : location ? "Vị trí sẽ ngừng sử dụng nhưng dữ liệu lô hàng và kiểm kê vẫn được giữ."
                         : "Bạn có chắc muốn xóa dòng dữ liệu đang chọn?"));
         alert.getButtonTypes().setAll(ButtonType.CANCEL, ButtonType.OK);
         return alert.showAndWait().filter(ButtonType.OK::equals).isPresent();
