@@ -182,7 +182,7 @@ public class MainController {
         ModuleDefinition localizedModule = Localization.localize(module);
         breadcrumbLabel.setText(localizedModule.title());
         contentHost.getChildren().setAll(scrollable(
-                new PageRenderer(featureServices, exchangeRateService, authenticatedUserId)
+                new PageRenderer(featureServices, exchangeRateService, authenticatedUserId, role)
                         .render(localizedModule)));
     }
 

@@ -15,6 +15,9 @@ import java.util.Map;
 import java.util.Set;
 
 public final class SuppliersService extends AbstractFeatureModuleService {
+    private static final int PRODUCT_STATUS_COLUMN = 7;
+    private static final int PRODUCT_SUPPLIER_COLUMN = 8;
+
     private final FeatureModuleDAO repository;
 
     public SuppliersService(FeatureModuleDAO repository) {
@@ -30,8 +33,14 @@ public final class SuppliersService extends AbstractFeatureModuleService {
         Map<String, Integer> counts = new LinkedHashMap<>();
         for (ModuleRow product : repository.findAll("UC-08")) {
             List<String> values = product.values();
-            if (values.size() > 7 && !values.get(7).isBlank()) {
-                counts.merge(values.get(7), 1, Integer::sum);
+            if (values.size() <= PRODUCT_SUPPLIER_COLUMN
+                    || !isActive(values.get(PRODUCT_STATUS_COLUMN))) {
+                continue;
+            }
+            for (String supplier : values.get(PRODUCT_SUPPLIER_COLUMN).split(",")) {
+                if (!supplier.isBlank()) {
+                    counts.merge(supplier.trim(), 1, Integer::sum);
+                }
             }
         }
         int total = counts.values().stream().mapToInt(Integer::intValue).sum();
@@ -47,5 +56,9 @@ public final class SuppliersService extends AbstractFeatureModuleService {
         }
         repository.replaceAll("UC-11", report);
         return super.findAll(module);
+    }
+
+    private boolean isActive(String status) {
+        return "ACTIVE".equalsIgnoreCase(status) || "Đang bán".equalsIgnoreCase(status);
     }
 }

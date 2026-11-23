@@ -1,0 +1,486 @@
+@startuml
+title Ninh Kieu Pharma - Overall System Activity Diagram
+
+' ===== 1. Application startup and login =====
+skinparam shadowing false
+skinparam activity {
+  BackgroundColor #F8FAFC
+  BorderColor #1E40AF
+  FontColor #1F2937
+  DiamondBackgroundColor #FFFFFF
+  DiamondBorderColor #1E40AF
+  StartColor #1F2937
+  EndColor #1F2937
+}
+
+|User|
+start
+:Start the application;
+
+|System|
+:Check the MySQL connection and schema;
+if (Connection available and schema valid?) then (Yes)
+  :Display the login screen;
+else (No)
+  :Display a connection/schema error;
+  stop
+endif
+
+repeat
+  |User|
+  :Enter username and password;
+  |System|
+  :Authenticate the login credentials;
+  if (Credentials valid?) then (Yes)
+    :Create a session and load the user's role;
+  else (No)
+    :Display a login failure message;
+  endif
+repeat while (Login failed?) is (Yes)
+
+' ===== 2. Dashboard and access control =====
+|System|
+:Display the dashboard and role-based menu;
+
+note right
+Module access is checked based on the user's role
+and the staffAccessible configuration.
+end note
+
+repeat
+  |User|
+  :Select a category and function;
+  |System|
+  :Check module access permissions;
+  if (Access allowed?) then (Yes)
+    :Load module data;
+
+    ' ===== 3. Product and supplier management =====
+    if (Product and supplier category?) then (Yes)
+      if (UC-10 or UC-11 report selected?) then (Yes)
+        |MySQL|
+        :Read product, supplier,\nor received purchase order data;
+        |System|
+        :Summarize quarterly category trends\nor monthly supplier coverage;
+        :Display tables, charts, and filters;
+        if (User refreshes the report?) then (Yes)
+          :Reload and recalculate the report;
+        else (No)
+          :Continue viewing the report;
+        endif
+        if (User chooses to export the report?) then (Yes)
+          :Notify that file export is not yet implemented;
+        else (No)
+          :Do not export a file;
+        endif
+      else (No)
+        :Display the catalog, product,\nor supplier table;
+        if (Administrator role?) then (Yes)
+          |User|
+          :Choose to add, edit, or delete a record;
+          |System|
+          :Validate required fields and data;
+          if (Data valid?) then (Yes)
+            |MySQL|
+            :Save changes in a transaction;
+            note right
+            Products are linked to
+            one or more suppliers.
+            end note
+            |System|
+            :Reload the data table;
+          else (No)
+            :Display a data validation error;
+          endif
+        else (Staff)
+          :Allow read-only access to UC-07..UC-09;
+        endif
+      endif
+
+    ' ===== 4. Human resources and shift management =====
+    elseif (Human resources and shifts category?) then (Yes)
+      :Open employee profiles, availability,\nschedules, attendance, or HR reports;
+      if (Module supports data entry?) then (Yes)
+        |User|
+        :Enter or update information;
+        |System|
+        :Validate data and operation permissions;
+        if (Valid?) then (Yes)
+          |MySQL|
+          :Save changes;
+          |System|
+          :Reload the screen;
+        else (No)
+          :Display an error and request data correction;
+        endif
+      else (No)
+        :Generate and display the report;
+      endif
+
+' ===== 5. Inventory management =====
+    elseif (Inventory category?) then (Yes)
+      :Open receiving, storage locations,\nstocktaking, or inventory movement reports;
+      if (Module supports data entry?) then (Yes)
+        |User|
+        :Enter inventory transaction details;
+        |System|
+        :Validate data and inventory constraints;
+        if (Valid?) then (Yes)
+          |MySQL|
+          :Save inventory transaction changes;
+          |System|
+          :Reload the screen;
+        else (No)
+          :Display an error and request data correction;
+        endif
+      else (No)
+        :Generate and display the inventory report;
+      endif
+
+' ===== 6. Sales and customer management =====
+    else (Sales and customers)
+      :Open customer profiles or sales;
+      if (Creating a sales transaction?) then (Yes)
+        |MySQL|
+        :Load active products,\nbatch stock, and customer information;
+        |System|
+        :Display loyalty points and allergy alerts;
+        |User|
+        :Select products, quantities,\ncustomer, and discounts;
+        |System|
+        :Check FEFO stock,\nprescription requirements, allergies, and points;
+        if (Transaction valid and eligible?) then (Yes)
+          |MySQL|
+          :Record the invoice and sales details,\ndeduct stock, and update points\nin one transaction;
+          |System|
+          :Display the transaction result;
+        else (No)
+          :Display an error/warning\nand request adjustments;
+        endif
+      else (No)
+        :View or update customer profiles,\nallergies, and discounts;
+        |MySQL|
+        :Read or save customer data;
+        |System|
+        :Display the result;
+      endif
+    endif
+  else (No)
+    :Deny access and display a notification;
+  endif
+repeat while (Continue using the system?) is (Yes)
+
+' ===== 7. Logout and reference notes =====
+|User|
+:Log out or close the application;
+stop
+
+note right
+Documentation and source code cross-reference:
+- Staff can read UC-07..UC-09 but cannot create,
+  update, or delete records. UC-10 and UC-11 remain
+  unavailable to Staff in the current code.
+- The documentation requires report export/printing;
+  the interface currently indicates that file export
+  is not yet implemented.
+end note
+@enduml
+
+@startuml
+title 6. Manage Product Categories (UC-07)
+
+!pragma useVerticalIf on
+skinparam defaultFontSize 18
+skinparam shadowing false
+skinparam activity {
+  BackgroundColor #F8FAFC
+  BorderColor #1E40AF
+  FontColor #1F2937
+  DiamondBackgroundColor #FFFFFF
+  DiamondBorderColor #1E40AF
+  StartColor #1F2937
+  EndColor #1F2937
+}
+
+|User|
+start
+:Select Product Categories;
+|System|
+if (Admin or Staff?) then (Yes)
+  :Load category records from MySQL;
+  :Display the category list;
+|User|
+  :Select an operation;
+  if (Create?) then (Yes)
+    if (Admin?) then (Yes)
+      :Enter category name, description,\nand status;
+      |System|
+      :Validate the category data;
+      if (Data valid?) then (Yes)
+        :Insert the category record into MySQL;
+        :Display success and refresh the list;
+      else (No)
+        :Display validation errors;
+      endif
+    else (No)
+      :Deny create operation;
+    endif
+  elseif (Read?) then (Yes)
+    :Search or select a category;
+    |System|
+    :Retrieve and display matching categories from MySQL;
+  elseif (Update?) then (Yes)
+    if (Admin?) then (Yes)
+      |User|
+      :Select a category and edit its name,\ndescription, or status;
+      |System|
+      :Validate the updated data;
+      if (Data valid?) then (Yes)
+        :Update the category record in MySQL;
+        :Display success and refresh the list;
+      else (No)
+        :Display validation errors;
+      endif
+    else (No)
+      :Deny update operation;
+    endif
+  elseif (Delete?) then (Yes)
+    if (Admin?) then (Yes)
+      |User|
+      :Select a category and confirm deletion;
+      |System|
+      :Delete the category record from MySQL;
+      :Display the result and refresh the list;
+    else (No)
+      :Deny delete operation;
+    endif
+  else (Cancel)
+    |User|
+    :Close Product Categories;
+  endif
+else (No)
+  |System|
+  :Deny module access;
+endif
+|User|
+stop
+@enduml
+
+@startuml
+title 7. Manage Products (UC-08)
+
+!pragma useVerticalIf on
+skinparam defaultFontSize 18
+skinparam shadowing false
+skinparam activity {
+  BackgroundColor #F8FAFC
+  BorderColor #1E40AF
+  FontColor #1F2937
+  DiamondBackgroundColor #FFFFFF
+  DiamondBorderColor #1E40AF
+  StartColor #1F2937
+  EndColor #1F2937
+}
+
+|User|
+start
+:Select Products;
+|System|
+if (Admin or Staff?) then (Yes)
+  :Load product records from MySQL;
+  :Display the product list;
+|User|
+  :Select an operation;
+  if (Create?) then (Yes)
+    if (Admin?) then (Yes)
+      :Enter product code, name, category,\ndosage form, unit, selling price,\nprescription status, product status,\nand supplier or suppliers;
+      |System|
+      :Validate the product data;
+      if (Data valid?) then (Yes)
+        :Save the product and synchronize\nsupplier links in a transaction;
+        :Display success and refresh the list;
+      else (No)
+        :Display validation errors;
+      endif
+    else (No)
+      :Deny create operation;
+    endif
+  elseif (Read?) then (Yes)
+    :Search or select a product;
+    |System|
+    :Retrieve and display matching products\nwith their supplier links from MySQL;
+  elseif (Update?) then (Yes)
+    if (Admin?) then (Yes)
+      |User|
+      :Select a product and edit its details\nor supplier links;
+      |System|
+      :Validate the updated data;
+      if (Data valid?) then (Yes)
+        :Update the product and synchronize\nsupplier links in a transaction;
+        :Display success and refresh the list;
+      else (No)
+        :Display validation errors;
+      endif
+    else (No)
+      :Deny update operation;
+    endif
+  elseif (Delete?) then (Yes)
+    if (Admin?) then (Yes)
+      |User|
+      :Select a product and confirm deletion;
+      |System|
+      :Delete supplier links and product\nin a transaction;
+      :Display the result and refresh the list;
+    else (No)
+      :Deny delete operation;
+    endif
+  else (Cancel)
+    |User|
+    :Close Products;
+  endif
+else (No)
+  |System|
+  :Deny module access;
+endif
+|User|
+stop
+@enduml
+
+@startuml
+title   8. Manage Supplier Information (UC-09)
+
+!pragma useVerticalIf on
+skinparam defaultFontSize 18
+skinparam shadowing false
+skinparam activity {
+  BackgroundColor #F8FAFC
+  BorderColor #1E40AF
+  FontColor #1F2937
+  DiamondBackgroundColor #FFFFFF
+  DiamondBorderColor #1E40AF
+  StartColor #1F2937
+  EndColor #1F2937
+}
+
+|User|
+start
+:Select Supplier Information;
+|System|
+if (Admin or Staff?) then (Yes)
+  :Load supplier records from MySQL;
+  :Display the supplier list;
+|User|
+  :Select an operation;
+  if (Create?) then (Yes)
+    if (Admin?) then (Yes)
+      :Enter supplier code, name, phone,\nemail, address, and status;
+      |System|
+      :Validate the supplier data;
+      if (Data valid?) then (Yes)
+        :Insert the supplier record into MySQL;
+        :Display success and refresh the list;
+      else (No)
+        :Display validation errors;
+      endif
+    else (No)
+      :Deny create operation;
+    endif
+  elseif (Read?) then (Yes)
+    :Search or select a supplier;
+    |System|
+    :Retrieve and display matching suppliers from MySQL;
+  elseif (Update?) then (Yes)
+    if (Admin?) then (Yes)
+      |User|
+      :Select a supplier and edit its details;
+      |System|
+      :Validate the updated data;
+      if (Data valid?) then (Yes)
+        :Update the supplier record in MySQL;
+        :Display success and refresh the list;
+      else (No)
+        :Display validation errors;
+      endif
+    else (No)
+      :Deny update operation;
+    endif
+  elseif (Delete?) then (Yes)
+    if (Admin?) then (Yes)
+      |User|
+      :Select a supplier and confirm deletion;
+      |System|
+      :Delete supplier-product links and supplier\nin a transaction;
+      :Display the result and refresh the list;
+    else (No)
+      :Deny delete operation;
+    endif
+  else (Cancel)
+    |User|
+    :Close Supplier Information;
+  endif
+else (No)
+  |System|
+  :Deny module access;
+endif
+|User|
+stop
+@enduml
+
+@startuml
+title 9. Generate Reports (UC-10 & UC-11)
+
+!pragma useVerticalIf on
+skinparam defaultFontSize 20
+skinparam shadowing false
+skinparam activity {
+  BackgroundColor #F8FAFC
+  BorderColor #1E40AF
+  FontColor #1F2937
+  DiamondBackgroundColor #FFFFFF
+  DiamondBorderColor #1E40AF
+  StartColor #1F2937
+  EndColor #1F2937
+}
+
+|User|
+start
+:Select Supplier Distribution Report;
+|System|
+if (Admin access?) then (Yes)
+  |User|
+  :Select a report type;
+  if (Product category trend?) then (UC-10)
+    |System|
+    :Load active products grouped by quarter and category;
+    :Calculate product, dosage-form, and supplier counts;
+    :Calculate each category's share within its quarter;
+    :Assess replacement options:\n5+ products and 2+ suppliers = many;\n2+ products = basic; otherwise = few;
+    :Display the quarterly report table and charts;
+    |User|
+    :Filter by quarter or category,\nor refresh the report;
+    |System|
+    :Apply filters or reload report data from MySQL;
+    :Notify user that file export is not implemented;
+  elseif (Supplier distribution?) then (UC-11)
+    |System|
+    :Load received goods-receipt items,\ngrouped by month, supplier, and product;
+    :Count distinct products per supplier\nfor each month;
+    :Calculate each supplier's share using\nthe month's distinct products as denominator;
+    :Classify dependency: High (>= 50%),\nMedium (>= 25%), or Low (< 25%);
+    :Highlight balanced sourcing or\nconcentration on specific suppliers;
+    :Display the monthly report table and charts;
+    |User|
+    :Filter by month or supplier,\nor refresh the report;
+    |System|
+    :Apply filters or reload report data from MySQL;
+    :Notify user that file export is not implemented;
+  else (Cancel)
+    |User|
+    :Close the reports;
+  endif
+else (No)
+  :Deny access (Staff cannot access this module);
+endif
+stop
+
+@enduml

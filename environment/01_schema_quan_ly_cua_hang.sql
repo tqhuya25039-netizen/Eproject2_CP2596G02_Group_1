@@ -157,6 +157,7 @@ CREATE TABLE products (
     barcode VARCHAR(50) NULL,
     product_name VARCHAR(180) NOT NULL,
     dosage_form VARCHAR(80) NULL,
+    unit_price DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
     unit_name VARCHAR(30) NOT NULL,
     requires_prescription TINYINT(1) NOT NULL DEFAULT 0,
     selling_price DECIMAL(12, 2) NULL,

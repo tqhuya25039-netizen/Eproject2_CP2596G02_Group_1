@@ -12,6 +12,7 @@ import vn.ninhkieupharma.pharmacy.domain.catalog.SuppliersService;
 import vn.ninhkieupharma.pharmacy.domain.inventory.GoodsReceivingService;
 import vn.ninhkieupharma.pharmacy.domain.catalog.StorageLocationsService;
 import vn.ninhkieupharma.pharmacy.domain.inventory.StocktakeAdjustmentsService;
+import vn.ninhkieupharma.pharmacy.domain.inventory.InventoryWorkflowService;
 import vn.ninhkieupharma.pharmacy.domain.sales.CustomerLoyaltyService;
 import vn.ninhkieupharma.pharmacy.domain.sales.SalesService;
 import vn.ninhkieupharma.pharmacy.domain.sales.PromotionsLoyaltyService;
@@ -23,6 +24,7 @@ public final class FeatureServices {
     private final List<FeatureModuleService> services;
     private final CustomerLoyaltyService customerLoyaltyService;
     private final SalesService salesService;
+    private final InventoryWorkflowService inventoryWorkflowService;
 
     public FeatureServices() {
         this(new InMemoryModuleRepository());
@@ -31,6 +33,7 @@ public final class FeatureServices {
     public FeatureServices(FeatureModuleDAO repository) {
         customerLoyaltyService = new CustomerLoyaltyService(repository);
         salesService = new SalesService(repository);
+        inventoryWorkflowService = new InventoryWorkflowService(repository);
         services = List.of(
                 new EmployeeAccountsService(repository),
                 new AvailabilityService(repository),
@@ -61,5 +64,9 @@ public final class FeatureServices {
 
     public SalesService salesService() {
         return salesService;
+    }
+
+    public InventoryWorkflowService inventoryWorkflowService() {
+        return inventoryWorkflowService;
     }
 }

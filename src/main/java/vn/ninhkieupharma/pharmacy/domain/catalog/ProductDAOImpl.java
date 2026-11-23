@@ -66,8 +66,11 @@ public final class ProductDAOImpl implements ProductDAO {
             }
             if (!tableHasRows(connection)) {
                 for (List<String> values : DemoData.rowsFor(MODULE_ID)) {
-                    if (values.size() == COLUMNS.size()) {
-                        insert(connection, CODEC.fromValues(UUID.randomUUID(), values));
+                    if (values.size() == 9) {
+                        List<String> legacyValues = List.of(
+                                values.get(0), values.get(1), values.get(2), values.get(3), values.get(4),
+                                values.get(6), values.get(7), values.get(8));
+                        insert(connection, CODEC.fromValues(UUID.randomUUID(), legacyValues));
                     }
                 }
             }
