@@ -126,6 +126,15 @@ public final class Localization {
                 "Thêm chương trình điểm", "Add Points Program",
                 "Báo cáo đơn hàng & doanh thu", "Order & Revenue Reports",
                 "Tổng hợp số lượng đơn hàng và doanh thu theo khoảng thời gian.", "Summarize order volumes and revenue over a selected period.",
+                "Ngày / Tháng", "Date / Month",
+                "Tháng", "Month", "Quý", "Quarter", "Năm", "Year",
+                "Hãy nhập năm từ 1000 đến 9998.", "Enter a year between 1000 and 9998.",
+                "In báo cáo", "Print Report",
+                "Không tìm thấy máy in.", "No printers found.",
+                "Không thể in báo cáo.", "Could not print the report.",
+                "Không thể tải báo cáo doanh thu.", "Could not load the revenue report.",
+                "Số lượng hóa đơn", "Invoice Count",
+                "Tổng cộng", "Total", "Trang", "Page",
                 "Mã nhân viên", "Employee ID", "Họ và tên", "Full Name",
                 "Số điện thoại", "Phone Number", "Email", "Email",
                 "Trạng thái", "Status",
@@ -161,6 +170,10 @@ public final class Localization {
                 "Thông tin dị ứng", "Allergy Information", "Mã hóa đơn", "Invoice ID",
                 "Lý do hạn chế", "Restriction Reason", "Hạn chế bán", "Restrict Sales",
                 "Lưu trữ hồ sơ", "Archive Profile", "Lưu trữ", "Archive",
+                "Xóa hồ sơ", "Delete profile",
+                "Hồ sơ chưa có đơn hàng sẽ bị xóa vĩnh viễn cùng thông tin dị ứng.",
+                "A profile with no orders will be permanently deleted along with its allergy information.",
+                "Khách hàng đã có đơn hàng. Hãy lưu trữ hồ sơ.", "This customer has orders. Archive the profile instead.",
                 "Lịch sử mua", "Purchase History", "Ngày giao dịch", "Transaction Date",
                 "Tổng tiền", "Total Amount", "Họ và tên", "Full Name",
                 "Hồ sơ khách hàng", "Customer Profile", "Tạo hồ sơ khách hàng", "Create Customer Profile",
@@ -239,6 +252,13 @@ public final class Localization {
                 "Email không hợp lệ hoặc vượt quá 120 ký tự.", "Email is invalid or exceeds 120 characters.",
                 "Cần nhập lý do khi hạn chế bán.", "A reason is required when restricting sales.",
                 "Lý do hạn chế không được vượt quá 255 ký tự.", "Restriction reason cannot exceed 255 characters.",
+                "Ngày sinh phải hợp lệ và không ở tương lai.", "Enter a valid date of birth that is not in the future.",
+                "Số điện thoại này đã được dùng cho một khách hàng.", "Another customer already uses this phone number.",
+                "Số điểm phải là số nguyên từ 0 đến 4294967295.", "Points must be a whole number between 0 and 4294967295.",
+                "Loại giao dịch", "Transaction type",
+                "Điểm thay đổi", "Points change",
+                "Tích điểm", "Points earned",
+                "Đổi điểm", "Points redeemed",
                 "Số điện thoại cần có từ 7 đến 15 chữ số.", "Phone number must contain 7 to 15 digits.",
                 "Số điện thoại đã được gắn với một khách hàng khác.",
                 "This phone number is already assigned to another customer.",
@@ -250,6 +270,13 @@ public final class Localization {
                 "Đã lưu trữ · hạn chế bán", "Archived · sales restricted",
                 "Đang hoạt động", "Active", "Đã hủy", "Voided",
                 "Khách hàng chưa có giao dịch.", "This customer has no transactions.",
+                "Lịch sử mua và điểm", "Purchase and Points History",
+                "Lịch sử điểm", "Points History",
+                "Điểm đã tích", "Points Earned",
+                "Đang chờ", "Pending",
+                "Khách hàng chưa có giao dịch điểm.", "This customer has no points transactions.",
+                "Không thể tải lịch sử khách hàng", "Could not load customer history",
+                "Không thể tải lịch sử điểm của khách hàng.", "Could not load customer points history.",
                 "Xác nhận lưu trữ", "Confirm Archive",
                 "Hồ sơ được lưu trữ, lịch sử mua hàng và điểm vẫn được giữ.",
                 "The profile will be archived; purchase and loyalty history will be retained.",
@@ -334,6 +361,21 @@ public final class Localization {
                 "Thuốc giảm đau", "Pain Relief", "Vitamin & khoáng chất", "Vitamins & Minerals",
                 "Thuốc kháng sinh", "Antibiotics", "Vật tư y tế", "Medical Supplies",
                 "Thực phẩm bổ sung", "Supplements", "Thuốc kê đơn", "Prescription Medicine",
+                "ACTIVE", "Active", "INACTIVE", "Inactive",
+                "Yes", "Yes", "No", "No",
+                "vi", "Blister Pack", "Vỉ", "Blister Pack",
+                "Viên nén", "Tablet", "vien nen", "Tablet",
+                "vien nang", "Capsule", "vien nang mem", "Soft Capsule",
+                "dung dich", "Solution", "bột uống", "Powder",
+                "khau trang", "Mask", "thiet bi y te", "Medical Device",
+                "gel", "Gel", "van may", "Face Mask",
+                "Thuoc khong ke don", "Over-the-counter medicine",
+                "Thuc pham bao ve suc khoe", "Health supplements",
+                "Thuoc ke don", "Prescription medicine",
+                "Thuoc ho tro dieu tri", "Treatment support",
+                "Duong da va cham soc ca nhan", "Skincare and personal care",
+                "Dung cu y te", "Medical devices",
+                "San pham me va be", "Mother and baby products",
                 "Giảm đau, hạ sốt", "Pain and fever relief", "Bổ sung vi chất", "Micronutrient supplement",
                 "Hỗ trợ sức khỏe", "Health support", "Dụng cụ và vật tư y tế", "Medical equipment and supplies",
                 "Quản lý vận hành nhà thuốc", "Pharmacy Operations Management",
@@ -420,6 +462,23 @@ public final class Localization {
                 "Thời điểm", "Date & Time", "Tổng tiền", "Total",
                 "Tìm theo mã, tên hoặc nội dung...", "Search by code, name, or content...",
                 "Xuất báo cáo", "Export Report",
+                "Số lượng hóa đơn", "Invoice Count",
+                "Giá trị trung bình", "Average Order Value",
+                "Đang chờ", "Pending",
+                "Hoàn tất", "Completed",
+                "Đã hủy", "Voided",
+                "Giảm giá", "Discount",
+                "Doanh thu", "Revenue",
+                "Doanh thu (triệu ₫)", "Revenue (million ₫)",
+                "Lịch sử mua", "Purchase History",
+                "Lịch sử điểm", "Points History",
+                "Loại giao dịch", "Transaction Type",
+                "Điểm thay đổi", "Points Changed",
+                "Khách hàng chưa có giao dịch.", "This customer has no transactions.",
+                "Khách hàng chưa có giao dịch điểm.", "This customer has no point transactions.",
+                "Hạn chế bán", "Sales Restricted",
+                "Đã lưu trữ", "Archived",
+                "Đã lưu trữ · hạn chế bán", "Archived · Sales Restricted",
                 "Đã xuất báo cáo thành công.", "Report exported successfully.",
                 "Không thể xuất báo cáo.", "Could not export the report.",
                 "Áp dụng", "Apply", "Không tìm thấy dữ liệu phù hợp.", "No matching data found.",
@@ -549,8 +608,48 @@ public final class Localization {
                 "Liều dùng / cách dùng", "Dosage / instructions",
                 "Ngày điều trị", "Treatment days",
                 "4. Ưu đãi và hoàn tất đơn", "4. Discounts and Checkout",
-                "Dùng điểm tối đa có thể (không vượt quá 50% giá trị gốc đơn hàng)",
-                "Use the maximum available points (capped at 50% of the original order value)",
+                "4. Ưu đãi và lưu đơn", "4. Discounts and Pending Order",
+                "Điểm muốn đổi", "Points to redeem",
+                "Nhập số điểm khách muốn đổi", "Enter the points the customer wants to redeem",
+                "Đơn cũ dùng tối đa. Nhập 0 để bỏ đổi điểm.", "This order uses the maximum. Enter 0 to skip redemption.",
+                "Tiền giảm từ điểm tối đa bằng 50% tiền hàng ban đầu.",
+                "The points discount is capped at 50% of the original subtotal.",
+                "Số điểm muốn đổi phải là số nguyên không âm hợp lệ.", "Enter a valid non-negative whole number of points.",
+                "Số điểm muốn đổi vượt quá phạm vi được hỗ trợ.", "Requested points exceed the supported range.",
+                "Số lượng phải lớn hơn 0, có tối đa 9 chữ số nguyên và 3 chữ số thập phân.",
+                "Enter a positive quantity with up to 9 whole digits and 3 decimal places.",
+                "Số ngày điều trị phải là số nguyên từ 1 đến 3650.", "Treatment days must be a whole number between 1 and 3650.",
+                "Ngày kê đơn không hợp lệ.", "Enter a valid prescription date.",
+                "Ngày kê đơn phải hợp lệ và không ở tương lai.", "Enter a valid prescription date that is not in the future.",
+                "Kiểm tra tồn theo lô", "Check stock by batch",
+                "Không thể kiểm tra tồn theo lô.", "Could not check stock by batch.",
+                "Đủ tồn ở các lô còn hạn cho số ngày điều trị đã nhập.", "Eligible batches cover the entered treatment duration.",
+                "Cần ", "Required ",
+                "có ", "available ",
+                "Lô cần còn hạn đến ", "Batches must remain valid through ",
+                "Dữ liệu đang được xử lý ở phiên khác. Hãy tải lại và thử lại.", "Another session is processing this data. Refresh and retry.",
+                "Dữ liệu vượt giới hạn hoặc không đúng định dạng.", "The data exceeds a limit or uses an invalid format.",
+                "Dữ liệu liên quan không tồn tại hoặc đã thay đổi.", "Related data is missing or has changed.",
+                "Không thể lưu thay đổi vào cơ sở dữ liệu.", "Could not save the changes to the database.",
+                "Dữ liệu bị trùng: mã hoặc tên này đã tồn tại.", "This code or name already exists.",
+                "vượt quá ", "exceeds ",
+                " ký tự.", " characters.",
+                "Số điểm tối đa có thể đổi cho đơn này: ", "Maximum redeemable points for this order: ",
+                "Số điểm đã nhập chưa tạo ra tiền giảm.", "The requested points are too few for a discount.",
+                "Tính tiền và xác nhận", "Calculate and confirm payment",
+                "Đã thu tiền", "Payment received",
+                "Xác nhận thanh toán", "Confirm payment",
+                "Số tiền cần thu: ", "Amount due: ",
+                "Đơn mới", "New order",
+                "Không thể tính số tiền cần thu.", "Could not calculate the amount due.",
+                "Không thể làm mới danh sách đơn", "Could not refresh the order list",
+                "Cần xác nhận số tiền đã thu trước khi hoàn tất.", "Confirm the amount received to complete the order.",
+                "Số tiền hoặc điểm của đơn đã thay đổi. Kiểm tra lại số cần thu trước khi hoàn tất.",
+                "The order amount or points have changed. Review the amount due before completing the order.",
+                "Đơn đang chờ đã thay đổi hoặc đã đóng. Hãy làm mới danh sách và mở lại đơn.",
+                "The pending order was changed or closed. Refresh the list and reopen it.",
+                "Khách hàng hoặc sản phẩm trong đơn không còn khả dụng. Hãy chọn lại hoặc hủy đơn.",
+                "A customer or product on the order is unavailable. Select a replacement or cancel the order.",
                 "Ưu đãi cố định đủ điều kiện tốt nhất sẽ được áp dụng tự động.",
                 "The best eligible fixed discount will be applied automatically.",
                 "Tạm tính (chưa trừ ưu đãi/điểm): ", "Subtotal (before discounts/points): ",
@@ -651,6 +750,33 @@ public final class Localization {
             case "EXPIRED" -> english ? "Expired" : "Hết hạn";
             default -> movementType;
         };
+    }
+
+    public static String productText(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        String translated = text(value);
+        if (!english) {
+            return translated;
+        }
+        if ("Yes".equalsIgnoreCase(translated) || "Có".equalsIgnoreCase(value)
+                || "Có".equalsIgnoreCase(translated)) {
+            return "Yes";
+        }
+        if ("No".equalsIgnoreCase(translated) || "Không".equalsIgnoreCase(value)
+                || "Không".equalsIgnoreCase(translated)) {
+            return "No";
+        }
+        if ("ACTIVE".equalsIgnoreCase(value) || "Đang hoạt động".equalsIgnoreCase(value)
+                || "Active".equalsIgnoreCase(value)) {
+            return "Active";
+        }
+        if ("INACTIVE".equalsIgnoreCase(value) || "Ngừng hoạt động".equalsIgnoreCase(value)
+                || "Inactive".equalsIgnoreCase(value)) {
+            return "Inactive";
+        }
+        return translated;
     }
 
     public static ModuleDefinition localize(ModuleDefinition module) {

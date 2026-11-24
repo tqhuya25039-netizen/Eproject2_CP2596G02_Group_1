@@ -60,6 +60,27 @@ class SalePricingTest {
     }
 
     @Test
+    void redeemsTheRequestedNumberAndEarnsFromTheAmountPaid() {
+        SalePricing.Result result = SalePricing.calculate(
+                new BigDecimal("1000.00"), new BigDecimal("10"), 100, 12,
+                new BigDecimal("10.00"), new BigDecimal("5"), true);
+
+        assertEquals(12, result.pointsRedeemed());
+        assertEquals(new BigDecimal("120.00"), result.pointsDiscount());
+        assertEquals(new BigDecimal("780.00"), result.total());
+        assertEquals(39, result.pointsEarned());
+    }
+
+    @Test
+    void rejectsARequestAboveTheBalanceOrMonetaryLimit() {
+        for (long balance : new long[]{10, 100}) {
+            assertThrows(IllegalArgumentException.class, () -> SalePricing.calculate(
+                    new BigDecimal("1000.00"), BigDecimal.ZERO, balance, 51,
+                    new BigDecimal("10.00"), BigDecimal.ZERO, true));
+        }
+    }
+
+    @Test
     void rejectsEarnedPointsOutsideTheSupportedNumericRange() {
         assertThrows(IllegalArgumentException.class, () -> SalePricing.calculate(
                 new BigDecimal("1000.00"),

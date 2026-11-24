@@ -8,7 +8,9 @@ import javafx.event.ActionEvent;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.geometry.Point2D;
+import javafx.print.PrinterJob;
 import javafx.scene.Node;
+import javafx.scene.Scene;
 import javafx.scene.chart.AreaChart;
 import javafx.scene.chart.BarChart;
 import javafx.scene.chart.CategoryAxis;
@@ -19,6 +21,7 @@ import javafx.scene.chart.PieChart;
 import javafx.scene.chart.XYChart;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
+import javafx.scene.control.ButtonBar;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
@@ -31,15 +34,19 @@ import javafx.scene.control.ListView;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.SelectionMode;
 import javafx.scene.control.ScrollPane;
+import javafx.scene.control.Tab;
+import javafx.scene.control.TabPane;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.control.TextInputControl;
 import javafx.scene.layout.FlowPane;
+import javafx.scene.layout.ColumnConstraints;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.RowConstraints;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.stage.Modality;
@@ -61,8 +68,11 @@ import vn.ninhkieupharma.pharmacy.domain.sales.CustomerLoyaltyService;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleAllergyWarning;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleLineRequest;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleOrderRequest;
+import vn.ninhkieupharma.pharmacy.domain.sales.SalePendingOrder;
+import vn.ninhkieupharma.pharmacy.domain.sales.SaleQuote;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleProduct;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleReceipt;
+import vn.ninhkieupharma.pharmacy.domain.sales.SalesReport;
 import vn.ninhkieupharma.pharmacy.domain.sales.SalesService;
 
 import java.awt.Desktop;
@@ -76,6 +86,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.text.NumberFormat;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -84,6 +95,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.IntStream;
 import javafx.util.StringConverter;
 
 public class PageRenderer {
@@ -96,7 +108,7 @@ public class PageRenderer {
     private record ProductCard(DemoData.Product product, Node node, Button addButton) {
     }
 
-    private record SalesCustomerEntry(Node node) {
+    private record SalesCustomerEntry(Node node, Runnable loadSelectedPending) {
     }
 
     private record CheckoutLineControls(
@@ -110,11 +122,16 @@ public class PageRenderer {
 
     private record CheckoutSummary(
             VBox section,
-            CheckBox redeemPoints,
+            TextField requestedPoints,
             TextArea note,
             Label subtotal,
             Label status,
-            Button completeButton) {
+            Label stockStatus,
+            Button checkStockButton,
+            Button savePendingButton,
+            Button completeButton,
+            Button cancelPendingButton,
+            Button newOrderButton) {
     }
 
     private record PromotionFilters(
@@ -178,7 +195,6 @@ public class PageRenderer {
     }
 
     public Node render(ModuleDefinition module) {
-        FeatureModuleService featureService = featureServices.forModule(module);
         VBox page = new VBox(22);
         page.getStyleClass().add("page");
         page.setPadding(new Insets(28, 36, 36, 36));
@@ -189,13 +205,26 @@ public class PageRenderer {
         description.getStyleClass().add("page-description");
         description.setWrapText(true);
 
+        if (userRole != UserRole.ADMIN && !module.staffAccessible()) {
+            page.getChildren().addAll(title, description, new Label(
+                    Localization.text("Chức năng này chỉ dành cho quản trị viên.")));
+            return page;
+        }
+        if ("UC-19".equals(module.id())) {
+            page.getChildren().addAll(title, description);
+            configureSalesReport(page, module);
+            return page;
+        }
+
+        FeatureModuleService featureService = featureServices.forModule(module);
         TextField search = new TextField();
         search.setPromptText(Localization.text("Tìm theo mã, tên hoặc nội dung..."));
         search.getStyleClass().add("search-input");
         HBox.setHgrow(search, Priority.ALWAYS);
 
-        RenderedTable renderedTable = createTable(module, search, featureService);
+        RenderedTable renderedTable = createTable(module, featureService, featureService.findAll(module));
         SalesCustomerEntry salesCustomerEntry = "UC-17".equals(module.id())
+                && userRole == UserRole.STAFF
                 ? createSalesCustomerEntry(module, featureService, renderedTable)
                 : null;
         List<Node> filterInputs = new ArrayList<>();
@@ -247,8 +276,13 @@ public class PageRenderer {
             });
         }
 
-        HBox actions = new HBox(12);
+        FlowPane actions = new FlowPane(12, 8);
         actions.setAlignment(Pos.CENTER_LEFT);
+        actions.setMaxWidth(Double.MAX_VALUE);
+        actions.getStyleClass().add("action-bar");
+        search.setMinWidth(260);
+        search.setPrefWidth(420);
+        search.setMaxWidth(Double.MAX_VALUE);
         actions.getChildren().add(search);
         if (module.report()) {
             Button exportButton = new Button(Localization.text("Xuất báo cáo"));
@@ -279,11 +313,29 @@ public class PageRenderer {
                                 () -> refreshRows(renderedTable, featureService, module))));
                 actions.getChildren().add(lossButton);
             }
-        } else if (salesCustomerEntry != null) {
+        } else if ("UC-17".equals(module.id())) {
             Button refreshSales = new Button(Localization.text("Làm mới"));
             refreshSales.getStyleClass().add("button-secondary");
-            refreshSales.setOnAction(event -> refreshRows(renderedTable, featureService, module));
-            actions.getChildren().add(refreshSales);
+            refreshSales.setOnAction(event -> refreshSalesRows(renderedTable, featureService, module));
+            Button detailsButton = new Button(Localization.text("Xem chi tiết"));
+            detailsButton.getStyleClass().add("button-secondary");
+            detailsButton.disableProperty().bind(
+                    renderedTable.table().getSelectionModel().selectedItemProperty().isNull());
+            detailsButton.setOnAction(event -> {
+                ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+                if (selected != null) {
+                    showSaleDetails(featureServices.salesService(), selected);
+                }
+            });
+            actions.getChildren().addAll(refreshSales, detailsButton);
+            if (salesCustomerEntry != null) {
+                Button loadPending = new Button(Localization.text("Tải đơn chờ đã chọn"));
+                loadPending.getStyleClass().add("button-secondary");
+                loadPending.disableProperty().bind(
+                        renderedTable.table().getSelectionModel().selectedItemProperty().isNull());
+                loadPending.setOnAction(event -> salesCustomerEntry.loadSelectedPending().run());
+                actions.getChildren().add(loadPending);
+            }
         } else if ("UC-12".equals(module.id())) {
             Button receiveButton = new Button(module.actionLabel());
             receiveButton.getStyleClass().add("button-primary");
@@ -393,31 +445,49 @@ public class PageRenderer {
                     });
                     actions.getChildren().addAll(editButton, statusSelector);
                 } else {
-                    Button deleteButton = new Button(Localization.text(
-                            "UC-18".equals(module.id()) ? "Vô hiệu hóa"
-                                    : "UC-16".equals(module.id()) ? "Lưu trữ"
-                                    : "Xóa"));
-                    deleteButton.getStyleClass().add("button-secondary");
-                    deleteButton.disableProperty().bind(
-                            renderedTable.table().getSelectionModel().selectedItemProperty().isNull());
-                    deleteButton.setOnAction(event -> {
-                        ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
-                        if (selected != null && confirmDelete(module)) {
-                            runMutation(() -> featureService.delete(module, selected.id()),
-                                    () -> refreshRows(renderedTable, featureService, module));
-                        }
-                    });
-                    actions.getChildren().addAll(editButton, deleteButton);
+                    actions.getChildren().add(editButton);
+                    if (canDeleteModule(module.id(), userRole)) {
+                        Button deleteButton = new Button(Localization.text(
+                                "UC-18".equals(module.id()) ? "Vô hiệu hóa"
+                                        : "UC-16".equals(module.id()) ? "Lưu trữ"
+                                        : "Xóa"));
+                        deleteButton.getStyleClass().add("button-secondary");
+                        deleteButton.disableProperty().bind(
+                                renderedTable.table().getSelectionModel().selectedItemProperty().isNull());
+                        deleteButton.setOnAction(event -> {
+                            ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+                            if (selected != null && confirmDelete(module)) {
+                                runMutation(() -> featureService.delete(module, selected.id()),
+                                        () -> refreshRows(renderedTable, featureService, module));
+                            }
+                        });
+                        actions.getChildren().add(deleteButton);
+                    }
                 }
                 if ("UC-16".equals(module.id())) {
-                    Button historyButton = new Button(Localization.text("Lịch sử mua"));
+                    if (canDeleteModule(module.id(), userRole)) {
+                        Button removeProfile = new Button(Localization.text("Xóa hồ sơ"));
+                        removeProfile.getStyleClass().add("button-secondary");
+                        removeProfile.disableProperty().bind(
+                                renderedTable.table().getSelectionModel().selectedItemProperty().isNull());
+                        removeProfile.setOnAction(event -> {
+                            ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+                            if (selected != null && confirmPermanentCustomerDeletion(selected)) {
+                                runMutation(() -> featureServices.customerLoyaltyService()
+                                                .deleteWithoutSales(selected.id()),
+                                        () -> refreshRows(renderedTable, featureService, module));
+                            }
+                        });
+                        actions.getChildren().add(removeProfile);
+                    }
+                    Button historyButton = new Button(Localization.text("Lịch sử mua và điểm"));
                     historyButton.getStyleClass().add("button-secondary");
                     historyButton.disableProperty().bind(
                             renderedTable.table().getSelectionModel().selectedItemProperty().isNull());
                     historyButton.setOnAction(event -> {
                         ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
                         if (selected != null) {
-                            showCustomerPurchaseHistory(selected);
+                            showCustomerHistory(selected);
                         }
                     });
                     actions.getChildren().add(historyButton);
@@ -447,7 +517,9 @@ public class PageRenderer {
                     actions, createReportCharts(module, featureService), renderedTable.table());
         } else {
             String note = salesCustomerEntry != null
-                    ? "Đơn hoàn tất được lưu cùng chi tiết thuốc, ưu đãi, điểm và biến động FEFO trong một giao dịch."
+                    ? "Nhân viên lưu đơn Pending để có thể sửa/hủy; tồn kho và điểm chỉ cập nhật khi hoàn tất."
+                    : "UC-17".equals(module.id())
+                            ? "Quản trị viên chỉ xem hóa đơn và chi tiết; thao tác bán hàng dành cho nhân viên."
                     : canWriteModule(module.id(), userRole)
                             ? "Dữ liệu được đọc và ghi theo các bảng trong schema MySQL đã cung cấp."
                             : isWritableModule(module.id())
@@ -469,12 +541,216 @@ public class PageRenderer {
         return page;
     }
 
+    private void configureSalesReport(VBox page, ModuleDefinition module) {
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh"));
+        ComboBox<SalesReport.Period> period = new ComboBox<>(
+                FXCollections.observableArrayList(SalesReport.Period.values()));
+        period.setConverter(new StringConverter<SalesReport.Period>() {
+            @Override
+            public String toString(SalesReport.Period value) {
+                return value == null ? "" : reportPeriodLabel(value);
+            }
+
+            @Override
+            public SalesReport.Period fromString(String value) {
+                return null;
+            }
+        });
+        TextField year = new TextField(Integer.toString(today.getYear()));
+        year.setPrefColumnCount(4);
+        ComboBox<Integer> selection = new ComboBox<>();
+        Label selectionLabel = new Label();
+        VBox selectionField = new VBox(5, selectionLabel, selection);
+        period.valueProperty().addListener((observable, previous, current) -> {
+            boolean hasSelection = current != SalesReport.Period.YEAR;
+            selectionField.setVisible(hasSelection);
+            selectionField.setManaged(hasSelection);
+            if (hasSelection) {
+                boolean monthly = current == SalesReport.Period.MONTH;
+                selectionLabel.setText(reportPeriodLabel(current));
+                selection.getItems().setAll(IntStream.rangeClosed(1, monthly ? 12 : 4).boxed().toList());
+                Integer initial = monthly ? today.getMonthValue() : (today.getMonthValue() + 2) / 3;
+                selection.setValue(initial);
+            }
+        });
+        period.setValue(SalesReport.Period.MONTH);
+
+        Button generate = new Button(module.actionLabel());
+        generate.getStyleClass().add("button-primary");
+        Button export = new Button(Localization.text("Xuất báo cáo"));
+        export.getStyleClass().add("button-secondary");
+        Button print = new Button(Localization.text("In báo cáo"));
+        print.getStyleClass().add("button-secondary");
+        export.setDisable(true);
+        print.setDisable(true);
+        FlowPane filters = new FlowPane(12, 10,
+                new VBox(5, new Label(Localization.text("Kỳ báo cáo")), period),
+                new VBox(5, new Label(Localization.text("Năm")), year), selectionField,
+                generate, export, print);
+        filters.setAlignment(Pos.BOTTOM_LEFT);
+        filters.getStyleClass().add("filter-bar");
+
+        Label dateRange = new Label();
+        dateRange.getStyleClass().add("section-title");
+        FlowPane summary = new FlowPane(12, 8);
+        summary.getStyleClass().add("demo-summary");
+        FlowPane charts = new FlowPane(16, 16);
+        charts.getStyleClass().add("report-chart-row");
+        RenderedTable table = createTable(module, featureServices.salesService(), List.of());
+        page.getChildren().addAll(filters, dateRange, summary, charts, table.table());
+
+        Runnable refresh = () -> {
+            String rawYear = year.getText().trim();
+            if (!rawYear.matches("[0-9]{4}")) {
+                showInformation(module.title(), Localization.text("Hãy nhập năm từ 1000 đến 9998."));
+                return;
+            }
+            try {
+                SalesReport.Period selectedPeriod = period.getValue();
+                int bucket = selectedPeriod == SalesReport.Period.YEAR ? 1 : selection.getValue();
+                SalesReport report = featureServices.salesService().salesReport(
+                        selectedPeriod, Integer.parseInt(rawYear), bucket);
+                SalesReport.Totals totals = report.totals();
+                List<ModuleRow> reportRows = salesReportOutput(report, totals);
+                String range = report.start() + " – " + report.endExclusive().minusDays(1);
+                dateRange.setText(range);
+                table.source().setAll(reportRows.subList(0, report.rows().size()));
+                summary.getChildren().setAll(
+                        summaryCard(Localization.text("Số đơn"), Long.toString(totals.orderCount())),
+                        summaryCard(Localization.text("Doanh thu"), formatSaleMoney(totals.revenue())),
+                        summaryCard(Localization.text("Giảm giá"), formatSaleMoney(totals.discount())),
+                        summaryCard(Localization.text("Giá trị trung bình"), formatSaleMoney(totals.averageOrderValue())));
+                updateSalesReportCharts(charts, report);
+                String fileName = module.id() + "-" + report.start()
+                        + "-" + report.endExclusive().minusDays(1) + ".csv";
+                export.setOnAction(event -> exportReport(
+                        module, reportRows, page.getScene().getWindow(), fileName));
+                print.setOnAction(event -> printSalesReport(
+                        module, range, reportRows, page.getScene().getWindow()));
+                export.setDisable(false);
+                print.setDisable(false);
+            } catch (IllegalArgumentException | vn.ninhkieupharma.pharmacy.common.dao.DataAccessException exception) {
+                showInformation(module.title(), Localization.text(exception.getMessage()));
+            }
+        };
+        generate.setOnAction(event -> refresh.run());
+        refresh.run();
+    }
+
+    private String reportPeriodLabel(SalesReport.Period period) {
+        return Localization.text(switch (period) {
+            case MONTH -> "Tháng";
+            case QUARTER -> "Quý";
+            case YEAR -> "Năm";
+        });
+    }
+
+    static List<ModuleRow> salesReportOutput(SalesReport report, SalesReport.Totals totals) {
+        List<ModuleRow> rows = new ArrayList<>();
+        for (SalesReport.Row row : report.rows()) {
+            String date = report.period() == SalesReport.Period.MONTH
+                    ? row.start().toString() : java.time.YearMonth.from(row.start()).toString();
+            rows.add(salesReportDisplayRow(new UUID(0, row.start().toEpochDay()), date, row.totals()));
+        }
+        rows.add(salesReportDisplayRow(new UUID(0, Long.MAX_VALUE), Localization.text("Tổng cộng"), totals));
+        return List.copyOf(rows);
+    }
+
+    private static ModuleRow salesReportDisplayRow(UUID id, String period, SalesReport.Totals totals) {
+        return new ModuleRow(id, List.of(period, Long.toString(totals.orderCount()),
+                totals.revenue().toPlainString(), totals.discount().toPlainString(),
+                totals.averageOrderValue().toPlainString()));
+    }
+
+    private void updateSalesReportCharts(FlowPane charts, SalesReport report) {
+        boolean daily = report.period() == SalesReport.Period.MONTH;
+        List<String> labels = report.rows().stream()
+                .map(row -> Integer.toString(daily ? row.start().getDayOfMonth() : row.start().getMonthValue()))
+                .toList();
+        List<Number> counts = report.rows().stream()
+                .<Number>map(row -> row.totals().orderCount()).toList();
+        List<Number> revenue = report.rows().stream()
+                .<Number>map(row -> row.totals().revenue().movePointLeft(6)).toList();
+        String interval = daily ? "Ngày" : "Tháng";
+        charts.getChildren().setAll(
+                chartCard(Localization.text("Số lượng hóa đơn"), barChart(
+                        Localization.text(interval), Localization.text("Số đơn"), labels,
+                        seriesFromList(Localization.text("Hóa đơn"), counts))),
+                chartCard(Localization.text("Doanh thu"), lineChart(
+                        Localization.text(interval), Localization.text("Doanh thu (triệu ₫)"), labels,
+                        seriesFromList(Localization.text("Doanh thu"), revenue))));
+    }
+
+    private void printSalesReport(
+            ModuleDefinition module, String dateRange, List<ModuleRow> rows, javafx.stage.Window owner) {
+        String title = Localization.text("In báo cáo");
+        PrinterJob job = PrinterJob.createPrinterJob();
+        if (job == null) {
+            showInformation(title, Localization.text("Không tìm thấy máy in."));
+            return;
+        }
+        if (!job.showPrintDialog(owner)) {
+            job.cancelJob();
+            return;
+        }
+        try {
+            var layout = job.getJobSettings().getPageLayout();
+            int perPage = Math.max(1, (int) ((layout.getPrintableHeight() - 110) / 22));
+            int pageCount = (rows.size() + perPage - 1) / perPage;
+            for (int index = 0; index < pageCount; index++) {
+                int start = index * perPage;
+                List<ModuleRow> pageRows = rows.subList(start, Math.min(start + perPage, rows.size()));
+                GridPane printedTable = new GridPane();
+                for (double width : new double[] { 21, 12, 22, 22, 23 }) {
+                    ColumnConstraints column = new ColumnConstraints();
+                    column.setPercentWidth(width);
+                    printedTable.getColumnConstraints().add(column);
+                }
+                addPrintedReportRow(printedTable, 0, module.columns(), true);
+                for (int row = 0; row < pageRows.size(); row++) {
+                    List<String> values = new ArrayList<>(pageRows.get(row).values());
+                    for (int column = 2; column < values.size(); column++) {
+                        values.set(column, formatSaleMoney(new BigDecimal(values.get(column))));
+                    }
+                    addPrintedReportRow(printedTable, row + 1, values, start + row == rows.size() - 1);
+                }
+                Label heading = new Label(module.title());
+                heading.setStyle("-fx-font-size: 16pt; -fx-font-weight: bold;");
+                Label pageNumber = new Label(Localization.text("Trang") + " " + (index + 1) + "/" + pageCount);
+                VBox printedPage = new VBox(8, heading, new Label(dateRange), printedTable, pageNumber);
+                new Scene(printedPage, layout.getPrintableWidth(), layout.getPrintableHeight());
+                printedPage.applyCss();
+                printedPage.layout();
+                if (!job.printPage(printedPage)) {
+                    job.cancelJob();
+                    showInformation(title, Localization.text("Không thể in báo cáo."));
+                    return;
+                }
+            }
+            if (!job.endJob()) {
+                showInformation(title, Localization.text("Không thể in báo cáo."));
+            }
+        } catch (RuntimeException exception) {
+            job.cancelJob();
+            showInformation(title, Localization.text("Không thể in báo cáo."));
+        }
+    }
+
+    private void addPrintedReportRow(GridPane table, int row, List<String> values, boolean bold) {
+        table.getRowConstraints().add(new RowConstraints(22));
+        for (int column = 0; column < values.size(); column++) {
+            Label cell = new Label(values.get(column));
+            cell.setStyle(bold ? "-fx-font-size: 9pt; -fx-font-weight: bold;" : "-fx-font-size: 9pt;");
+            table.add(cell, column, row);
+        }
+    }
+
     private HBox createFilters(
             ModuleDefinition module,
             List<Node> filterInputs,
             FilteredList<ModuleRow> rows,
             TextField search) {
-        HBox filters = new HBox(12);
+        FlowPane filters = new FlowPane(12, 8);
         filters.setAlignment(Pos.CENTER_LEFT);
         filters.getStyleClass().add("filter-bar");
         for (int index = 0; index < Math.min(module.formFields().size(), 2); index++) {
@@ -562,7 +838,8 @@ public class PageRenderer {
 
         Button applyButton = new Button(Localization.text("Áp dụng bộ lọc"));
         applyButton.getStyleClass().add("button-secondary");
-        HBox filters = new HBox(10, movementFrom, movementTo, movementType, expiryStatus, location, applyButton);
+        FlowPane filters = new FlowPane(10, 8,
+                movementFrom, movementTo, movementType, expiryStatus, location, applyButton);
         filters.setAlignment(Pos.CENTER_LEFT);
         filters.getStyleClass().add("filter-bar");
         return new InventoryFilters(
@@ -670,10 +947,15 @@ public class PageRenderer {
     }
 
     private void exportReport(
-            ModuleDefinition module, FilteredList<ModuleRow> rows, javafx.stage.Window owner) {
+            ModuleDefinition module, List<ModuleRow> rows, javafx.stage.Window owner) {
+        exportReport(module, rows, owner, module.id() + "-" + LocalDate.now() + ".csv");
+    }
+
+    private void exportReport(
+            ModuleDefinition module, List<ModuleRow> rows, javafx.stage.Window owner, String fileName) {
         FileChooser chooser = new FileChooser();
         chooser.setTitle(Localization.text("Xuất báo cáo"));
-        chooser.setInitialFileName(module.id() + "-" + LocalDate.now() + ".csv");
+        chooser.setInitialFileName(fileName);
         chooser.getExtensionFilters().add(
                 new FileChooser.ExtensionFilter(Localization.text("CSV"), "*.csv"));
         java.io.File selectedFile = chooser.showSaveDialog(owner);
@@ -688,7 +970,7 @@ public class PageRenderer {
             file = file.resolveSibling(file.getFileName() + ".csv");
         }
         try {
-            writeCsvReport(file, module, rows.stream().toList());
+            writeCsvReport(file, module, List.copyOf(rows));
             showInformation(Localization.text("Xuất báo cáo"),
                     Localization.text("Đã xuất báo cáo thành công.") + "\n" + file);
         } catch (IOException exception) {
@@ -756,8 +1038,8 @@ public class PageRenderer {
         Button applyButton = new Button(Localization.text("Áp dụng bộ lọc"));
         applyButton.getStyleClass().add("button-secondary");
 
-        HBox textFields = new HBox(10, code, name, status);
-        HBox datesAndApply = new HBox(10, accrualStartFrom, redemptionEndTo, applyButton);
+        FlowPane textFields = new FlowPane(10, 8, code, name, status);
+        FlowPane datesAndApply = new FlowPane(10, 8, accrualStartFrom, redemptionEndTo, applyButton);
         textFields.setAlignment(Pos.CENTER_LEFT);
         datesAndApply.setAlignment(Pos.CENTER_LEFT);
         HBox.setHgrow(code, Priority.ALWAYS);
@@ -778,7 +1060,7 @@ public class PageRenderer {
         status.getSelectionModel().selectFirst();
         Button applyButton = new Button(Localization.text("Áp dụng bộ lọc"));
         applyButton.getStyleClass().add("button-secondary");
-        HBox filters = new HBox(10, status, applyButton);
+        FlowPane filters = new FlowPane(10, 8, status, applyButton);
         filters.setAlignment(Pos.CENTER_LEFT);
         filters.getStyleClass().add("filter-bar");
         return new CustomerFilters(new VBox(filters), status, applyButton);
@@ -867,6 +1149,7 @@ public class PageRenderer {
 
     private String formatPromotionColumn(int columnIndex, String value) {
         return switch (columnIndex) {
+            case 2 -> new BigDecimal(value).stripTrailingZeros().toPlainString() + "%";
             case 7 -> formatPromotionMoney(new BigDecimal(value), true);
             case 8 -> formatPromotionTiers(value);
             case 9 -> "ACTIVE".equalsIgnoreCase(value)
@@ -877,12 +1160,16 @@ public class PageRenderer {
     }
 
     private String formatPromotionTiers(String encodedTiers) {
+        if (encodedTiers.isBlank()) {
+            return "";
+        }
         List<String> formattedTiers = new ArrayList<>();
         for (String encoded : encodedTiers.split(";")) {
             String[] parts = encoded.split(":", -1);
             BigDecimal thresholdVnd = new BigDecimal(parts[0]);
             String threshold = formatPromotionMoney(thresholdVnd, false);
-            formattedTiers.add(threshold + " → " + parts[1] + "%");
+            String rate = new BigDecimal(parts[1]).stripTrailingZeros().toPlainString();
+            formattedTiers.add(threshold + " → " + rate + "%");
         }
         return String.join(" · ", formattedTiers);
     }
@@ -907,7 +1194,7 @@ public class PageRenderer {
     }
 
     private RenderedTable createTable(
-            ModuleDefinition module, TextField search, FeatureModuleService featureService) {
+            ModuleDefinition module, FeatureModuleService featureService, List<ModuleRow> rows) {
         TableView<ModuleRow> table = new TableView<>();
         table.getStyleClass().add("data-table");
         table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
@@ -931,9 +1218,15 @@ public class PageRenderer {
                             .format(Long.parseLong(value));
                 }
                 if ("UC-08".equals(module.id()) && columnIndex == 5 && !value.isBlank()) {
+                    value = formatSaleMoney(new BigDecimal(value));
+                }
+                if ("UC-08".equals(module.id())) {
+                    value = Localization.productText(value);
+                }
                 if ("UC-15".equals(module.id()) && columnIndex == 2) {
                     value = Localization.movementTypeText(value);
                 }
+                if ("UC-19".equals(module.id()) && columnIndex >= 2) {
                     value = formatSaleMoney(new BigDecimal(value));
                 }
                 return new javafx.beans.property.ReadOnlyStringWrapper(Localization.text(value));
@@ -941,8 +1234,7 @@ public class PageRenderer {
             table.getColumns().add(column);
         }
 
-        ObservableList<ModuleRow> source =
-                FXCollections.observableArrayList(featureService.findAll(module));
+        ObservableList<ModuleRow> source = FXCollections.observableArrayList(rows);
         FilteredList<ModuleRow> filteredRows = new FilteredList<>(source, row -> true);
         table.setItems(filteredRows);
         if ("UC-12".equals(module.id()) || "UC-13".equals(module.id()) || "UC-14".equals(module.id())) {
@@ -984,7 +1276,7 @@ public class PageRenderer {
     }
 
     private Node createReportSummary(ModuleDefinition module, FeatureModuleService featureService) {
-        HBox summary = new HBox(12);
+        FlowPane summary = new FlowPane(12, 8);
         summary.getStyleClass().add("demo-summary");
         summary.getChildren().add(summaryCard(Localization.text("BẢN GHI"),
                 featureService.findAll(module).size() + Localization.text(" dòng")));
@@ -1076,21 +1368,6 @@ public class PageRenderer {
                         seriesFromList("Biến động ròng", movementQuantities))));
                 charts.getChildren().add(chartCard("Tỷ trọng loại biến động",
                         pieChart("Loại biến động", seriesPairs(movementTypes, movementCounts))));
-            }
-            case "UC-19" -> {
-                List<ModuleRow> revenueRows = featureService.findAll(module);
-                List<String> dates = revenueRows.stream().map(row -> row.values().get(0)).toList();
-                List<Number> orderCounts = revenueRows.stream()
-                        .map(row -> (Number) Integer.parseInt(row.values().get(1)))
-                        .toList();
-                List<Number> revenues = revenueRows.stream()
-                        .map(row -> (Number) (parseAmount(row.values().get(2)) / 1_000_000.0))
-                        .toList();
-                charts.getChildren().add(chartCard("Số lượng hóa đơn theo ngày", barChart(
-                        "Ngày", "Số đơn", dates, seriesFromList("Hóa đơn", orderCounts))));
-                charts.getChildren().add(chartCard("Doanh thu theo ngày", lineChart(
-                        "Ngày", "Doanh thu (triệu ₫)", dates,
-                        seriesFromList("Doanh thu", revenues))));
             }
             default -> throw new IllegalArgumentException(
                     "Chưa cấu hình biểu đồ cho báo cáo " + module.id());
@@ -1215,19 +1492,6 @@ public class PageRenderer {
             return Double.parseDouble(value.trim().replace(',', '.'));
         } catch (NumberFormatException exception) {
             throw new IllegalArgumentException("Expected a numeric report value: " + value, exception);
-        }
-    }
-
-    private long parseAmount(String value) {
-        String digits = value.replaceAll("[^0-9]", "");
-        if (digits.isEmpty()) {
-            throw new IllegalArgumentException("Expected a currency value: " + value);
-        }
-        try {
-            return Long.parseLong(digits);
-        } catch (NumberFormatException exception) {
-            throw new IllegalArgumentException("Currency value is outside the supported range: " + value,
-                    exception);
         }
     }
 
@@ -2017,11 +2281,14 @@ public class PageRenderer {
         allergies.getStyleClass().add("text-input");
         CheckBox blocked = new CheckBox(Localization.text("Hạn chế bán"));
         CheckBox archived = new CheckBox(Localization.text("Lưu trữ hồ sơ"));
+        blocked.setDisable(userRole == UserRole.STAFF);
+        archived.setDisable(userRole == UserRole.STAFF);
         String oldStatus = oldValues.isEmpty() ? "ACTIVE" : oldValues.get(6);
         blocked.setSelected(oldStatus.equals("BLOCKED") || oldStatus.equals("ARCHIVED_BLOCKED"));
         archived.setSelected(oldStatus.equals("ARCHIVED") || oldStatus.equals("ARCHIVED_BLOCKED"));
         TextField reason = customerTextField(oldValues, 7);
         reason.setPromptText(Localization.text("Bắt buộc nếu hạn chế bán"));
+        reason.setDisable(userRole == UserRole.STAFF);
 
         GridPane fields = new GridPane();
         fields.setHgap(16);
@@ -2099,6 +2366,9 @@ public class PageRenderer {
             try {
                 if (selectedRow == null) {
                     featureService.create(module, values);
+                } else if (userRole == UserRole.STAFF
+                        || values.subList(6, 8).equals(selectedRow.values().subList(6, 8))) {
+                    featureServices.customerLoyaltyService().updateProfile(selectedRow.id(), values);
                 } else {
                     featureService.update(module, selectedRow.id(), values);
                 }
@@ -2155,51 +2425,83 @@ public class PageRenderer {
 
     private String customerStatusLabel(String status) {
         return switch (status) {
-            case "BLOCKED" -> "Hạn chế bán";
-            case "ARCHIVED" -> "Đã lưu trữ";
-            case "ARCHIVED_BLOCKED" -> "Đã lưu trữ · hạn chế bán";
-            default -> "Đang hoạt động";
+            case "BLOCKED" -> Localization.text("Hạn chế bán");
+            case "ARCHIVED" -> Localization.text("Đã lưu trữ");
+            case "ARCHIVED_BLOCKED" -> Localization.text("Đã lưu trữ · hạn chế bán");
+            default -> Localization.text("Đang hoạt động");
         };
     }
 
-    private void showCustomerPurchaseHistory(ModuleRow customer) {
+    private void showCustomerHistory(ModuleRow customer) {
+        CustomerLoyaltyService customerService = featureServices.customerLoyaltyService();
+        List<ModuleRow> purchases;
+        List<ModuleRow> loyalty;
+        try {
+            purchases = customerService.findPurchaseHistory(customer.id());
+            loyalty = customerService.findLoyaltyHistory(customer.id());
+        } catch (vn.ninhkieupharma.pharmacy.common.dao.DataAccessException | UnsupportedOperationException exception) {
+            showInformation(Localization.text("Không thể tải lịch sử khách hàng"),
+                    Localization.text(exception.getMessage()));
+            return;
+        }
+
+        Tab purchasesTab = new Tab(Localization.text("Lịch sử mua"), createCustomerHistoryTable(
+                List.of("Mã hóa đơn", "Ngày giao dịch", "Tổng tiền", "Trạng thái"),
+                purchases, "Khách hàng chưa có giao dịch.", false));
+        Tab loyaltyTab = new Tab(Localization.text("Lịch sử điểm"), createCustomerHistoryTable(
+                List.of("Mã hóa đơn", "Ngày giao dịch", "Loại giao dịch", "Điểm thay đổi"),
+                loyalty, "Khách hàng chưa có giao dịch điểm.", true));
+        TabPane tabs = new TabPane(purchasesTab, loyaltyTab);
+        tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+
         Dialog<ButtonType> dialog = new Dialog<>();
-        dialog.setTitle(Localization.text("Lịch sử mua"));
+        dialog.setTitle(Localization.text("Lịch sử mua và điểm"));
         dialog.setHeaderText(customer.values().get(1));
         dialog.initModality(Modality.APPLICATION_MODAL);
         dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
         dialog.getDialogPane().getStyleClass().add("form-dialog");
+        dialog.getDialogPane().setContent(tabs);
+        dialog.getDialogPane().setPrefSize(760, 420);
+        dialog.showAndWait();
+    }
 
-        TableView<ModuleRow> historyTable = new TableView<>();
+    private TableView<ModuleRow> createCustomerHistoryTable(
+            List<String> columns, List<ModuleRow> rows, String emptyMessage, boolean loyaltyHistory) {
+        TableView<ModuleRow> historyTable = new TableView<>(FXCollections.observableArrayList(rows));
         historyTable.getStyleClass().add("data-table");
         historyTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
-        List<String> columns = List.of("Mã hóa đơn", "Ngày giao dịch", "Tổng tiền", "Trạng thái");
+        Locale locale = Localization.isEnglish() ? Locale.US : Locale.forLanguageTag("vi-VN");
+        NumberFormat numberFormat = NumberFormat.getNumberInstance(locale);
         for (int index = 0; index < columns.size(); index++) {
             final int columnIndex = index;
             TableColumn<ModuleRow, String> column = new TableColumn<>(Localization.text(columns.get(index)));
             column.setCellValueFactory(cell -> {
                 String value = cell.getValue().values().get(columnIndex);
-                if (columnIndex == 2) {
-                    value = NumberFormat.getNumberInstance(Localization.isEnglish()
-                                    ? Locale.US : Locale.forLanguageTag("vi-VN"))
-                            .format(new BigDecimal(value)) + " ₫";
-                } else if (columnIndex == 3 && "COMPLETED".equals(value)) {
-                    value = "Hoàn tất";
-                } else if (columnIndex == 3 && "VOIDED".equals(value)) {
-                    value = "Đã hủy";
+                if (loyaltyHistory) {
+                    if (columnIndex == 2) {
+                        value = Localization.text(value);
+                    } else if (columnIndex == 3) {
+                        long change = Long.parseLong(value);
+                        value = (change > 0 ? "+" : "") + numberFormat.format(change);
+                    }
+                } else if (columnIndex == 2) {
+                    value = numberFormat.format(new BigDecimal(value)) + " ₫";
+                } else if (columnIndex == 3) {
+                    value = switch (value) {
+                        case "PENDING" -> Localization.text("Đang chờ");
+                        case "COMPLETED" -> Localization.text("Hoàn tất");
+                        case "VOIDED" -> Localization.text("Đã hủy");
+                        default -> value;
+                    };
                 }
                 return new javafx.beans.property.ReadOnlyStringWrapper(Localization.text(value));
             });
             historyTable.getColumns().add(column);
         }
-        historyTable.setItems(FXCollections.observableArrayList(
-                featureServices.customerLoyaltyService().findPurchaseHistory(customer.id())));
-        Label emptyState = new Label(Localization.text("Khách hàng chưa có giao dịch."));
+        Label emptyState = new Label(Localization.text(emptyMessage));
         emptyState.getStyleClass().add("table-empty-state");
         historyTable.setPlaceholder(emptyState);
-        dialog.getDialogPane().setContent(historyTable);
-        dialog.getDialogPane().setPrefSize(760, 420);
-        dialog.showAndWait();
+        return historyTable;
     }
 
     private record TierInput(TextField threshold, TextField rate) {
@@ -2228,10 +2530,8 @@ public class PageRenderer {
         TextField code = promotionTextField(oldValues, 0, "KM" + today.toString().replace("-", ""));
         TextField name = promotionTextField(oldValues, 1, "");
         TextField discount = promotionTextField(oldValues, 2, "0");
-        TextField redemptionValue = promotionTextField(oldValues, 7, "1000");
-        if (!oldValues.isEmpty()) {
-            redemptionValue.setText(formatInputMoney(new BigDecimal(oldValues.get(7))));
-        }
+        BigDecimal redemptionVnd = new BigDecimal(oldValues.isEmpty() ? "1000" : oldValues.get(7));
+        TextField redemptionValue = promotionMoneyInput(redemptionVnd);
 
         DatePicker accrualStart = promotionDatePicker(oldValues, 3, today);
         DatePicker redemptionStart = promotionDatePicker(oldValues, 4, today);
@@ -2260,17 +2560,16 @@ public class PageRenderer {
         VBox tierInputs = new VBox(8);
         List<TierInput> tiers = new ArrayList<>();
         if (oldValues.isEmpty()) {
-            addTierInput(tierInputs, tiers, "0", "1");
-        } else {
+            addTierInput(tierInputs, tiers, BigDecimal.ZERO, "1");
+        } else if (!oldValues.get(8).isBlank()) {
             for (String encoded : oldValues.get(8).split(";")) {
                 String[] parts = encoded.split(":", -1);
-                addTierInput(tierInputs, tiers,
-                        formatInputMoney(new BigDecimal(parts[0])), parts[1]);
+                addTierInput(tierInputs, tiers, new BigDecimal(parts[0]), parts[1]);
             }
         }
         Button addTier = new Button(Localization.text("Thêm bậc"));
         addTier.getStyleClass().add("button-secondary");
-        addTier.setOnAction(event -> addTierInput(tierInputs, tiers, "", ""));
+        addTier.setOnAction(event -> addTierInput(tierInputs, tiers, null, ""));
         Label tierLabel = new Label(Localization.text("Bậc tích điểm"));
         tierLabel.getStyleClass().add("field-label");
         VBox tierSection = new VBox(8, tierLabel, tierInputs, addTier);
@@ -2337,11 +2636,10 @@ public class PageRenderer {
     }
 
     private void addTierInput(
-            VBox container, List<TierInput> tiers, String thresholdValue, String rateValue) {
-        TextField threshold = new TextField(thresholdValue);
+            VBox container, List<TierInput> tiers, BigDecimal thresholdVnd, String rateValue) {
+        TextField threshold = promotionMoneyInput(thresholdVnd);
         threshold.setPromptText(Localization.text("Ngưỡng hóa đơn tối thiểu")
                 + (Localization.isEnglish() ? " (USD)" : " (VNĐ)"));
-        threshold.getStyleClass().add("text-input");
         TextField rate = new TextField(rateValue);
         rate.setPromptText(Localization.text("Tỷ lệ điểm (%)"));
         rate.getStyleClass().add("text-input");
@@ -2358,6 +2656,13 @@ public class PageRenderer {
             tiers.remove(tier);
             container.getChildren().remove(row);
         });
+    }
+
+    private TextField promotionMoneyInput(BigDecimal amountVnd) {
+        TextField field = new TextField(amountVnd == null ? "" : formatInputMoney(amountVnd));
+        field.setUserData(amountVnd);
+        field.getStyleClass().add("text-input");
+        return field;
     }
 
     private String formatInputMoney(BigDecimal vndAmount) {
@@ -2378,10 +2683,10 @@ public class PageRenderer {
             TextField redemptionValue,
             List<TierInput> tiers,
             ComboBox<String> status) {
-        BigDecimal redemptionVnd = toVnd(parseDecimalInput(redemptionValue), 8);
+        BigDecimal redemptionVnd = promotionInputVnd(redemptionValue, 8);
         List<String> encodedTiers = new ArrayList<>();
         for (TierInput tier : tiers) {
-            BigDecimal thresholdVnd = toVnd(parseDecimalInput(tier.threshold()), 2);
+            BigDecimal thresholdVnd = promotionInputVnd(tier.threshold(), 2);
             encodedTiers.add(thresholdVnd.toPlainString() + ":"
                     + parseDecimalInput(tier.rate()).toPlainString());
         }
@@ -2406,7 +2711,12 @@ public class PageRenderer {
                 statusIndex == 0 ? "ACTIVE" : "INACTIVE");
     }
 
-    private BigDecimal toVnd(BigDecimal displayAmount, int scale) {
+    private BigDecimal promotionInputVnd(TextField input, int scale) {
+        if (input.getUserData() instanceof BigDecimal previousVnd
+                && formatInputMoney(previousVnd).equals(input.getText().trim())) {
+            return previousVnd;
+        }
+        BigDecimal displayAmount = parseDecimalInput(input);
         BigDecimal vndAmount = Localization.isEnglish()
                 ? exchangeRateService.convertUsdToVnd(displayAmount)
                 : displayAmount;
@@ -2553,6 +2863,18 @@ public class PageRenderer {
         return alert.showAndWait().filter(ButtonType.OK::equals).isPresent();
     }
 
+    private boolean confirmPermanentCustomerDeletion(ModuleRow customer) {
+        ButtonType delete = new ButtonType(Localization.text("Xóa hồ sơ"), ButtonBar.ButtonData.OK_DONE);
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION, Localization.text(
+                "Hồ sơ chưa có đơn hàng sẽ bị xóa vĩnh viễn cùng thông tin dị ứng."),
+                delete, ButtonType.CANCEL);
+        alert.setTitle(Localization.text("Xác nhận xóa"));
+        alert.setHeaderText(customer.values().get(1));
+        ((Button) alert.getDialogPane().lookupButton(delete)).setDefaultButton(false);
+        ((Button) alert.getDialogPane().lookupButton(ButtonType.CANCEL)).setDefaultButton(true);
+        return alert.showAndWait().filter(delete::equals).isPresent();
+    }
+
     private boolean confirmEndPromotionImmediately() {
         Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
         alert.setTitle(Localization.text("Kết thúc ngay"));
@@ -2567,7 +2889,7 @@ public class PageRenderer {
         try {
             mutation.run();
             onSuccess.run();
-        } catch (IllegalArgumentException | IllegalStateException | java.util.NoSuchElementException
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException | java.util.NoSuchElementException
                  | vn.ninhkieupharma.pharmacy.common.dao.DataAccessException exception) {
             showInformation(Localization.text("Không thể cập nhật dữ liệu"),
                     Localization.text(exception.getMessage()));
@@ -2585,25 +2907,32 @@ public class PageRenderer {
     static boolean canWriteModule(String moduleId, UserRole role) {
         return role != null && isWritableModule(moduleId)
                 && (role == UserRole.ADMIN
-                || role == UserRole.STAFF && !List.of("UC-07", "UC-08", "UC-09").contains(moduleId));
+                || role == UserRole.STAFF && !List.of("UC-07", "UC-08", "UC-09", "UC-18").contains(moduleId));
+    }
+
+    static boolean canDeleteModule(String moduleId, UserRole role) {
+        return role == UserRole.ADMIN && isWritableModule(moduleId);
     }
 
     private SalesCustomerEntry createSalesCustomerEntry(
             ModuleDefinition module, FeatureModuleService featureService, RenderedTable renderedTable) {
         CustomerLoyaltyService customerService = featureServices.customerLoyaltyService();
         SalesService salesService = featureServices.salesService();
-        List<SaleProduct> saleProducts;
+        List<SaleProduct> loadedProducts;
         try {
-            saleProducts = salesService.findSaleProducts();
+            loadedProducts = salesService.findSaleProducts();
         } catch (vn.ninhkieupharma.pharmacy.common.dao.DataAccessException exception) {
-            saleProducts = List.of();
+            loadedProducts = List.of();
             showInformation(Localization.text("Không thể tải sản phẩm bán"),
                     exception.getMessage());
         }
+        List<SaleProduct> saleProducts = loadedProducts;
         ObservableList<ModuleRow> customers = FXCollections.observableArrayList();
         FilteredList<ModuleRow> filteredCustomers = new FilteredList<>(customers, customer -> true);
         ModuleRow[] selectedCustomer = {null};
+        SalePendingOrder[] activePendingSale = {null};
         SimpleBooleanProperty hasSelectedCustomer = new SimpleBooleanProperty(false);
+        SimpleBooleanProperty hasPendingSale = new SimpleBooleanProperty(false);
         boolean[] updatingSearch = {false};
 
         VBox form = new VBox(16);
@@ -2617,8 +2946,6 @@ public class PageRenderer {
         customerStep.getStyleClass().add("helper-text");
         customerStep.setWrapText(true);
 
-        CheckBox guestOrder = new CheckBox(Localization.text("Khách lẻ / không gắn hồ sơ"));
-        guestOrder.setSelected(true);
         TextField customerSearch = new TextField();
         customerSearch.setPromptText(Localization.text("Nhập tên, số điện thoại hoặc email khách hàng"));
         customerSearch.getStyleClass().add("search-input");
@@ -2643,31 +2970,16 @@ public class PageRenderer {
                 selectedCustomer[0] = null;
                 hasSelectedCustomer.set(false);
                 updateSalesCustomerDetails(null, customerDetails);
-                if (query != null && !query.isBlank()) {
-                    guestOrder.setSelected(false);
-                }
             }
             filteredCustomers.setPredicate(customer -> matchesSalesCustomerQuery(customer, query));
             showCustomerSuggestions(suggestionsPopup, customerSearch, suggestions, filteredCustomers, query);
-        });
-        guestOrder.selectedProperty().addListener((observable, wasSelected, isSelected) -> {
-            if (isSelected) {
-                suggestionsPopup.hide();
-                selectedCustomer[0] = null;
-                hasSelectedCustomer.set(false);
-                updatingSearch[0] = true;
-                customerSearch.clear();
-                updatingSearch[0] = false;
-                suggestions.getSelectionModel().clearSelection();
-                updateSalesCustomerDetails(null, customerDetails);
-            }
         });
         suggestions.setOnMouseClicked(event -> {
             ModuleRow highlighted = suggestions.getSelectionModel().getSelectedItem();
             if (highlighted != null) {
                 selectSalesCustomer(customerService, highlighted, customers, selectedCustomer,
                         hasSelectedCustomer, updatingSearch, customerSearch, suggestionsPopup, suggestions,
-                        guestOrder, customerDetails, customerStatus);
+                        customerDetails, customerStatus);
             }
         });
         suggestions.setOnKeyPressed(event -> {
@@ -2676,7 +2988,7 @@ public class PageRenderer {
                 if (highlighted != null) {
                     selectSalesCustomer(customerService, highlighted, customers, selectedCustomer,
                             hasSelectedCustomer, updatingSearch, customerSearch, suggestionsPopup, suggestions,
-                            guestOrder, customerDetails, customerStatus);
+                            customerDetails, customerStatus);
                 }
             }
         });
@@ -2694,29 +3006,27 @@ public class PageRenderer {
         refreshCustomers.getStyleClass().add("button-secondary");
         refreshCustomers.setOnAction(event -> refreshSalesCustomers(
                 customerService, customers, selectedCustomer, hasSelectedCustomer,
-                updatingSearch, customerSearch, suggestionsPopup, guestOrder,
+                updatingSearch, customerSearch, suggestionsPopup,
                 customerDetails, customerStatus));
         Button addCustomer = new Button(Localization.text("Thêm khách hàng"));
         addCustomer.getStyleClass().add("button-secondary");
         addCustomer.setOnAction(event -> editSalesCustomer(
                 customerService, null, customers, selectedCustomer, hasSelectedCustomer, updatingSearch,
-                customerSearch, suggestionsPopup, suggestions, guestOrder, customerDetails, customerStatus));
+                customerSearch, suggestionsPopup, suggestions, customerDetails, customerStatus));
         Button editCustomer = new Button(Localization.text("Sửa thông tin khách"));
         editCustomer.getStyleClass().add("button-secondary");
-        editCustomer.disableProperty().bind(
-                guestOrder.selectedProperty().or(
-                        hasSelectedCustomer.not()));
+        editCustomer.disableProperty().bind(hasSelectedCustomer.not());
         editCustomer.setOnAction(event -> {
             if (selectedCustomer[0] != null) {
                 editSalesCustomer(customerService, selectedCustomer[0], customers, selectedCustomer,
-                        hasSelectedCustomer, updatingSearch, customerSearch, suggestionsPopup, suggestions, guestOrder,
+                        hasSelectedCustomer, updatingSearch, customerSearch, suggestionsPopup, suggestions,
                         customerDetails, customerStatus);
             }
         });
-        HBox customerActions = new HBox(10, addCustomer, editCustomer, refreshCustomers);
+        FlowPane customerActions = new FlowPane(10, 8, addCustomer, editCustomer, refreshCustomers);
         customerActions.setAlignment(Pos.CENTER_LEFT);
         customerSection.getChildren().addAll(
-                customerHeading, customerStep, guestOrder, customerSearch,
+                customerHeading, customerStep, customerSearch,
                 customerDetails, customerStatus, customerActions);
 
         VBox prescriptionSection = new VBox(12);
@@ -2749,87 +3059,216 @@ public class PageRenderer {
 
         CheckoutSummary summary = createOrderSummarySection();
         List<CheckoutLineControls> saleLines = new ArrayList<>();
-        Runnable refreshCheckout = () -> refreshCheckoutPreview(saleLines, summary.subtotal());
+        Runnable refreshCheckout = () -> {
+            refreshCheckoutPreview(saleLines, summary.subtotal());
+            summary.stockStatus().setText("");
+        };
         Runnable refreshAllergyWarnings = () -> {
             updateSaleAllergyWarnings(
-                    salesService, selectedCustomer[0], saleLines,
-                    summary.status(), summary.completeButton());
-            summary.redeemPoints().setDisable(
-                    guestOrder.isSelected() || selectedCustomer[0] == null);
+                    salesService, selectedCustomer[0], saleLines, summary.status());
+            summary.requestedPoints().setDisable(selectedCustomer[0] == null);
             refreshCheckout.run();
         };
         VBox medicationSection = createPrescriptionItemsSection(
                 saleProducts, saleLines, refreshAllergyWarnings);
+        VBox saleItems = (VBox) medicationSection.getChildren().get(2);
+        summary.completeButton().disableProperty().bind(hasPendingSale.not());
+        summary.cancelPendingButton().disableProperty().bind(hasPendingSale.not());
         customerDetails.textProperty().addListener((observable, oldValue, newValue) ->
                 refreshAllergyWarnings.run());
         refreshAllergyWarnings.run();
 
-        summary.completeButton().setOnAction(event -> {
-            if (!guestOrder.isSelected() && selectedCustomer[0] == null) {
-                showInformation(Localization.text("Không thể hoàn tất đơn"),
-                        Localization.text("Hãy chọn một khách hàng hoặc chọn khách lẻ."));
+        Runnable resetOrder = () -> {
+            activePendingSale[0] = null;
+            hasPendingSale.set(false);
+            customerSearch.clear();
+            customerStatus.setText("");
+            clearSalesForm(saleLines, saleItems, prescriptionCode, prescriptionDate,
+                    doctor, clinic, diagnosis, summary, refreshAllergyWarnings);
+            summary.status().setText("");
+        };
+        summary.newOrderButton().setOnAction(event -> resetOrder.run());
+
+        summary.checkStockButton().setOnAction(event -> {
+            Label feedback = summary.stockStatus();
+            try {
+                var shortages = salesService.previewSaleStock(buildSaleLines(saleLines));
+                feedback.getStyleClass().setAll(shortages.isEmpty() ? "helper-text" : "form-error");
+                feedback.setText(shortages.isEmpty()
+                        ? Localization.text("Đủ tồn ở các lô còn hạn cho số ngày điều trị đã nhập.")
+                        : shortages.stream().map(shortage -> shortage.productName() + " · "
+                                + Localization.text("Cần ") + shortage.requested().stripTrailingZeros().toPlainString()
+                                + ", " + Localization.text("có ") + shortage.available().stripTrailingZeros().toPlainString()
+                                + " · " + Localization.text("Lô cần còn hạn đến ") + shortage.requiredExpiry())
+                                .collect(java.util.stream.Collectors.joining("\n")));
+            } catch (IllegalArgumentException | IllegalStateException | UnsupportedOperationException
+                     | vn.ninhkieupharma.pharmacy.common.dao.DataAccessException exception) {
+                feedback.setText(exception.getMessage());
+                feedback.getStyleClass().setAll("form-error");
+            }
+        });
+
+        summary.savePendingButton().setOnAction(event -> {
+            try {
+                SalePendingOrder existing = activePendingSale[0];
+                SaleOrderRequest request = buildSaleOrderRequest(
+                        selectedCustomer[0], saleLines, prescriptionCode, prescriptionDate,
+                        doctor, clinic, diagnosis, summary, existing);
+                SalePendingOrder pending = existing == null
+                        ? salesService.createPendingSale(authenticatedUserId, request)
+                        : salesService.updatePendingSale(authenticatedUserId, existing.id(), existing.revision(), request);
+                activePendingSale[0] = pending;
+                hasPendingSale.set(true);
+                summary.status().setText(Localization.text("Đã lưu đơn Pending ") + pending.saleCode());
+                summary.status().getStyleClass().setAll("helper-text");
+            } catch (IllegalArgumentException | IllegalStateException
+                     | vn.ninhkieupharma.pharmacy.common.dao.DataAccessException exception) {
+                showInformation(Localization.text("Không thể lưu đơn đang chờ"),
+                        Localization.text(exception.getMessage()));
                 return;
             }
+            refreshSalesRows(renderedTable, featureService, module);
+        });
+
+        summary.completeButton().setOnAction(event -> {
+            SalePendingOrder pending = activePendingSale[0];
+            if (pending == null) {
+                showInformation(Localization.text("Không thể hoàn tất đơn"),
+                        Localization.text("Hãy lưu đơn Pending trước khi hoàn tất."));
+                return;
+            }
+            SaleReceipt receipt;
             try {
-                List<SaleLineRequest> requestedLines = buildSaleLines(saleLines);
-                Optional<UUID> customerId = Optional.ofNullable(selectedCustomer[0])
-                        .map(ModuleRow::id);
-                List<SaleAllergyWarning> warnings =
-                        salesService.findAllergyWarnings(customerId, requestedLines.stream()
-                                .map(SaleLineRequest::productId).distinct().toList());
-                boolean allergyConfirmed = warnings.isEmpty() || confirmAllergyWarnings(warnings);
-                if (!allergyConfirmed) {
+                SaleOrderRequest request = buildSaleOrderRequest(
+                        selectedCustomer[0], saleLines, prescriptionCode, prescriptionDate,
+                        doctor, clinic, diagnosis, summary, pending);
+                SaleQuote quote = salesService.quotePendingSale(
+                        authenticatedUserId, pending.id(), pending.revision(), request);
+                if (!quote.warnings().isEmpty() && !confirmAllergyWarnings(quote.warnings())) {
                     return;
                 }
-                SaleOrderRequest request = new SaleOrderRequest(
-                        customerId,
-                        requestedLines,
-                        prescriptionCode.getText().trim(),
-                        prescriptionDate.getValue(),
-                        doctor.getText().trim(),
-                        clinic.getText().trim(),
-                        diagnosis.getText().trim(),
-                        summary.note().getText().trim(),
-                        summary.redeemPoints().isSelected(),
-                        warnings);
-                SaleReceipt[] receipt = new SaleReceipt[1];
-                runMutation(() -> receipt[0] = salesService.completeSale(authenticatedUserId, request), () -> {
-                    refreshRows(renderedTable, featureService, module);
-                    refreshSalesCustomers(customerService, customers, selectedCustomer, hasSelectedCustomer,
-                            updatingSearch, customerSearch, suggestionsPopup, guestOrder,
-                            customerDetails, customerStatus);
-                    summary.status().setText(formatSaleReceipt(receipt[0]));
-                    summary.status().getStyleClass().setAll("helper-text");
-                    saleLines.forEach(line -> {
-                        line.product().getSelectionModel().clearSelection();
-                        line.quantity().setText("1");
-                        line.dosage().clear();
-                        line.treatmentDays().setText("1");
-                    });
-                    prescriptionCode.clear();
-                    prescriptionDate.setValue(null);
-                    doctor.clear();
-                    clinic.clear();
-                    diagnosis.clear();
-                    summary.note().clear();
-                    summary.redeemPoints().setSelected(false);
-                    refreshAllergyWarnings.run();
-                    showInformation(Localization.text("Đã hoàn tất đơn hàng"),
-                            formatSaleReceipt(receipt[0]));
-                });
+                if (!confirmSalePayment(quote.amounts(), summary.section().getScene().getWindow())) {
+                    return;
+                }
+                receipt = salesService.completePendingSale(
+                        authenticatedUserId, pending.id(), pending.revision(), request, quote);
             } catch (IllegalArgumentException | IllegalStateException
                      | vn.ninhkieupharma.pharmacy.common.dao.DataAccessException exception) {
                 showInformation(Localization.text("Không thể hoàn tất đơn"),
                         Localization.text(exception.getMessage()));
+                return;
             }
+            resetOrder.run();
+            String receiptDetails = formatSaleReceipt(receipt);
+            summary.status().setText(receiptDetails);
+            summary.status().getStyleClass().setAll("helper-text");
+            showInformation(Localization.text("Đã hoàn tất đơn hàng"), receiptDetails);
+            refreshSalesRows(renderedTable, featureService, module);
+            refreshSalesCustomers(customerService, customers, selectedCustomer, hasSelectedCustomer,
+                    updatingSearch, customerSearch, suggestionsPopup, customerDetails, customerStatus);
         });
+
+        summary.cancelPendingButton().setOnAction(event -> {
+            SalePendingOrder pending = activePendingSale[0];
+            if (pending == null || !confirmCancelPendingSale()) {
+                return;
+            }
+            try {
+                salesService.cancelPendingSale(authenticatedUserId, pending.id(), pending.revision());
+            } catch (IllegalArgumentException | IllegalStateException
+                     | vn.ninhkieupharma.pharmacy.common.dao.DataAccessException exception) {
+                showInformation(Localization.text("Không thể hủy đơn đang chờ"),
+                        Localization.text(exception.getMessage()));
+                return;
+            }
+            resetOrder.run();
+            summary.status().setText(Localization.text("Đơn Pending đã được hủy."));
+            summary.status().getStyleClass().setAll("helper-text");
+            refreshSalesRows(renderedTable, featureService, module);
+        });
+
+        Runnable loadSelectedPending = () -> {
+            ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+            if (selected == null || selected.values().size() < 6
+                    || !"PENDING".equalsIgnoreCase(selected.values().get(5))) {
+                showInformation(Localization.text("Chưa chọn đơn Pending"),
+                        Localization.text("Hãy chọn một đơn đang chờ trong bảng."));
+                return;
+            }
+            try {
+                SalePendingOrder pending = salesService.findPendingSale(selected.id());
+                UUID customerId = pending.request().customerId().orElse(null);
+                customerSearch.clear();
+                refreshSalesCustomers(customerService, customers, selectedCustomer, hasSelectedCustomer,
+                        updatingSearch, customerSearch, suggestionsPopup, customerDetails, customerStatus);
+                ModuleRow customer = customers.stream()
+                        .filter(candidate -> candidate.id().equals(customerId))
+                        .findFirst()
+                        .orElse(null);
+                if (customer != null) {
+                    selectSalesCustomer(customerService, customer, customers, selectedCustomer,
+                            hasSelectedCustomer, updatingSearch, customerSearch, suggestionsPopup, suggestions,
+                            customerDetails, customerStatus);
+                }
+                activePendingSale[0] = pending;
+                hasPendingSale.set(true);
+                SaleOrderRequest request = pending.request();
+                int lineCount = request.lines().size();
+                while (saleLines.size() > lineCount) {
+                    CheckoutLineControls removed = saleLines.remove(saleLines.size() - 1);
+                    saleItems.getChildren().remove(removed.row());
+                }
+                while (saleLines.size() < lineCount) {
+                    addCheckoutLine(saleProducts, saleLines, saleItems, refreshAllergyWarnings);
+                }
+                boolean missingProduct = false;
+                for (int index = 0; index < lineCount; index++) {
+                    SaleLineRequest requestLine = request.lines().get(index);
+                    CheckoutLineControls controls = saleLines.get(index);
+                    SaleProduct product = saleProducts.stream()
+                            .filter(candidate -> candidate.id().equals(requestLine.productId()))
+                            .findFirst()
+                            .orElse(null);
+                    controls.product().setValue(product);
+                    missingProduct |= product == null;
+                    controls.quantity().setText(requestLine.quantity().stripTrailingZeros().toPlainString());
+                    controls.dosage().setText(requestLine.dosageInstructions() == null
+                            ? "" : requestLine.dosageInstructions());
+                    controls.treatmentDays().setText(Integer.toString(requestLine.treatmentDays()));
+                }
+                prescriptionCode.setText(request.prescriptionCode() == null ? "" : request.prescriptionCode());
+                prescriptionDate.setValue(request.prescriptionDate());
+                doctor.setText(request.prescribingDoctor() == null ? "" : request.prescribingDoctor());
+                clinic.setText(request.clinic() == null ? "" : request.clinic());
+                diagnosis.setText(request.diagnosis() == null ? "" : request.diagnosis());
+                summary.note().setText(request.note() == null ? "" : request.note());
+                boolean legacyRedemption = request.requestedPoints() == SaleOrderRequest.REDEEM_MAXIMUM;
+                summary.requestedPoints().setText(legacyRedemption ? "" : Long.toString(request.requestedPoints()));
+                summary.requestedPoints().setPromptText(Localization.text(legacyRedemption
+                        ? "Đơn cũ dùng tối đa. Nhập 0 để bỏ đổi điểm."
+                        : "Nhập số điểm khách muốn đổi"));
+                summary.status().setText(Localization.text("Đang chỉnh sửa đơn Pending ")
+                        + pending.saleCode());
+                summary.status().getStyleClass().setAll("helper-text");
+                refreshAllergyWarnings.run();
+                if (selectedCustomer[0] == null || missingProduct) {
+                    summary.status().setText(Localization.text(
+                            "Khách hàng hoặc sản phẩm trong đơn không còn khả dụng. Hãy chọn lại hoặc hủy đơn."));
+                    summary.status().getStyleClass().setAll("form-error");
+                }
+            } catch (IllegalArgumentException | IllegalStateException
+                     | vn.ninhkieupharma.pharmacy.common.dao.DataAccessException exception) {
+                showInformation(Localization.text("Không thể tải đơn Pending"),
+                        Localization.text(exception.getMessage()));
+            }
+        };
 
         form.getChildren().addAll(
                 customerSection, prescriptionSection, medicationSection, summary.section());
         refreshSalesCustomers(customerService, customers, selectedCustomer, hasSelectedCustomer,
-                updatingSearch, customerSearch, suggestionsPopup, guestOrder,
+                updatingSearch, customerSearch, suggestionsPopup,
                 customerDetails, customerStatus);
-        return new SalesCustomerEntry(form);
+        return new SalesCustomerEntry(form, loadSelectedPending);
     }
 
     private ListCell<ModuleRow> customerPickerCell() {
@@ -2881,6 +3320,14 @@ public class PageRenderer {
                 || values.get(2).toLowerCase(Locale.ROOT).contains(normalizedQuery);
     }
 
+    private void refreshSalesRows(RenderedTable table, FeatureModuleService service, ModuleDefinition module) {
+        try {
+            refreshRows(table, service, module);
+        } catch (vn.ninhkieupharma.pharmacy.common.dao.DataAccessException exception) {
+            showInformation(Localization.text("Không thể làm mới danh sách đơn"), exception.getMessage());
+        }
+    }
+
     private void refreshSalesCustomers(
             CustomerLoyaltyService customerService,
             ObservableList<ModuleRow> customers,
@@ -2889,7 +3336,6 @@ public class PageRenderer {
             boolean[] updatingSearch,
             TextField customerSearch,
             Popup suggestionsPopup,
-            CheckBox guestOrder,
             Label customerDetails,
             Label customerStatus) {
         try {
@@ -2903,7 +3349,6 @@ public class PageRenderer {
                 if (selectedCustomer[0] == null) {
                     hasSelectedCustomer.set(false);
                     suggestionsPopup.hide();
-                    guestOrder.setSelected(true);
                     updateSalesCustomerDetails(null, customerDetails);
                     customerStatus.setText(Localization.text(
                             "Khách hàng đã đổi trạng thái và không còn đủ điều kiện bán."));
@@ -2936,7 +3381,6 @@ public class PageRenderer {
             TextField customerSearch,
             Popup suggestionsPopup,
             ListView<ModuleRow> suggestions,
-            CheckBox guestOrder,
             Label customerDetails,
             Label customerStatus) {
         try {
@@ -2958,7 +3402,6 @@ public class PageRenderer {
             }
             selectedCustomer[0] = eligibleCustomer;
             hasSelectedCustomer.set(true);
-            guestOrder.setSelected(false);
             updatingSearch[0] = true;
             customerSearch.setText(customerPickerText(eligibleCustomer));
             updatingSearch[0] = false;
@@ -2998,28 +3441,46 @@ public class PageRenderer {
     private CheckoutSummary createOrderSummarySection() {
         VBox section = new VBox(12);
         section.getStyleClass().add("dashboard-panel");
-        Label heading = new Label(Localization.text("4. Ưu đãi và hoàn tất đơn"));
+        Label heading = new Label(Localization.text("4. Ưu đãi và lưu đơn"));
         heading.getStyleClass().add("section-title");
         TextArea notes = new TextArea();
         notes.setPromptText(Localization.text("Ghi chú thêm cho đơn thuốc hoặc khách hàng"));
         notes.setPrefRowCount(2);
         notes.setWrapText(true);
         notes.getStyleClass().add("text-input");
-        CheckBox redeemPoints = new CheckBox(Localization.text(
-                "Dùng điểm tối đa có thể (không vượt quá 50% giá trị gốc đơn hàng)"));
+        Label pointsLabel = new Label(Localization.text("Điểm muốn đổi"));
+        TextField requestedPoints = new TextField("0");
+        requestedPoints.setPromptText(Localization.text("Nhập số điểm khách muốn đổi"));
+        requestedPoints.setAccessibleText(pointsLabel.getText());
+        Label pointsLimit = new Label(Localization.text(
+                "Tiền giảm từ điểm tối đa bằng 50% tiền hàng ban đầu."));
+        pointsLimit.getStyleClass().add("helper-text");
         Label subtotal = new Label(Localization.text("Tạm tính: 0 ₫"));
         subtotal.getStyleClass().add("invoice-total");
         Label status = new Label(Localization.text(
                 "Ưu đãi cố định đủ điều kiện tốt nhất sẽ được áp dụng tự động."));
         status.setWrapText(true);
         status.getStyleClass().add("helper-text");
-        Button completeOrder = new Button(Localization.text("Hoàn tất bán"));
+        Button savePending = new Button(Localization.text("Lưu đơn Pending"));
+        savePending.getStyleClass().add("button-primary");
+        Button completeOrder = new Button(Localization.text("Tính tiền và xác nhận"));
         completeOrder.getStyleClass().add("button-primary");
-        completeOrder.setMaxWidth(Double.MAX_VALUE);
-        HBox actions = new HBox(10, completeOrder);
-        actions.setAlignment(Pos.CENTER_RIGHT);
-        section.getChildren().addAll(heading, subtotal, redeemPoints, notes, status, actions);
-        return new CheckoutSummary(section, redeemPoints, notes, subtotal, status, completeOrder);
+        Button cancelPending = new Button(Localization.text("Hủy đơn Pending"));
+        cancelPending.getStyleClass().add("button-secondary");
+        Button newOrder = new Button(Localization.text("Đơn mới"));
+        newOrder.getStyleClass().add("button-secondary");
+        Button checkStock = new Button(Localization.text("Kiểm tra tồn theo lô"));
+        checkStock.getStyleClass().add("button-secondary");
+        Label stockStatus = new Label();
+        stockStatus.setWrapText(true);
+        stockStatus.managedProperty().bind(stockStatus.textProperty().isNotEmpty());
+        stockStatus.visibleProperty().bind(stockStatus.managedProperty());
+        FlowPane actions = new FlowPane(10, 8, checkStock, savePending, completeOrder, cancelPending, newOrder);
+        section.getChildren().addAll(heading, subtotal, pointsLabel, requestedPoints, pointsLimit, notes,
+                status, actions, stockStatus);
+        return new CheckoutSummary(
+                section, requestedPoints, notes, subtotal, status, stockStatus, checkStock,
+                savePending, completeOrder, cancelPending, newOrder);
     }
 
     private void addCheckoutLine(
@@ -3062,10 +3523,14 @@ public class PageRenderer {
 
         Button remove = new Button("−");
         remove.getStyleClass().add("button-secondary");
-        HBox row = new HBox(8, product, dosage, quantity, treatmentDays, remove);
+        FlowPane row = new FlowPane(8, 8);
         row.setAlignment(Pos.CENTER_LEFT);
-        HBox.setHgrow(product, Priority.ALWAYS);
-        HBox.setHgrow(dosage, Priority.ALWAYS);
+        row.setMaxWidth(Double.MAX_VALUE);
+        product.setPrefWidth(280);
+        dosage.setPrefWidth(210);
+        quantity.setPrefWidth(90);
+        treatmentDays.setPrefWidth(100);
+        row.getChildren().addAll(product, dosage, quantity, treatmentDays, remove);
         VBox line = new VBox(4, row, allergyWarning);
         line.getStyleClass().add("checkout-line");
         CheckoutLineControls controls = new CheckoutLineControls(
@@ -3116,19 +3581,163 @@ public class PageRenderer {
                 throw new IllegalArgumentException(
                         Localization.text("Sản phẩm chưa có giá bán hợp lệ. Hãy cập nhật giá trong quản lý sản phẩm."));
             }
-            BigDecimal quantity;
+            BigDecimal quantity = parseCheckoutQuantity(line.quantity().getText());
             int treatmentDays;
             try {
-                quantity = new BigDecimal(line.quantity().getText().trim().replace(',', '.'));
                 treatmentDays = Integer.parseInt(line.treatmentDays().getText().trim());
+                if (treatmentDays < 1 || treatmentDays > 3650) {
+                    throw new NumberFormatException();
+                }
             } catch (NumberFormatException exception) {
                 throw new IllegalArgumentException(
-                        Localization.text("Số lượng và ngày điều trị phải là giá trị số hợp lệ."), exception);
+                        Localization.text("Số ngày điều trị phải là số nguyên từ 1 đến 3650."), exception);
             }
             lines.add(new SaleLineRequest(
                     product.id(), quantity, line.dosage().getText().trim(), treatmentDays));
         }
         return List.copyOf(lines);
+    }
+
+    static BigDecimal parseCheckoutQuantity(String value) {
+        String text = value.trim().replace(',', '.');
+        if (text.matches("(?:[0-9]{1,9}(?:\\.[0-9]{1,3})?|\\.[0-9]{1,3})")) {
+            BigDecimal quantity = new BigDecimal(text);
+            if (quantity.signum() > 0) {
+                return quantity;
+            }
+        }
+        throw new IllegalArgumentException(Localization.text(
+                "Số lượng phải lớn hơn 0, có tối đa 9 chữ số nguyên và 3 chữ số thập phân."));
+    }
+
+    private SaleOrderRequest buildSaleOrderRequest(
+            ModuleRow customer,
+            List<CheckoutLineControls> lines,
+            TextField prescriptionCode,
+            DatePicker prescriptionDate,
+            TextField doctor,
+            TextField clinic,
+            TextField diagnosis,
+            CheckoutSummary summary,
+            SalePendingOrder existing) {
+        if (customer == null) {
+            throw new IllegalArgumentException(Localization.text("Hãy chọn hồ sơ khách hàng trước khi lưu đơn."));
+        }
+        try {
+            prescriptionDate.commitValue();
+        } catch (java.time.DateTimeException exception) {
+            throw new IllegalArgumentException(Localization.text("Ngày kê đơn không hợp lệ."), exception);
+        }
+        return new SaleOrderRequest(
+                Optional.of(customer.id()),
+                buildSaleLines(lines),
+                prescriptionCode.getText().trim(),
+                prescriptionDate.getValue(),
+                doctor.getText().trim(),
+                clinic.getText().trim(),
+                diagnosis.getText().trim(),
+                summary.note().getText().trim(),
+                readRequestedPoints(summary.requestedPoints().getText(), existing),
+                List.of());
+    }
+
+    private static long readRequestedPoints(String input, SalePendingOrder existing) {
+        String text = input.trim();
+        if (text.isEmpty()) {
+            return existing != null && existing.request().requestedPoints() == SaleOrderRequest.REDEEM_MAXIMUM
+                    ? SaleOrderRequest.REDEEM_MAXIMUM : 0;
+        }
+        try {
+            long points = Long.parseLong(text);
+            if (points >= 0 && points <= SaleOrderRequest.MAX_POINT_BALANCE) {
+                return points;
+            }
+        } catch (NumberFormatException exception) {
+            // Report the accepted range below.
+        }
+        throw new IllegalArgumentException(Localization.text("Số điểm muốn đổi phải là số nguyên không âm hợp lệ."));
+    }
+
+    private void clearSalesForm(
+            List<CheckoutLineControls> lines,
+            VBox saleItems,
+            TextField prescriptionCode,
+            DatePicker prescriptionDate,
+            TextField doctor,
+            TextField clinic,
+            TextField diagnosis,
+            CheckoutSummary summary,
+            Runnable refreshAllergyWarnings) {
+        while (lines.size() > 1) {
+            CheckoutLineControls removed = lines.remove(lines.size() - 1);
+            saleItems.getChildren().remove(removed.row());
+        }
+        if (!lines.isEmpty()) {
+            CheckoutLineControls line = lines.get(0);
+            line.product().getSelectionModel().clearSelection();
+            line.quantity().setText("1");
+            line.dosage().clear();
+            line.treatmentDays().setText("1");
+        }
+        prescriptionCode.clear();
+        prescriptionDate.setValue(null);
+        doctor.clear();
+        clinic.clear();
+        diagnosis.clear();
+        summary.note().clear();
+        summary.requestedPoints().setText("0");
+        summary.requestedPoints().setPromptText(Localization.text("Nhập số điểm khách muốn đổi"));
+        refreshAllergyWarnings.run();
+    }
+
+    private boolean confirmCancelPendingSale() {
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+        alert.setTitle(Localization.text("Xác nhận hủy đơn"));
+        alert.setHeaderText(Localization.text("Hủy đơn Pending"));
+        alert.setContentText(Localization.text(
+                "Đơn đang chờ sẽ chuyển sang trạng thái đã hủy và không thể chỉnh sửa."));
+        alert.getButtonTypes().setAll(ButtonType.CANCEL, ButtonType.OK);
+        return alert.showAndWait().filter(ButtonType.OK::equals).isPresent();
+    }
+
+    private void showSaleDetails(SalesService service, ModuleRow sale) {
+        try {
+            Dialog<ButtonType> dialog = new Dialog<>();
+            dialog.setTitle(Localization.text("Chi tiết đơn hàng"));
+            dialog.setHeaderText(sale.values().get(0));
+            dialog.initModality(Modality.APPLICATION_MODAL);
+            dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+            dialog.getDialogPane().getStyleClass().add("form-dialog");
+            TableView<ModuleRow> details = new TableView<>();
+            details.getStyleClass().add("data-table");
+            details.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
+            List<String> columns = List.of(
+                    "Mã sản phẩm", "Sản phẩm", "Đơn vị", "Số lượng",
+                    "Đơn giá", "Thành tiền", "Hướng dẫn", "Ngày điều trị");
+            for (int index = 0; index < columns.size(); index++) {
+                final int columnIndex = index;
+                TableColumn<ModuleRow, String> column = new TableColumn<>(Localization.text(columns.get(index)));
+                column.setCellValueFactory(cell -> {
+                    String value = cell.getValue().values().get(columnIndex);
+                    if (columnIndex == 4 || columnIndex == 5) {
+                        value = NumberFormat.getNumberInstance(Localization.isEnglish()
+                                        ? Locale.US : Locale.forLanguageTag("vi-VN"))
+                                .format(new BigDecimal(value)) + " ₫";
+                    }
+                    return new javafx.beans.property.ReadOnlyStringWrapper(Localization.text(value));
+                });
+                details.getColumns().add(column);
+            }
+            details.setItems(FXCollections.observableArrayList(service.findSaleDetails(sale.id())));
+            details.setPlaceholder(new Label(Localization.text("Đơn hàng chưa có dòng sản phẩm.")));
+            dialog.getDialogPane().setContent(details);
+            dialog.getDialogPane().setPrefSize(1000, 480);
+            dialog.showAndWait();
+        } catch (IllegalArgumentException | IllegalStateException
+                 | vn.ninhkieupharma.pharmacy.common.dao.DataAccessException exception) {
+            showInformation(Localization.text("Không thể tải chi tiết đơn hàng"),
+                    Localization.text(exception.getMessage()));
+        }
     }
 
     private void refreshCheckoutPreview(List<CheckoutLineControls> lines, Label subtotalLabel) {
@@ -3140,11 +3749,9 @@ public class PageRenderer {
                 continue;
             }
             try {
-                BigDecimal quantity = new BigDecimal(line.quantity().getText().trim().replace(',', '.'));
-                if (quantity.signum() > 0) {
-                    subtotal = subtotal.add(product.sellingPrice().multiply(quantity));
-                }
-            } catch (NumberFormatException ignored) {
+                BigDecimal quantity = parseCheckoutQuantity(line.quantity().getText());
+                subtotal = subtotal.add(product.sellingPrice().multiply(quantity).setScale(2, RoundingMode.HALF_UP));
+            } catch (IllegalArgumentException ignored) {
                 invalidQuantity = true;
             }
         }
@@ -3158,8 +3765,7 @@ public class PageRenderer {
             SalesService salesService,
             ModuleRow customer,
             List<CheckoutLineControls> lines,
-            Label status,
-            Button completeButton) {
+            Label status) {
         try {
             Optional<UUID> customerId = Optional.ofNullable(customer).map(ModuleRow::id);
             List<UUID> productIds = lines.stream()
@@ -3192,12 +3798,10 @@ public class PageRenderer {
                     line.allergyWarning().setText("");
                 }
             }
-            completeButton.setDisable(false);
             status.getStyleClass().setAll("helper-text");
         } catch (vn.ninhkieupharma.pharmacy.common.dao.DataAccessException exception) {
             status.setText(exception.getMessage());
             status.getStyleClass().setAll("form-error");
-            completeButton.setDisable(true);
         }
     }
 
@@ -3214,6 +3818,17 @@ public class PageRenderer {
                         .collect(java.util.stream.Collectors.joining("\n")));
         alert.getButtonTypes().setAll(ButtonType.CANCEL, ButtonType.OK);
         return alert.showAndWait().filter(ButtonType.OK::equals).isPresent();
+    }
+
+    private boolean confirmSalePayment(SaleReceipt amounts, javafx.stage.Window owner) {
+        ButtonType confirm = new ButtonType(Localization.text("Đã thu tiền"), ButtonBar.ButtonData.OK_DONE);
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION, formatSaleReceipt(amounts), confirm, ButtonType.CANCEL);
+        alert.setTitle(Localization.text("Xác nhận thanh toán"));
+        alert.setHeaderText(Localization.text("Số tiền cần thu: ") + formatSaleMoney(amounts.total()));
+        alert.initOwner(owner);
+        ((Button) alert.getDialogPane().lookupButton(confirm)).setDefaultButton(false);
+        ((Button) alert.getDialogPane().lookupButton(ButtonType.CANCEL)).setDefaultButton(true);
+        return alert.showAndWait().filter(confirm::equals).isPresent();
     }
 
     private String formatSaleReceipt(SaleReceipt receipt) {
@@ -3287,7 +3902,6 @@ public class PageRenderer {
             TextField customerSearch,
             Popup suggestionsPopup,
             ListView<ModuleRow> suggestions,
-            CheckBox guestOrder,
             Label customerDetails,
             Label customerStatus) {
         ModuleRow draft = selectedCustomer;
@@ -3307,7 +3921,7 @@ public class PageRenderer {
                         customer -> customer.values().get(0), String.CASE_INSENSITIVE_ORDER));
                 selectSalesCustomer(customerService, savedCustomer, customers, selectedCustomerState,
                         hasSelectedCustomer, updatingSearch, customerSearch, suggestionsPopup, suggestions,
-                        guestOrder, customerDetails, customerStatus);
+                        customerDetails, customerStatus);
                 return;
             } catch (IllegalArgumentException | IllegalStateException | java.util.NoSuchElementException
                      | vn.ninhkieupharma.pharmacy.common.dao.DataAccessException
@@ -3393,8 +4007,10 @@ public class PageRenderer {
     private Node createSalesWorkspace(
             ModuleDefinition module, FeatureModuleService featureService) {
         HBox workspace = new HBox(18);
+        workspace.setFillHeight(true);
         VBox catalog = new VBox(12);
         catalog.getStyleClass().add("dashboard-panel");
+        catalog.setMinWidth(420);
         HBox.setHgrow(catalog, Priority.ALWAYS);
         List<DemoData.Product> catalogProducts = productsInCatalog();
         Label catalogTitle = new Label(Localization.text("Sản phẩm mẫu · ")
@@ -3425,7 +4041,9 @@ public class PageRenderer {
         catalog.getChildren().addAll(catalogTitle, inventoryNote, productSearch, productGrid);
 
         VBox invoice = new VBox(12);
-        invoice.setPrefWidth(340);
+        invoice.setPrefWidth(320);
+        invoice.setMinWidth(300);
+        invoice.setMaxWidth(360);
         invoice.getStyleClass().add("invoice-panel");
         Label invoiceTitle = new Label(Localization.text("Hóa đơn mẫu"));
         invoiceTitle.getStyleClass().add("section-title");

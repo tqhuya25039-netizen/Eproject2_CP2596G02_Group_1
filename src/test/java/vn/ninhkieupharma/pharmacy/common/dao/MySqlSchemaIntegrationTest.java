@@ -2,6 +2,8 @@ package vn.ninhkieupharma.pharmacy.common.dao;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import vn.ninhkieupharma.pharmacy.common.auth.User;
+import vn.ninhkieupharma.pharmacy.common.auth.UserRole;
 import vn.ninhkieupharma.pharmacy.config.DatabaseConnection;
 import vn.ninhkieupharma.pharmacy.common.service.FeatureServices;
 import vn.ninhkieupharma.pharmacy.common.service.ModuleCatalog;
@@ -15,7 +17,8 @@ class MySqlSchemaIntegrationTest {
     @EnabledIfEnvironmentVariable(named = "PHARMACY_DB_INTEGRATION_TEST", matches = "true")
     void readsEveryModuleFromTheProvidedSchemaWithoutCreatingBusinessRows() throws SQLException {
         DatabaseConnection.verifySchema();
-        FeatureServices services = new FeatureServices(new RelationalFeatureModuleDAO());
+        User administrator = new User(1, "admin_demo", "", UserRole.ADMIN, true);
+        FeatureServices services = new FeatureServices(new RelationalFeatureModuleDAO(administrator));
 
         for (var module : ModuleCatalog.MODULES) {
             services.forModule(module).findAll(module).forEach(row ->

@@ -9,15 +9,19 @@ import vn.ninhkieupharma.pharmacy.common.service.Localization;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
-import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
 public final class PromotionsLoyaltyService extends SingleModuleService {
+    private final FeatureModuleDAO repository;
+
     public PromotionsLoyaltyService(FeatureModuleDAO repository) {
         super(repository, "UC-18");
+        this.repository = repository;
     }
 
     @Override
@@ -42,30 +46,17 @@ public final class PromotionsLoyaltyService extends SingleModuleService {
 
     @Override
     public void delete(ModuleDefinition module, UUID rowId) {
-        ModuleRow existing = findRow(module, rowId);
-        List<String> values = new ArrayList<>(existing.values());
-        values.set(9, "INACTIVE");
-        super.update(module, rowId, values);
+        requirePromotionModule(module);
+        repository.deactivatePromotion(rowId, Optional.empty());
     }
 
     public void finishImmediately(ModuleDefinition module, UUID rowId) {
-        ModuleRow existing = findRow(module, rowId);
-        List<String> values = new ArrayList<>(existing.values());
-        LocalDate today = LocalDate.now();
-        LocalDate redemptionStart = LocalDate.parse(values.get(4));
-        if (!today.isBefore(redemptionStart)) {
-            LocalDate accrualEnd = LocalDate.parse(values.get(5));
-            values.set(5, accrualEnd.isAfter(today) ? today.toString() : accrualEnd.toString());
-            values.set(6, today.toString());
-        }
-        values.set(9, "INACTIVE");
-        super.update(module, rowId, values);
+        requirePromotionModule(module);
+        repository.deactivatePromotion(rowId, Optional.of(LocalDate.now()));
     }
 
     private ModuleRow findRow(ModuleDefinition module, UUID rowId) {
-        if (!supports(module)) {
-            throw new IllegalArgumentException("Module is not supported by the promotions service.");
-        }
+        requirePromotionModule(module);
         return findAll(module).stream()
                 .filter(row -> row.id().equals(rowId))
                 .findFirst()
@@ -77,17 +68,18 @@ public final class PromotionsLoyaltyService extends SingleModuleService {
             List<String> values,
             boolean validateStartDate,
             ModuleRow existing) {
-        if (!supports(module)) {
-            throw new IllegalArgumentException("Module is not supported by the promotions service.");
-        }
+        requirePromotionModule(module);
         requireValues(values);
-        if (values.stream().anyMatch(value -> value == null)) {
-            throw new IllegalArgumentException("A points program requires 10 non-null field values.");
-        }
         if (values.get(0).isBlank() || values.get(1).isBlank()) {
             throw new IllegalArgumentException("Program code and name are required.");
         }
-        decimal(values.get(2), "Discount percentage", BigDecimal.ZERO, new BigDecimal("100"));
+        if (values.get(0).length() > 30 || values.get(1).length() > 120) {
+            throw new IllegalArgumentException("Program code and name may contain up to 30 and 120 characters.");
+        }
+        BigDecimal discount = decimal(values.get(2), "Discount percentage", 5, 2);
+        if (discount.signum() < 0 || discount.compareTo(new BigDecimal("100")) > 0) {
+            throw new IllegalArgumentException("Discount percentage must be between 0 and 100.");
+        }
         LocalDate accrualStart = date(values.get(3), "Accrual start");
         LocalDate redemptionStart = date(values.get(4), "Redemption start");
         LocalDate accrualEnd = date(values.get(5), "Accrual end");
@@ -102,12 +94,11 @@ public final class PromotionsLoyaltyService extends SingleModuleService {
             throw new IllegalArgumentException(
                     Localization.text("Điều kiện ngày: bắt đầu tích ≤ bắt đầu đổi ≤ kết thúc tích ≤ kết thúc đổi."));
         }
-        decimal(values.get(7), "Redemption value per point", BigDecimal.ZERO, null);
-        if (parseDecimal(values.get(7)).signum() == 0) {
+        if (decimal(values.get(7), "Redemption value per point", 20, 8).signum() <= 0) {
             throw new IllegalArgumentException("Redemption value per point must be greater than zero.");
         }
         validateTiers(values.get(8));
-        if (!Set.of("ACTIVE", "INACTIVE").contains(values.get(9).toUpperCase(java.util.Locale.ROOT))) {
+        if (!Set.of("ACTIVE", "INACTIVE").contains(values.get(9).toUpperCase(Locale.ROOT))) {
             throw new IllegalArgumentException("Program status must be ACTIVE or INACTIVE.");
         }
 
@@ -117,8 +108,14 @@ public final class PromotionsLoyaltyService extends SingleModuleService {
         }
     }
 
+    private void requirePromotionModule(ModuleDefinition module) {
+        if (!supports(module) || module.report()) {
+            throw new IllegalArgumentException("Module is not supported by the promotions service.");
+        }
+    }
+
     private void requireValues(List<String> values) {
-        if (values == null || values.size() != 10) {
+        if (values == null || values.size() != 10 || values.stream().anyMatch(value -> value == null)) {
             throw new IllegalArgumentException("A points program requires 10 non-null field values.");
         }
     }
@@ -133,34 +130,29 @@ public final class PromotionsLoyaltyService extends SingleModuleService {
             if (parts.length != 2) {
                 throw new IllegalArgumentException("Each points tier must contain threshold:rate.");
             }
-            BigDecimal threshold = parseDecimal(parts[0]);
-            if (threshold.signum() < 0 || !thresholds.add(threshold.stripTrailingZeros())) {
+            BigDecimal threshold = decimal(parts[0], "Tier threshold", 20, 2);
+            if (threshold.signum() < 0 || !thresholds.add(threshold)) {
                 throw new IllegalArgumentException(
                         "Tier thresholds must be non-negative and unique.");
             }
-            BigDecimal rate = parseDecimal(parts[1]);
+            BigDecimal rate = decimal(parts[1], "Tier rate", 20, 8);
             if (rate.signum() <= 0) {
                 throw new IllegalArgumentException("Each points rate must be greater than zero.");
             }
         }
     }
 
-    private BigDecimal decimal(String value, String label, BigDecimal minimum, BigDecimal maximum) {
-        BigDecimal parsed = parseDecimal(value);
-        if (parsed.compareTo(minimum) < 0 || (maximum != null && parsed.compareTo(maximum) > 0)) {
-            String range = maximum == null ? "must be greater than or equal to zero"
-                    : "must be between " + minimum + " and " + maximum;
-            throw new IllegalArgumentException(label + " " + range + ".");
-        }
-        return parsed;
-    }
-
-    private BigDecimal parseDecimal(String value) {
+    private BigDecimal decimal(String value, String label, int precision, int scale) {
+        BigDecimal parsed;
         try {
-            return new BigDecimal(value.trim().replace(',', '.'));
+            parsed = new BigDecimal(value.trim().replace(',', '.')).stripTrailingZeros();
         } catch (NumberFormatException exception) {
             throw new IllegalArgumentException("Enter a valid decimal number: " + value, exception);
         }
+        if (parsed.scale() > scale || parsed.abs().compareTo(BigDecimal.TEN.pow(precision - scale)) >= 0) {
+            throw new IllegalArgumentException(label + " is outside the supported precision.");
+        }
+        return parsed;
     }
 
     private LocalDate date(String value, String label) {

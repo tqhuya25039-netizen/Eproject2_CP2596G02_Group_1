@@ -30,12 +30,34 @@ class RelationalFeatureModuleDAOTest {
     }
 
     @Test
-    void complexWorkflowsRemainReadOnlyInsteadOfWritingPartialRecords() {
-        for (String moduleId : List.of("UC-03", "UC-04", "UC-12", "UC-14", "UC-17")) {
+    void rejectsIncompleteOrGenericWritesBeforeOpeningADatabaseConnection() {
+        for (String moduleId : List.of("UC-03", "UC-04")) {
+            assertThrows(IllegalArgumentException.class, () -> dao.create(moduleId, List.of()));
+        }
+        for (String moduleId : List.of("UC-12", "UC-14", "UC-17")) {
             UnsupportedOperationException error = assertThrows(UnsupportedOperationException.class,
                     () -> dao.create(moduleId, List.of()));
             assertTrue(error.getMessage().contains(moduleId));
         }
+    }
+
+    @Test
+    void validatesProductCodeAndParsesGroupedSellingPrices() {
+        assertThrows(IllegalArgumentException.class, () -> dao.create("UC-08",
+                List.of("X".repeat(31), "T", "N", "", "Hộp", "10", "FALSE", "ACTIVE", "")));
+        assertEquals(new BigDecimal("1234.56"), RelationalFeatureModuleDAO.parseUnitPrice("1.234,56 ₫"));
+        assertEquals(new BigDecimal("1234.56"), RelationalFeatureModuleDAO.parseUnitPrice("1,234.56 VND"));
+        assertThrows(IllegalArgumentException.class, () -> RelationalFeatureModuleDAO.parseUnitPrice("1,2,3"));
+    }
+
+    @Test
+    void validatesCustomerCodeBirthdayAndPointLimitsBeforeConnecting() {
+        assertThrows(IllegalArgumentException.class, () -> dao.create("UC-16",
+                List.of("X".repeat(21), "T", "0901234567", "", "", "0", "ACTIVE", "", "")));
+        assertThrows(IllegalArgumentException.class, () -> dao.create("UC-16",
+                List.of("", "T", "0901234567", "", "", "0", "ACTIVE", "", "9999-01-01")));
+        assertThrows(IllegalArgumentException.class, () -> dao.create("UC-16",
+                List.of("", "T", "0901234567", "", "", "4294967296", "ACTIVE", "", "")));
     }
 
     @Test
@@ -179,13 +201,13 @@ class RelationalFeatureModuleDAOTest {
     }
 
     @Test
-    void customerManagementIsNotExposedAsAStaffNavigationModule() {
+    void customerManagementIsAvailableToStaffWithAdminOnlyArchiving() {
         var customerModule = ModuleCatalog.MODULES.stream()
                 .filter(module -> module.id().equals("UC-16"))
                 .findFirst()
                 .orElseThrow();
 
-        assertFalse(customerModule.staffAccessible());
+        assertTrue(customerModule.staffAccessible());
         assertEquals(9, customerModule.columns().size());
 
         var salesModule = ModuleCatalog.MODULES.stream()

@@ -22,7 +22,7 @@ public final class DatabaseConnection {
             "customers", java.util.Set.of("is_blocked", "block_reason", "date_of_birth"),
             "products", java.util.Set.of("selling_price"),
             "sales", java.util.Set.of("promotion_discount_amount", "points_discount_amount",
-                    "prescription_code", "prescription_date", "prescribing_doctor",
+                    "redeem_points", "requested_points", "revision", "prescription_code", "prescription_date", "prescribing_doctor",
                     "clinic", "diagnosis", "note"),
             "sale_items", java.util.Set.of("dosage_instructions", "treatment_days"));
 
@@ -47,7 +47,7 @@ public final class DatabaseConnection {
                 throw new MissingSchemaException(SCHEMA_MISMATCH_PREFIX + " tables: "
                         + String.join(", ", missing)
                         + ". Back up the existing database, then run the applicable scripts in "
-                        + "environment/migrations/ in order (V2, V3, then V4) using MySQL/phpMyAdmin. "
+                        + "environment/migrations/ in order using MySQL/phpMyAdmin. "
                         + "Do not run the full schema script against an existing database.");
             }
             for (var entry : REQUIRED_COLUMNS.entrySet()) {
@@ -67,8 +67,8 @@ public final class DatabaseConnection {
                 if (!missingColumns.isEmpty()) {
                     throw new MissingSchemaException(SCHEMA_MISMATCH_PREFIX + " "
                             + entry.getKey() + " columns: " + String.join(", ", missingColumns)
-                            + ". Back up the existing database, then run V2, V3, and "
-                            + "environment/migrations/V4__transactional_sales_checkout.sql in order "
+                            + ". Back up the existing database, then run the applicable scripts (V2 through V6) "
+                            + "from environment/migrations in order "
                             + "using MySQL/phpMyAdmin. Do not run the full schema script against an existing database.");
                 }
             }

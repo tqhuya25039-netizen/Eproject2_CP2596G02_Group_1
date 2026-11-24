@@ -3,7 +3,19 @@ package vn.ninhkieupharma.pharmacy.common.dao;
 import vn.ninhkieupharma.pharmacy.config.DatabaseConnection;
 import vn.ninhkieupharma.pharmacy.common.model.ModuleRow;
 import vn.ninhkieupharma.pharmacy.common.auth.PasswordHasher;
+import vn.ninhkieupharma.pharmacy.common.auth.User;
+import vn.ninhkieupharma.pharmacy.common.auth.UserRole;
 import vn.ninhkieupharma.pharmacy.common.dao.InventoryWorkflowDAO;
+import vn.ninhkieupharma.pharmacy.common.service.Localization;
+import vn.ninhkieupharma.pharmacy.domain.sales.SaleAllergyWarning;
+import vn.ninhkieupharma.pharmacy.domain.sales.SaleLineRequest;
+import vn.ninhkieupharma.pharmacy.domain.sales.SaleStockShortage;
+import vn.ninhkieupharma.pharmacy.domain.sales.SaleOrderRequest;
+import vn.ninhkieupharma.pharmacy.domain.sales.SalePendingOrder;
+import vn.ninhkieupharma.pharmacy.domain.sales.SaleQuote;
+import vn.ninhkieupharma.pharmacy.domain.sales.SaleProduct;
+import vn.ninhkieupharma.pharmacy.domain.sales.SaleReceipt;
+import vn.ninhkieupharma.pharmacy.domain.sales.SalesReport;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -16,12 +28,16 @@ import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Maps the feature screens to the normalized tables in 01_schema_quan_ly_cua_hang.sql.
@@ -29,6 +45,33 @@ import java.util.UUID;
  */
 public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, InventoryWorkflowDAO {
     private static final long ROW_ID_PREFIX = 0x4e4b504841524d41L;
+    private final SalesCheckoutDAO salesCheckoutDAO = new SalesCheckoutDAO();
+    private final UserRole actorRole;
+
+    /** Creates a repository without access to administrative sales operations. */
+    public RelationalFeatureModuleDAO() {
+        actorRole = null;
+    }
+
+    public RelationalFeatureModuleDAO(User authenticatedUser) {
+        Objects.requireNonNull(authenticatedUser);
+        if (!authenticatedUser.active() || authenticatedUser.id() < 1) {
+            throw new IllegalArgumentException("An active user is required.");
+        }
+        actorRole = Objects.requireNonNull(authenticatedUser.role());
+    }
+
+    private void requireSalesAdministrationAccess(String moduleId) {
+        if ("UC-18".equals(moduleId) || "UC-19".equals(moduleId)) {
+            requireAdministrator();
+        }
+    }
+
+    private void requireAdministrator() {
+        if (actorRole != UserRole.ADMIN) {
+            throw new SecurityException(Localization.text("Chức năng này chỉ dành cho quản trị viên."));
+        }
+    }
 
     @Override
     public boolean supportsNativeReports() {
@@ -37,6 +80,7 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
 
     @Override
     public List<ModuleRow> findAll(String moduleId) {
+        requireSalesAdministrationAccess(moduleId);
         return switch (moduleId) {
             case "UC-01" -> query(moduleId, """
                     SELECT e.employee_id, e.employee_code, e.full_name, COALESCE(e.phone, ''),
@@ -317,25 +361,263 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
                     JOIN employees e ON e.employee_id = s.employee_id
                     ORDER BY s.sold_at DESC
                     """);
-            case "UC-18" -> query(moduleId, """
-                    SELECT promotion_id, promotion_code, promotion_name,
-                           CONCAT(discount_percent, '%'),
-                           CONCAT(DATE_FORMAT(starts_at, '%Y-%m-%d'), ' to ',
-                                  DATE_FORMAT(ends_at, '%Y-%m-%d')),
-                           IF(is_active, 'ACTIVE', 'INACTIVE')
-                    FROM promotions ORDER BY promotion_id
-                    """);
-            case "UC-19" -> query(moduleId, """
-                    SELECT DATE(sold_at), COUNT(*), CAST(ROUND(SUM(total_amount), 0) AS UNSIGNED),
-                           CAST(ROUND(SUM(discount_amount), 0) AS UNSIGNED),
-                           CAST(ROUND(AVG(total_amount), 0) AS UNSIGNED)
-                    FROM sales
-                    WHERE status = 'COMPLETED'
-                    GROUP BY DATE(sold_at)
-                    ORDER BY DATE(sold_at)
-                    """);
+            case "UC-18" -> findPromotions();
+            case "UC-19" -> findCompletedSalesByDay(null, null).stream()
+                    .map(day -> row(day.start().toEpochDay(), List.of(
+                            day.start().toString(),
+                            Long.toString(day.totals().orderCount()),
+                            day.totals().revenue().toPlainString(),
+                            day.totals().discount().toPlainString(),
+                            day.totals().averageOrderValue().toPlainString())))
+                    .toList();
             default -> throw new IllegalArgumentException("Unknown feature module: " + moduleId);
         };
+    }
+
+    @Override
+    public List<SalesReport.Row> findCompletedSalesByDay(
+            LocalDate fromInclusive, LocalDate toExclusive) {
+        requireAdministrator();
+        boolean limited = fromInclusive != null && toExclusive != null;
+        if (!limited && (fromInclusive != null || toExclusive != null)) {
+            throw new IllegalArgumentException("Both report date boundaries are required.");
+        }
+        String sql = """
+                SELECT DATE(sold_at), COUNT(*), SUM(total_amount), SUM(discount_amount)
+                FROM sales
+                WHERE status = 'COMPLETED'
+                """ + (limited ? " AND sold_at >= ? AND sold_at < ? " : "") + """
+                GROUP BY DATE(sold_at)
+                ORDER BY DATE(sold_at)
+                """;
+        try (Connection connection = DatabaseConnection.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            if (limited) {
+                statement.setObject(1, fromInclusive.atStartOfDay());
+                statement.setObject(2, toExclusive.atStartOfDay());
+            }
+            try (ResultSet resultSet = statement.executeQuery()) {
+                List<SalesReport.Row> rows = new ArrayList<>();
+                while (resultSet.next()) {
+                    LocalDate day = resultSet.getObject(1, LocalDate.class);
+                    SalesReport.Totals totals = new SalesReport.Totals(resultSet.getLong(2),
+                            resultSet.getBigDecimal(3), resultSet.getBigDecimal(4));
+                    rows.add(new SalesReport.Row(day, totals));
+                }
+                return List.copyOf(rows);
+            }
+        } catch (SQLException exception) {
+            throw new DataAccessException("Không thể tải báo cáo doanh thu.", exception);
+        }
+    }
+
+    @Override
+    public List<ModuleRow> findCustomerPurchaseHistory(UUID customerId) {
+        long id = numericId(customerId);
+        try (Connection connection = DatabaseConnection.getConnection();
+             PreparedStatement statement = connection.prepareStatement("""
+                     SELECT sale_id, sale_code, DATE_FORMAT(sold_at, '%d/%m/%Y %H:%i'),
+                            CAST(total_amount AS CHAR), status
+                     FROM sales
+                     WHERE customer_id = ?
+                     ORDER BY sold_at DESC, sale_id DESC
+                     """)) {
+            statement.setLong(1, id);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                List<ModuleRow> history = new ArrayList<>();
+                while (resultSet.next()) {
+                    history.add(row(resultSet.getLong("sale_id"), List.of(
+                            resultSet.getString("sale_code"),
+                            resultSet.getString(3),
+                            resultSet.getString(4),
+                            resultSet.getString("status"))));
+                }
+                return List.copyOf(history);
+            }
+        } catch (SQLException exception) {
+            throw new DataAccessException("Could not load customer purchase history.", exception);
+        }
+    }
+
+    @Override
+    public List<ModuleRow> findCustomerLoyaltyHistory(UUID customerId) {
+        long id = numericId(customerId);
+        try (Connection connection = DatabaseConnection.getConnection();
+             PreparedStatement statement = connection.prepareStatement("""
+                    SELECT sale_id, sale_code, DATE_FORMAT(sold_at, '%d/%m/%Y %H:%i'),
+                           points_earned, points_redeemed
+                    FROM sales
+                    WHERE customer_id = ? AND status = 'COMPLETED'
+                      AND (points_earned > 0 OR points_redeemed > 0)
+                    ORDER BY sold_at DESC, sale_id DESC
+                    """)) {
+            statement.setLong(1, id);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                List<ModuleRow> history = new ArrayList<>();
+                while (resultSet.next()) {
+                    long saleId = resultSet.getLong("sale_id");
+                    String saleCode = resultSet.getString("sale_code");
+                    String date = resultSet.getString(3);
+                    long earned = resultSet.getLong("points_earned");
+                    long redeemed = resultSet.getLong("points_redeemed");
+                    if (earned > 0) {
+                        history.add(row(loyaltyEventRowId(saleId, false),
+                                List.of(saleCode, date, "Tích điểm", Long.toString(earned))));
+                    }
+                    if (redeemed > 0) {
+                        history.add(new ModuleRow(loyaltyEventRowId(saleId, true),
+                                List.of(saleCode, date, "Đổi điểm", Long.toString(-redeemed))));
+                    }
+                }
+                return List.copyOf(history);
+            }
+        } catch (SQLException exception) {
+            throw new DataAccessException("Không thể tải lịch sử điểm của khách hàng.", exception);
+        }
+    }
+
+    @Override
+    public List<ModuleRow> findCustomersAvailableForSale() {
+        try (Connection connection = DatabaseConnection.getConnection();
+             PreparedStatement statement = connection.prepareStatement("""
+                     SELECT c.customer_id, c.full_name, COALESCE(c.phone, '') AS phone,
+                            COALESCE(c.email, '') AS email,
+                            COALESCE((SELECT GROUP_CONCAT(CONCAT(ca.allergen_name,
+                                IF(ca.note IS NULL OR ca.note = '', '', CONCAT(' | ', ca.note)))
+                                ORDER BY ca.allergen_name SEPARATOR '\\n')
+                                FROM customer_allergies ca WHERE ca.customer_id = c.customer_id), '') AS allergies,
+                            c.loyalty_points,
+                            COALESCE(DATE_FORMAT(c.date_of_birth, '%Y-%m-%d'), '') AS date_of_birth
+                     FROM customers c
+                     WHERE c.is_active = 1 AND c.is_blocked = 0
+                     ORDER BY c.full_name, c.customer_id
+                     """);
+             ResultSet resultSet = statement.executeQuery()) {
+            List<ModuleRow> customers = new ArrayList<>();
+            while (resultSet.next()) {
+                customers.add(row(resultSet.getLong("customer_id"), List.of(
+                        resultSet.getString("full_name"),
+                        resultSet.getString("phone"),
+                        resultSet.getString("email"),
+                        resultSet.getString("allergies"),
+                        Long.toString(resultSet.getLong("loyalty_points")),
+                        resultSet.getString("date_of_birth"))));
+            }
+            return List.copyOf(customers);
+        } catch (SQLException exception) {
+            throw new DataAccessException("Could not load customers available for sale.", exception);
+        }
+    }
+
+    @Override
+    public ModuleRow createCustomerFromSale(List<String> values) {
+        requireSize("Sales customer", values, 5);
+        List<String> customerValues = List.of(
+                "", values.get(0), values.get(1), values.get(2), values.get(3),
+                "0", "ACTIVE", "", values.get(4));
+        ModuleRow customer = createCustomer(customerValues);
+        return row(customer.id().getLeastSignificantBits(), List.of(
+                values.get(0), values.get(1), values.get(2), values.get(3), "0", values.get(4)));
+    }
+
+    @Override
+    public ModuleRow updateCustomerFromSale(UUID customerId, List<String> values) {
+        requireSize("Sales customer", values, 5);
+        long id = numericId(customerId);
+        validateCustomer(List.of(
+                "", values.get(0), values.get(1), values.get(2), values.get(3),
+                "0", "ACTIVE", "", values.get(4)));
+        List<CustomerAllergy> allergies = parseCustomerAllergies(values.get(3));
+        return transaction(connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    UPDATE customers
+                    SET full_name = ?, phone = ?, email = ?, date_of_birth = ?
+                    WHERE customer_id = ? AND is_active = 1 AND is_blocked = 0
+                    """)) {
+                statement.setString(1, values.get(0).trim());
+                statement.setString(2, blankToNull(values.get(1)));
+                statement.setString(3, blankToNull(values.get(2)));
+                setCustomerDate(statement, 4, values.get(4));
+                statement.setLong(5, id);
+                if (statement.executeUpdate() != 1) {
+                    throw new IllegalStateException("Khách hàng không còn đủ điều kiện cập nhật tại quầy.");
+                }
+            }
+            replaceAllergies(connection, id, allergies);
+            long points;
+            try (PreparedStatement statement = connection.prepareStatement(
+                    "SELECT loyalty_points FROM customers WHERE customer_id = ?")) {
+                statement.setLong(1, id);
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    if (!resultSet.next()) {
+                        throw new IllegalStateException("Không tìm thấy hồ sơ khách hàng.");
+                    }
+                    points = resultSet.getLong(1);
+                }
+            }
+            return row(id, List.of(
+                    values.get(0), values.get(1), values.get(2), values.get(3),
+                    Long.toString(points), values.get(4)));
+        });
+    }
+
+    @Override
+    public List<SaleProduct> findSaleProducts() {
+        return salesCheckoutDAO.findSaleProducts();
+    }
+
+    @Override
+    public List<SaleStockShortage> previewSaleStock(List<SaleLineRequest> lines) {
+        return salesCheckoutDAO.previewSaleStock(lines);
+    }
+
+    @Override
+    public List<SaleAllergyWarning> findSaleAllergyWarnings(
+            Optional<UUID> customerId, List<UUID> productIds) {
+        return salesCheckoutDAO.findAllergyWarnings(customerId, productIds);
+    }
+
+    @Override
+    public SaleReceipt completeSale(long authenticatedUserId, SaleOrderRequest request) {
+        return salesCheckoutDAO.completeSale(authenticatedUserId, request);
+    }
+
+    @Override
+    public SalePendingOrder createPendingSale(long authenticatedUserId, SaleOrderRequest request) {
+        return salesCheckoutDAO.createPendingSale(authenticatedUserId, request);
+    }
+
+    @Override
+    public SalePendingOrder updatePendingSale(
+            long authenticatedUserId, UUID saleId, long revision, SaleOrderRequest request) {
+        return salesCheckoutDAO.updatePendingSale(authenticatedUserId, saleId, revision, request);
+    }
+
+    @Override
+    public SalePendingOrder findPendingSale(UUID saleId) {
+        return salesCheckoutDAO.findPendingSale(saleId);
+    }
+
+    @Override
+    public SaleQuote quotePendingSale(
+            long authenticatedUserId, UUID saleId, long revision, SaleOrderRequest request) {
+        return salesCheckoutDAO.quotePendingSale(authenticatedUserId, saleId, revision, request);
+    }
+
+    @Override
+    public SaleReceipt completePendingSale(
+            long authenticatedUserId, UUID saleId, long revision, SaleOrderRequest request, SaleQuote acceptedQuote) {
+        return salesCheckoutDAO.completePendingSale(authenticatedUserId, saleId, revision, request, acceptedQuote);
+    }
+
+    @Override
+    public void cancelPendingSale(long authenticatedUserId, UUID saleId, long revision) {
+        salesCheckoutDAO.cancelPendingSale(authenticatedUserId, saleId, revision);
+    }
+
+    @Override
+    public List<ModuleRow> findSaleDetails(UUID saleId) {
+        return salesCheckoutDAO.findSaleDetails(saleId);
     }
 
     @Override
@@ -679,11 +961,13 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
 
     @Override
     public void replaceAll(String moduleId, List<List<String>> values) {
+        requireSalesAdministrationAccess(moduleId);
         throw new UnsupportedOperationException("Bulk replacement is disabled to protect existing business data.");
     }
 
     @Override
     public ModuleRow create(String moduleId, List<String> values) {
+        requireSalesAdministrationAccess(moduleId);
         return switch (moduleId) {
             case "UC-01" -> createEmployeeAccount(values);
             case "UC-02" -> createAvailability(values);
@@ -710,10 +994,12 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
         if (values.get(6).getBytes(StandardCharsets.UTF_8).length > 72) {
             throw new IllegalArgumentException("Mật khẩu không được dài quá 72 byte UTF-8.");
         }
-        final String roleCode = normalizeRoleCode(values.get(5));
+        if (!"STAFF".equals(normalizeRoleCode(values.get(5)))) {
+            throw new IllegalArgumentException("Mục tạo tài khoản nhân viên chỉ hỗ trợ vai trò STAFF.");
+        }
         String passwordHash = PasswordHasher.hash(values.get(6));
         long employeeId = transaction(connection -> {
-            long roleId = resolveId(connection, "SELECT role_id FROM roles WHERE role_code = ?", roleCode);
+            long roleId = resolveId(connection, "SELECT role_id FROM roles WHERE role_code = ?", "STAFF");
             long userId = insert(connection, """
                     INSERT INTO users (role_id, username, password_hash, is_active)
                     VALUES (?, ?, ?, 1)
@@ -736,7 +1022,7 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
         });
         return row(employeeId, List.of(
                 values.get(0).trim(), values.get(1).trim(), values.get(2).trim(), values.get(3).trim(),
-                values.get(4).trim(), "ADMIN".equals(roleCode) ? "Quản trị viên" : "Nhân viên", "Đang hoạt động"));
+                values.get(4).trim(), "Nhân viên", "Đang hoạt động"));
     }
 
     private ModuleRow updateEmployeeAccount(long employeeId, List<String> values) {
@@ -806,6 +1092,7 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
 
     @Override
     public ModuleRow update(String moduleId, UUID rowId, List<String> values) {
+        requireSalesAdministrationAccess(moduleId);
         long id = numericId(rowId);
         return switch (moduleId) {
             case "UC-01" -> updateEmployeeAccount(id, values);
@@ -824,6 +1111,7 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
 
     @Override
     public void delete(String moduleId, UUID rowId) {
+        requireSalesAdministrationAccess(moduleId);
         long id = numericId(rowId);
         if ("UC-08".equals(moduleId)) {
             transaction(connection -> {
@@ -852,13 +1140,17 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
                     """, statement -> statement.setLong(1, id));
             return;
         }
+        if ("UC-16".equals(moduleId)) {
+            execute("UPDATE customers SET is_active = 0 WHERE customer_id = ?",
+                    statement -> statement.setLong(1, id));
+            return;
+        }
         String sql = switch (moduleId) {
             case "UC-02" -> "DELETE FROM employee_availabilities WHERE availability_id = ?";
             case "UC-03" -> "DELETE FROM schedule_assignments WHERE assignment_id = ?";
             case "UC-04" -> "DELETE FROM attendance_records WHERE attendance_id = ?";
             case "UC-07" -> "DELETE FROM product_categories WHERE category_id = ?";
-            case "UC-16" -> "DELETE FROM customers WHERE customer_id = ?";
-            case "UC-18" -> "DELETE FROM promotions WHERE promotion_id = ?";
+            case "UC-18" -> "UPDATE promotions SET is_active = 0 WHERE promotion_id = ?";
             default -> throw readOnly(moduleId);
         };
         executeOne(sql, id);
@@ -1401,11 +1693,8 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
         return row(id, List.of(values.get(0).trim(), values.get(1).trim(),
                 isActive(values.get(2)) ? "ACTIVE" : "INACTIVE"));
     }
-private ModuleRow createProduct(List<String> values) {
-        requireSize("UC-08", values, 9);
-        if (values.get(0).isBlank() || values.get(1).isBlank() || values.get(2).isBlank() || values.get(4).isBlank()) {
-            throw new IllegalArgumentException("Mã sản phẩm, tên sản phẩm, danh mục và đơn vị tính là bắt buộc.");
-        }
+    private ModuleRow createProduct(List<String> values) {
+        validateProductFields(values);
         java.math.BigDecimal unitPrice = parseUnitPrice(values.get(5));
         long categoryId = resolveId("SELECT category_id FROM product_categories WHERE category_name = ?",
                 values.get(2).trim());
@@ -1432,10 +1721,7 @@ private ModuleRow createProduct(List<String> values) {
     }
 
     private ModuleRow updateProduct(long id, List<String> values) {
-        requireSize("UC-08", values, 9);
-        if (values.get(0).isBlank() || values.get(1).isBlank() || values.get(2).isBlank() || values.get(4).isBlank()) {
-            throw new IllegalArgumentException("Mã sản phẩm, tên sản phẩm, danh mục và đơn vị tính là bắt buộc.");
-        }
+        validateProductFields(values);
         java.math.BigDecimal unitPrice = parseUnitPrice(values.get(5));
         long categoryId = resolveId("SELECT category_id FROM product_categories WHERE category_name = ?",
                 values.get(2).trim());
@@ -1461,23 +1747,38 @@ private ModuleRow createProduct(List<String> values) {
         return row(id, values);
     }
 
+    private void validateProductFields(List<String> values) {
+        requireSize("UC-08", values, 9);
+        if (values.get(0).isBlank() || values.get(1).isBlank() || values.get(2).isBlank() || values.get(4).isBlank()) {
+            throw new IllegalArgumentException("Mã sản phẩm, tên sản phẩm, danh mục và đơn vị tính là bắt buộc.");
+        }
+        requireFieldLength(values.get(0).trim(), 30, "Mã sản phẩm");
+        requireFieldLength(values.get(1).trim(), 180, "Tên sản phẩm");
+        requireFieldLength(values.get(3), 80, "Dạng bào chế");
+        requireFieldLength(values.get(4).trim(), 30, "Đơn vị tính");
+    }
+
     static java.math.BigDecimal parseUnitPrice(String raw) {
         if (raw == null || raw.isBlank()) {
             return java.math.BigDecimal.ZERO;
         }
         try {
-            String cleaned = raw.replace("VNĐ", "").replace("VND", "").replace("đ", "")
+            String cleaned = raw.replace("VNĐ", "").replace("VND", "").replace("đ", "").replace("₫", "")
                     .replaceAll("\\s+", "");
-            if (cleaned.matches("\\d+[.,]\\d{1,2}")) {
-                cleaned = cleaned.replace(',', '.');
-            } else {
-                cleaned = cleaned.replace(".", "").replace(",", "");
-            }
-            java.math.BigDecimal price = new java.math.BigDecimal(cleaned)
-                    .setScale(2, java.math.RoundingMode.HALF_UP);
-            if (price.signum() < 0) {
+            if (cleaned.startsWith("-")) {
                 throw new IllegalArgumentException("Giá bán không được âm.");
             }
+            if (cleaned.matches("\\d+(?:[.,]\\d{1,2})?")) {
+                cleaned = cleaned.replace(',', '.');
+            } else if (cleaned.matches("\\d{1,3}(?:\\.\\d{3})+(?:,\\d{1,2})?")) {
+                cleaned = cleaned.replace(".", "").replace(',', '.');
+            } else if (cleaned.matches("\\d{1,3}(?:,\\d{3})+(?:\\.\\d{1,2})?")) {
+                cleaned = cleaned.replace(",", "");
+            } else {
+                throw new NumberFormatException();
+            }
+            java.math.BigDecimal price = new java.math.BigDecimal(cleaned)
+                    .setScale(2);
             if (price.compareTo(new java.math.BigDecimal("9999999999.99")) > 0) {
                 throw new IllegalArgumentException("Giá bán vượt quá giới hạn cho phép.");
             }
@@ -1625,12 +1926,13 @@ private ModuleRow createProduct(List<String> values) {
     private ModuleRow createCustomer(List<String> values) {
         requireSize("UC-16", values, 9);
         validateCustomer(values);
+        long initialPoints = parseInitialPoints(values.get(5));
         List<CustomerAllergy> allergies = parseCustomerAllergies(values.get(4));
         String status = normalizeCustomerStatus(values.get(6));
-        long id = transaction(connection -> {
+        return transaction(connection -> {
             String code = values.get(0).isBlank()
                     ? "KH" + Long.toUnsignedString(System.nanoTime(), 36).toUpperCase(Locale.ROOT)
-                    : values.get(0);
+                    : values.get(0).trim();
             long customerId = insert(connection, """
                     INSERT INTO customers
                         (customer_code, full_name, phone, email, date_of_birth, loyalty_points,
@@ -1642,49 +1944,134 @@ private ModuleRow createProduct(List<String> values) {
                 statement.setString(3, blankToNull(values.get(2)));
                 statement.setString(4, blankToNull(values.get(3)));
                 setCustomerDate(statement, 5, values.get(8));
-                statement.setInt(6, parseNonNegativeInt(values.get(5), "Điểm tích lũy"));
+                statement.setLong(6, initialPoints);
                 statement.setBoolean(7, customerIsActive(status));
                 statement.setBoolean(8, customerIsBlocked(status));
                 statement.setString(9, customerIsBlocked(status) ? blankToNull(values.get(7)) : null);
             });
             replaceAllergies(connection, customerId, allergies);
-            return customerId;
+            return readUpdatedCustomer(connection, customerId, values);
         });
-        return row(id, values);
     }
 
     private ModuleRow updateCustomer(long id, List<String> values) {
-        requireSize("UC-16", values, 9);
-        validateCustomer(values);
-        List<CustomerAllergy> allergies = parseCustomerAllergies(values.get(4));
-        String status = normalizeCustomerStatus(values.get(6));
+        return updateCustomer(id, values, true);
+    }
+
+    @Override
+    public ModuleRow updateCustomerProfile(UUID customerId, List<String> values) {
+        return updateCustomer(numericId(customerId), values, false);
+    }
+
+    @Override
+    public void deleteCustomerWithoutSales(UUID customerId) {
+        requireAdministrator();
+        long id = numericId(customerId);
         transaction(connection -> {
-            execute(connection, """
-                    UPDATE customers SET customer_code = ?, full_name = ?, phone = ?, email = ?,
-                        date_of_birth = ?, loyalty_points = ?, is_active = ?, is_blocked = ?,
-                        block_reason = ? WHERE customer_id = ?
-                    """, statement -> {
-                statement.setString(1, values.get(0));
-                statement.setString(2, values.get(1));
-                statement.setString(3, blankToNull(values.get(2)));
-                statement.setString(4, blankToNull(values.get(3)));
-                setCustomerDate(statement, 5, values.get(8));
-                statement.setInt(6, parseNonNegativeInt(values.get(5), "Điểm tích lũy"));
-                statement.setBoolean(7, customerIsActive(status));
-                statement.setBoolean(8, customerIsBlocked(status));
-                statement.setString(9, customerIsBlocked(status) ? blankToNull(values.get(7)) : null);
-                statement.setLong(10, id);
-            });
-            replaceAllergies(connection, id, allergies);
+            try (PreparedStatement customer = connection.prepareStatement(
+                    "SELECT customer_id FROM customers WHERE customer_id = ? FOR UPDATE")) {
+                customer.setLong(1, id);
+                try (ResultSet row = customer.executeQuery()) {
+                    if (!row.next()) {
+                        throw new IllegalStateException(Localization.text("Không tìm thấy hồ sơ khách hàng."));
+                    }
+                }
+            }
+            // Checkout also locks the customer row before creating or changing an order for this customer.
+            try (PreparedStatement sales = connection.prepareStatement(
+                    "SELECT 1 FROM sales WHERE customer_id = ? LIMIT 1")) {
+                sales.setLong(1, id);
+                try (ResultSet rows = sales.executeQuery()) {
+                    if (rows.next()) {
+                        throw new IllegalStateException(Localization.text(
+                                "Khách hàng đã có đơn hàng. Hãy lưu trữ hồ sơ."));
+                    }
+                }
+            }
+            replaceAllergies(connection, id, List.of());
+            try (PreparedStatement delete = connection.prepareStatement(
+                    "DELETE FROM customers WHERE customer_id = ?")) {
+                delete.setLong(1, id);
+                if (delete.executeUpdate() != 1) {
+                    throw new SQLException("Could not delete the locked customer.");
+                }
+            }
             return null;
         });
-        return row(id, values);
+    }
+
+    private ModuleRow updateCustomer(long id, List<String> values, boolean updateStatus) {
+        requireSize("UC-16", values, 9);
+        if (updateStatus) {
+            validateCustomer(values);
+        } else {
+            validateCustomerDetails(values);
+        }
+        List<CustomerAllergy> allergies = parseCustomerAllergies(values.get(4));
+        String sql = "UPDATE customers SET full_name = ?, phone = ?, email = ?, date_of_birth = ?"
+                + (updateStatus ? ", customer_code = ?, is_active = ?, is_blocked = ?, block_reason = ?" : "")
+                + " WHERE customer_id = ?";
+        return transaction(connection -> {
+            execute(connection, sql, statement -> {
+                statement.setString(1, values.get(1));
+                statement.setString(2, blankToNull(values.get(2)));
+                statement.setString(3, blankToNull(values.get(3)));
+                setCustomerDate(statement, 4, values.get(8));
+                if (updateStatus) {
+                    String status = normalizeCustomerStatus(values.get(6));
+                    statement.setString(5, values.get(0).trim());
+                    statement.setBoolean(6, customerIsActive(status));
+                    statement.setBoolean(7, customerIsBlocked(status));
+                    statement.setString(8, customerIsBlocked(status) ? blankToNull(values.get(7)) : null);
+                }
+                statement.setLong(updateStatus ? 9 : 5, id);
+            });
+            ModuleRow updated = readUpdatedCustomer(connection, id, values);
+            replaceAllergies(connection, id, allergies);
+            return updated;
+        });
+    }
+
+    private ModuleRow readUpdatedCustomer(Connection connection, long id, List<String> values)
+            throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT customer_code, loyalty_points, is_active, is_blocked, COALESCE(block_reason, '') AS block_reason
+                FROM customers WHERE customer_id = ?
+                """)) {
+            statement.setLong(1, id);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    throw new IllegalStateException("Không tìm thấy hồ sơ khách hàng.");
+                }
+                boolean active = resultSet.getBoolean("is_active");
+                boolean blocked = resultSet.getBoolean("is_blocked");
+                String status = active ? (blocked ? "BLOCKED" : "ACTIVE")
+                        : (blocked ? "ARCHIVED_BLOCKED" : "ARCHIVED");
+                return row(id, List.of(
+                        resultSet.getString("customer_code"), values.get(1), values.get(2),
+                        values.get(3), values.get(4), resultSet.getString("loyalty_points"),
+                        status, resultSet.getString("block_reason"), values.get(8)));
+            }
+        }
     }
 
     private void validateCustomer(List<String> values) {
+        validateCustomerDetails(values);
+        requireFieldLength(values.get(0).trim(), 20, "Mã khách hàng");
+        requireFieldLength(values.get(7), 255, "Lý do hạn chế bán");
+        String status = normalizeCustomerStatus(values.get(6));
+        if (customerIsBlocked(status) && values.get(7).isBlank()) {
+            throw new IllegalArgumentException("Cần nhập lý do khi hạn chế bán.");
+        }
+    }
+
+    private void validateCustomerDetails(List<String> values) {
         if (values.get(1).isBlank()) {
             throw new IllegalArgumentException("Tên khách hàng là bắt buộc.");
         }
+        requireFieldLength(values.get(1), 120, "Tên khách hàng");
+        requireFieldLength(values.get(2), 20, "Số điện thoại");
+        requireFieldLength(values.get(3), 120, "Email");
         String phone = values.get(2).replaceAll("[\\s().-]", "");
         String email = values.get(3).trim();
         if (!phone.isEmpty() && !phone.matches("\\+?[0-9]{7,15}")) {
@@ -1696,19 +2083,37 @@ private ModuleRow createProduct(List<String> values) {
         if (phone.isEmpty() && email.isEmpty()) {
             throw new IllegalArgumentException("Cần nhập số điện thoại hoặc email của khách hàng.");
         }
-        String status = normalizeCustomerStatus(values.get(6));
-        if (customerIsBlocked(status) && values.get(7).isBlank()) {
-            throw new IllegalArgumentException("Cần nhập lý do khi hạn chế bán.");
-        }
-        parseNonNegativeInt(values.get(5), "Điểm tích lũy");
         parseCustomerAllergies(values.get(4));
         if (!values.get(8).isBlank()) {
+            LocalDate birthday;
             try {
-                LocalDate.parse(values.get(8));
+                birthday = LocalDate.parse(values.get(8));
             } catch (java.time.format.DateTimeParseException exception) {
                 throw new IllegalArgumentException("Ngày sinh phải theo định dạng YYYY-MM-DD.", exception);
             }
+            if (birthday.getYear() < 1000 || birthday.isAfter(LocalDate.now(java.time.ZoneId.of("Asia/Ho_Chi_Minh")))) {
+                throw new IllegalArgumentException("Ngày sinh phải hợp lệ và không ở tương lai.");
+            }
         }
+    }
+
+    private static void requireFieldLength(String value, int maximum, String label) {
+        if (value.codePointCount(0, value.length()) > maximum) {
+            throw new IllegalArgumentException(Localization.text(label) + " "
+                    + Localization.text("vượt quá ") + maximum + Localization.text(" ký tự."));
+        }
+    }
+
+    private static long parseInitialPoints(String value) {
+        try {
+            long points = Long.parseLong(value.trim());
+            if (points >= 0 && points <= SaleOrderRequest.MAX_POINT_BALANCE) {
+                return points;
+            }
+        } catch (NumberFormatException exception) {
+            // Report the permitted range below.
+        }
+        throw new IllegalArgumentException(Localization.text("Số điểm phải là số nguyên từ 0 đến 4294967295."));
     }
 
     private String normalizeCustomerStatus(String status) {
@@ -1773,40 +2178,133 @@ private ModuleRow createProduct(List<String> values) {
         }
     }
 
+    private List<ModuleRow> findPromotions() {
+        List<ModuleRow> joinedRows = query("UC-18", """
+                SELECT p.promotion_id, p.promotion_code, p.promotion_name, p.discount_percent,
+                       DATE_FORMAT(p.starts_at, '%Y-%m-%d'),
+                       DATE_FORMAT(p.points_redemption_starts_at, '%Y-%m-%d'),
+                       DATE_FORMAT(p.points_earning_ends_at, '%Y-%m-%d'),
+                       DATE_FORMAT(p.ends_at, '%Y-%m-%d'), p.redemption_vnd_per_point,
+                       IF(p.is_active, 'ACTIVE', 'INACTIVE'),
+                       CONCAT(t.minimum_invoice_total_vnd, ':', t.points_rate_percent)
+                FROM promotions p
+                LEFT JOIN promotion_point_tiers t ON t.promotion_id = p.promotion_id
+                ORDER BY p.promotion_id, t.minimum_invoice_total_vnd
+                """);
+        Map<UUID, List<ModuleRow>> rowsByPromotion = new LinkedHashMap<>();
+        for (ModuleRow joinedRow : joinedRows) {
+            rowsByPromotion.computeIfAbsent(joinedRow.id(), ignored -> new ArrayList<>()).add(joinedRow);
+        }
+        return rowsByPromotion.values().stream().map(promotionRows -> {
+            ModuleRow firstRow = promotionRows.getFirst();
+            List<String> values = new ArrayList<>(firstRow.values().subList(0, 9));
+            String tiers = promotionRows.stream()
+                    .map(joinedRow -> joinedRow.values().get(9))
+                    .filter(tier -> !tier.isBlank())
+                    .collect(Collectors.joining(";"));
+            values.add(8, tiers);
+            return new ModuleRow(firstRow.id(), values);
+        }).toList();
+    }
+
     private ModuleRow createPromotion(List<String> values) {
-        requireSize("UC-18", values, 5);
-        LocalDate[] dates = parseDateRange(values.get(3));
-        long id = insert("""
-                INSERT INTO promotions
-                    (promotion_code, promotion_name, discount_percent, starts_at, ends_at, is_active)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """, statement -> {
-            statement.setString(1, values.get(0));
-            statement.setString(2, values.get(1));
-            statement.setBigDecimal(3, parsePercent(values.get(2)));
-            statement.setString(4, dates[0] + " 00:00:00");
-            statement.setString(5, dates[1] + " 23:59:59");
-            statement.setBoolean(6, isActive(values.get(4)));
+        requireSize("UC-18", values, 10);
+        long id = transaction(connection -> {
+            long promotionId = insert(connection, """
+                    INSERT INTO promotions
+                        (promotion_code, promotion_name, discount_percent, starts_at,
+                         points_redemption_starts_at, points_earning_ends_at, ends_at,
+                         redemption_vnd_per_point, is_active)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, statement -> bindPromotion(statement, values));
+            insertPromotionTiers(connection, promotionId, values.get(8));
+            return promotionId;
         });
         return row(id, values);
     }
 
     private ModuleRow updatePromotion(long id, List<String> values) {
-        requireSize("UC-18", values, 5);
-        LocalDate[] dates = parseDateRange(values.get(3));
-        execute("""
-                UPDATE promotions SET promotion_code = ?, promotion_name = ?, discount_percent = ?,
-                    starts_at = ?, ends_at = ?, is_active = ? WHERE promotion_id = ?
-                """, statement -> {
-            statement.setString(1, values.get(0));
-            statement.setString(2, values.get(1));
-            statement.setBigDecimal(3, parsePercent(values.get(2)));
-            statement.setString(4, dates[0] + " 00:00:00");
-            statement.setString(5, dates[1] + " 23:59:59");
-            statement.setBoolean(6, isActive(values.get(4)));
-            statement.setLong(7, id);
+        requireSize("UC-18", values, 10);
+        transaction(connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    UPDATE promotions SET promotion_code = ?, promotion_name = ?, discount_percent = ?,
+                        starts_at = ?, points_redemption_starts_at = ?, points_earning_ends_at = ?,
+                        ends_at = ?, redemption_vnd_per_point = ?, is_active = ?
+                    WHERE promotion_id = ?
+                    """)) {
+                bindPromotion(statement, values);
+                statement.setLong(10, id);
+                if (statement.executeUpdate() != 1) {
+                    throw new IllegalArgumentException("The selected program no longer exists.");
+                }
+            }
+            execute(connection, "DELETE FROM promotion_point_tiers WHERE promotion_id = ?",
+                    statement -> statement.setLong(1, id));
+            insertPromotionTiers(connection, id, values.get(8));
+            return null;
         });
         return row(id, values);
+    }
+
+    @Override
+    public void deactivatePromotion(UUID promotionId, Optional<LocalDate> endOn) {
+        requireAdministrator();
+        if (endOn.isEmpty()) {
+            delete("UC-18", promotionId);
+            return;
+        }
+        long id = numericId(promotionId);
+        var endOfDay = endOn.orElseThrow().atTime(23, 59, 59);
+        execute("""
+                UPDATE promotions SET is_active = 0,
+                    points_earning_ends_at = CASE WHEN points_redemption_starts_at <= ?
+                        THEN LEAST(points_earning_ends_at, ?) ELSE points_earning_ends_at END,
+                    ends_at = CASE WHEN points_redemption_starts_at <= ?
+                        THEN LEAST(ends_at, ?) ELSE ends_at END
+                WHERE promotion_id = ?
+                """, statement -> {
+            statement.setObject(1, endOfDay);
+            statement.setObject(2, endOfDay);
+            statement.setObject(3, endOfDay);
+            statement.setObject(4, endOfDay);
+            statement.setLong(5, id);
+        });
+    }
+
+    private static void bindPromotion(PreparedStatement statement, List<String> values) throws SQLException {
+        statement.setString(1, values.get(0));
+        statement.setString(2, values.get(1));
+        statement.setBigDecimal(3, promotionDecimal(values.get(2)));
+        statement.setObject(4, LocalDate.parse(values.get(3)).atStartOfDay());
+        statement.setObject(5, LocalDate.parse(values.get(4)).atStartOfDay());
+        statement.setObject(6, LocalDate.parse(values.get(5)).atTime(23, 59, 59));
+        statement.setObject(7, LocalDate.parse(values.get(6)).atTime(23, 59, 59));
+        statement.setBigDecimal(8, promotionDecimal(values.get(7)));
+        statement.setBoolean(9, parseStatus(values.get(9)));
+    }
+
+    private static void insertPromotionTiers(Connection connection, long promotionId, String encodedTiers)
+            throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                INSERT INTO promotion_point_tiers (promotion_id, minimum_invoice_total_vnd, points_rate_percent)
+                VALUES (?, ?, ?)
+                """)) {
+            for (String tier : encodedTiers.split(";", -1)) {
+                String[] parts = tier.split(":", -1);
+                if (parts.length != 2) {
+                    throw new IllegalArgumentException("Each points tier must contain threshold:rate.");
+                }
+                statement.setLong(1, promotionId);
+                statement.setBigDecimal(2, promotionDecimal(parts[0]));
+                statement.setBigDecimal(3, promotionDecimal(parts[1]));
+                statement.addBatch();
+            }
+            statement.executeBatch();
+        }
+    }
+
+    private static BigDecimal promotionDecimal(String value) {
+        return new BigDecimal(value.trim().replace(',', '.'));
     }
 
     private List<ModuleRow> query(String moduleId, String sql) {
@@ -1918,19 +2416,9 @@ private ModuleRow createProduct(List<String> values) {
                     exception.addSuppressed(rollbackException);
                 }
                 throw exception;
-            } finally {
-                connection.setAutoCommit(true);
             }
         } catch (SQLException exception) {
-            if (exception.getErrorCode() == 1062 || exception.getErrorCode() == 1451
-                || exception.getErrorCode() == 1452) {
-                throw friendly(exception, "");
-            }
-            String detail = exception.getMessage();
-            String message = "Could not complete the related business-data transaction "
-                    + "(SQLState " + exception.getSQLState() + ", error " + exception.getErrorCode() + ")"
-                    + (detail == null || detail.isBlank() ? "." : ": " + detail);
-            throw new DataAccessException(message, exception);
+            throw friendly(exception, "Không thể lưu thay đổi vào cơ sở dữ liệu.");
         }
     }
 
@@ -1980,14 +2468,16 @@ private ModuleRow createProduct(List<String> values) {
 
     private static RuntimeException friendly(SQLException exception, String fallback) {
         return switch (exception.getErrorCode()) {
-            case 1062 -> new IllegalArgumentException(
-                    "Dữ liệu bị trùng: mã hoặc tên này đã tồn tại.", exception);
+            case 1062 -> new IllegalArgumentException(Localization.text(
+                    exception.getMessage() != null && exception.getMessage().contains("uq_customers_phone")
+                            ? "Số điện thoại này đã được dùng cho một khách hàng."
+                            : "Dữ liệu bị trùng: mã hoặc tên này đã tồn tại."), exception);
             case 1451 -> new IllegalArgumentException(
                     "Không thể xóa vì bản ghi đang được sử dụng (sản phẩm, phiếu nhập, hóa đơn...). "
                             + "Hãy chuyển trạng thái sang INACTIVE thay vì xóa.", exception);
             case 1452 -> new IllegalArgumentException(
                     "Dữ liệu liên quan không tồn tại hoặc đã bị xóa.", exception);
-            default -> new DataAccessException(fallback, exception);
+            default -> DataAccessException.fromSql(exception, fallback);
         };
     }
 
@@ -2012,41 +2502,13 @@ private ModuleRow createProduct(List<String> values) {
         }
     }
 
-    private static java.math.BigDecimal parsePercent(String value) {
-        try {
-            java.math.BigDecimal parsed = new java.math.BigDecimal(value.replace("%", "").trim());
-            if (parsed.signum() < 0 || parsed.compareTo(new java.math.BigDecimal("100")) > 0) {
-                throw new NumberFormatException();
-            }
-            return parsed;
-        } catch (NumberFormatException exception) {
-            throw new IllegalArgumentException("Discount must be between 0 and 100 percent.", exception);
-        }
-    }
-
-    private static LocalDate[] parseDateRange(String value) {
-        String[] parts = value.split("\\s+to\\s+", 2);
-        if (parts.length != 2) {
-            parts = value.split("\\s+đến\\s+", 2);
-        }
-        try {
-            if (parts.length != 2) {
-                throw new IllegalArgumentException("Enter a date range as YYYY-MM-DD to YYYY-MM-DD.");
-            }
-            LocalDate start = LocalDate.parse(parts[0].trim());
-            LocalDate end = LocalDate.parse(parts[1].trim());
-            if (!start.isBefore(end)) {
-                throw new IllegalArgumentException("Promotion end date must be after its start date.");
-            }
-            return new LocalDate[]{start, end};
-        } catch (java.time.format.DateTimeParseException exception) {
-            throw new IllegalArgumentException("Promotion dates must use YYYY-MM-DD.", exception);
-        }
-    }
-
     private static UnsupportedOperationException readOnly(String moduleId) {
         return new UnsupportedOperationException(moduleId + " is read-only in this UI because its operation "
                 + "requires related records/transactions that this form does not collect.");
+    }
+
+    private static UUID loyaltyEventRowId(long saleId, boolean redeemed) {
+        return new UUID(saleId, redeemed ? 0x52454445454dL : 0x4541524e4544L);
     }
 
     private record CustomerAllergy(String name, String note) {

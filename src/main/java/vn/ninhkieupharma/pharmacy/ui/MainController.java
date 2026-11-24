@@ -29,9 +29,11 @@ import vn.ninhkieupharma.pharmacy.common.model.ModuleDefinition;
 import vn.ninhkieupharma.pharmacy.common.auth.UserRole;
 import vn.ninhkieupharma.pharmacy.common.service.ModuleCatalog;
 import vn.ninhkieupharma.pharmacy.common.service.Localization;
+import vn.ninhkieupharma.pharmacy.domain.sales.SalesReport;
 import vn.ninhkieupharma.pharmacy.ui.PageRenderer;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.text.NumberFormat;
 import java.util.List;
 import java.util.Locale;
@@ -61,6 +63,8 @@ public class MainController {
     private Button languageButton;
     @FXML
     private Label exchangeRateStatusLabel;
+    @FXML
+    private FlowPane topActions;
 
     private UserRole role;
     private String username;
@@ -129,7 +133,7 @@ public class MainController {
                             "/vn/ninhkieupharma/pharmacy/view/login.fxml")));
             Parent login = loader.load();
             loader.<LoginController>getController().setServices(
-                    featureServices, authenticationService, exchangeRateService);
+                    authenticationService, exchangeRateService);
             Stage stage = (Stage) root.getScene().getWindow();
             SceneFactory.setLoginScene(stage, login);
         } catch (IOException exception) {
@@ -227,6 +231,7 @@ public class MainController {
         subtitle.getStyleClass().add("page-description");
         heading.getChildren().addAll(title, subtitle);
 
+        SalesReport.Totals completedSales = featureServices.salesService().completedSalesTotals();
         HBox cards = new HBox(16);
         cards.getChildren().addAll(
                 overviewCard(Localization.text("NHÂN SỰ HOẠT ĐỘNG"),
@@ -241,8 +246,8 @@ public class MainController {
                         inventoryMovementQuantity() + Localization.text(" đơn vị"),
                         Localization.text("Tổng biến động đọc từ MySQL")),
                 overviewCard(Localization.text("DOANH THU GHI NHẬN"),
-                        formatCurrency(recordedRevenue()),
-                        invoiceCount() + Localization.text(" hóa đơn đã ghi nhận")));
+                        formatCurrency(completedSales.revenue()),
+                        completedSales.orderCount() + Localization.text(" hóa đơn đã ghi nhận")));
 
         VBox workspace = new VBox(14);
         workspace.getStyleClass().add("dashboard-panel");
@@ -370,6 +375,7 @@ public class MainController {
         List<List<String>> rows = featureServices.forModule(ModuleCatalog.MODULES.get(16))
                 .findAll(ModuleCatalog.MODULES.get(16)).stream()
                 .map(ModuleRow::values)
+                .filter(row -> "COMPLETED".equals(row.get(5)) || "Hoàn tất".equals(row.get(5)))
                 .limit(3)
                 .toList();
         table.setItems(FXCollections.observableArrayList(rows.stream()
@@ -459,35 +465,12 @@ public class MainController {
                 .sum());
     }
 
-    private long recordedRevenue() {
-        ModuleDefinition invoices = ModuleCatalog.MODULES.get(16);
-        return featureServices.forModule(invoices).findAll(invoices).stream()
-                .mapToLong(row -> parseAmount(row.values().get(4)))
-                .sum();
-    }
-
-    private int invoiceCount() {
-        ModuleDefinition invoices = ModuleCatalog.MODULES.get(16);
-        return featureServices.forModule(invoices).findAll(invoices).size();
-    }
-
-    private long parseAmount(String value) {
-        String digits = value.replaceAll("[^0-9]", "");
-        if (digits.isEmpty()) {
-            throw new IllegalArgumentException("Invoice total must contain a numeric amount: " + value);
-        }
-        try {
-            return Long.parseLong(digits);
-        } catch (NumberFormatException exception) {
-            throw new IllegalArgumentException("Invoice total is outside the supported range: " + value,
-                    exception);
-        }
-    }
-
-    private String formatCurrency(long amount) {
-        java.util.Locale locale = Localization.isEnglish()
-                ? java.util.Locale.US : java.util.Locale.forLanguageTag("vi-VN");
-        return java.text.NumberFormat.getNumberInstance(locale).format(amount) + " ₫";
+    private String formatCurrency(BigDecimal amount) {
+        NumberFormat formatter = NumberFormat.getNumberInstance(
+                Localization.isEnglish() ? Locale.US : Locale.forLanguageTag("vi-VN"));
+        formatter.setMaximumFractionDigits(2);
+        formatter.setMinimumFractionDigits(amount.stripTrailingZeros().scale() > 0 ? 2 : 0);
+        return formatter.format(amount) + " ₫";
     }
 }
 

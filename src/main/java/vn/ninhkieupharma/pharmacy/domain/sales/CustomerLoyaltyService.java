@@ -19,6 +19,18 @@ public final class CustomerLoyaltyService extends SingleModuleService {
         return repository.findCustomerPurchaseHistory(customerId);
     }
 
+    public List<ModuleRow> findLoyaltyHistory(UUID customerId) {
+        return repository.findCustomerLoyaltyHistory(customerId);
+    }
+
+    public ModuleRow updateProfile(UUID customerId, List<String> values) {
+        return repository.updateCustomerProfile(customerId, values);
+    }
+
+    public void deleteWithoutSales(UUID customerId) {
+        repository.deleteCustomerWithoutSales(customerId);
+    }
+
     public List<ModuleRow> findAvailableForSale() {
         return repository.findCustomersAvailableForSale();
     }

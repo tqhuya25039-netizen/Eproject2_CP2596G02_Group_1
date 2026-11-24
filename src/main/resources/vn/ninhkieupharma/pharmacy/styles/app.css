@@ -286,6 +286,21 @@
     -fx-font-weight: bold;
 }
 
+.topbar-actions {
+    -fx-alignment: center-right;
+    -fx-padding: 0;
+    -fx-hgap: 8px;
+    -fx-vgap: 6px;
+}
+
+.exchange-rate-status {
+    -fx-text-fill: #64748B;
+    -fx-font-size: 12px;
+    -fx-padding: 6px 8px;
+    -fx-wrap-text: true;
+    -fx-text-overrun: ellipsis;
+}
+
 .demo-badge {
     -fx-background-color: #EFF6FF;
     -fx-background-radius: 20px;
@@ -406,6 +421,7 @@
     -fx-background-radius: 9px;
     -fx-border-color: #E2E8F0;
     -fx-border-radius: 9px;
+    -fx-min-width: 720px;
 }
 
 .data-table .column-header-background {
@@ -436,6 +452,36 @@
     -fx-border-color: #E2E8F0;
     -fx-border-radius: 9px;
     -fx-padding: 14px;
+}
+
+.action-bar,
+.filter-bar .flow-pane,
+.order-form .flow-pane {
+    -fx-hgap: 10px;
+    -fx-vgap: 8px;
+}
+
+.action-bar {
+    -fx-padding: 2px 0 4px 0;
+}
+
+.action-bar .text-field,
+.action-bar .search-input {
+    -fx-pref-height: 42px;
+}
+
+.order-form {
+    -fx-min-width: 600px;
+    -fx-max-width: 1400px;
+}
+
+.checkout-line {
+    -fx-pref-width: 100%;
+}
+
+.checkout-line .flow-pane {
+    -fx-hgap: 8px;
+    -fx-vgap: 8px;
 }
 
 .report-empty, .empty-dashboard {
@@ -483,6 +529,8 @@
 
 .form-dialog {
     -fx-background-color: #FFFFFF;
+    -fx-pref-width: 760px;
+    -fx-pref-height: 620px;
 }
 
 .helper-text {
