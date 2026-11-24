@@ -188,13 +188,15 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
                            CAST(COALESCE(p.selling_price, 0) AS CHAR),
                            CASE WHEN p.requires_prescription = 1 THEN 'Yes' ELSE 'No' END,
                            CASE WHEN p.is_active = 1 THEN 'ACTIVE' ELSE 'INACTIVE' END,
-                           COALESCE(GROUP_CONCAT(DISTINCT s.supplier_name ORDER BY s.supplier_name SEPARATOR ', '), '')
+                           COALESCE(GROUP_CONCAT(DISTINCT s.supplier_name ORDER BY s.supplier_name SEPARATOR ', '), ''),
+                           p.minimum_age_years
                     FROM products p
                     JOIN product_categories c ON c.category_id = p.category_id
                     LEFT JOIN supplier_products sp ON sp.product_id = p.product_id
                     LEFT JOIN suppliers s ON s.supplier_id = sp.supplier_id
                     GROUP BY p.product_id, p.product_code, p.product_name, c.category_name,
-                             p.dosage_form, p.unit_name, p.selling_price, p.requires_prescription, p.is_active
+                             p.dosage_form, p.unit_name, p.selling_price, p.requires_prescription,
+                             p.is_active, p.minimum_age_years
                     ORDER BY p.product_code
                     """);
             case "UC-09" -> query(moduleId, """
@@ -461,7 +463,7 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
                     long earned = resultSet.getLong("points_earned");
                     long redeemed = resultSet.getLong("points_redeemed");
                     if (earned > 0) {
-                        history.add(row(loyaltyEventRowId(saleId, false),
+                        history.add(new ModuleRow(loyaltyEventRowId(saleId, false),
                                 List.of(saleCode, date, "Tích điểm", Long.toString(earned))));
                     }
                     if (redeemed > 0) {
@@ -1702,8 +1704,8 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
             long id = insert(connection, """
                     INSERT INTO products
                         (category_id, product_code, barcode, product_name, dosage_form, unit_name,
-                        selling_price, requires_prescription, is_active)
-                    VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)
+                       selling_price, requires_prescription, is_active, minimum_age_years)
+                    VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
                     """, statement -> {
                 statement.setLong(1, categoryId);
                 statement.setString(2, values.get(0).trim());
@@ -1713,6 +1715,7 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
                 statement.setBigDecimal(6, unitPrice);
                 statement.setBoolean(7, affirmative(values.get(6)));
                 statement.setBoolean(8, isActive(values.get(7)));
+                statement.setInt(9, parseMinimumAge(values.get(9)));
             });
             synchronizeProductSuppliers(connection, id, values.get(8));
             return id;
@@ -1728,7 +1731,8 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
         transaction(connection -> {
             execute(connection, """
                     UPDATE products SET category_id = ?, product_code = ?, product_name = ?,
-                           dosage_form = ?, unit_name = ?,selling_price = ?, requires_prescription = ?, is_active = ?
+                           dosage_form = ?, unit_name = ?, selling_price = ?, requires_prescription = ?,
+                           is_active = ?, minimum_age_years = ?
                     WHERE product_id = ?
                     """, statement -> {
                 statement.setLong(1, categoryId);
@@ -1739,7 +1743,8 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
                 statement.setBigDecimal(6, unitPrice);
                 statement.setBoolean(7, affirmative(values.get(6)));
                 statement.setBoolean(8, isActive(values.get(7)));
-                statement.setLong(9, id);
+                statement.setInt(9, parseMinimumAge(values.get(9)));
+                statement.setLong(10, id);
             });
             synchronizeProductSuppliers(connection, id, values.get(8));
             return null;
@@ -1748,7 +1753,7 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
     }
 
     private void validateProductFields(List<String> values) {
-        requireSize("UC-08", values, 9);
+        requireSize("UC-08", values, 10);
         if (values.get(0).isBlank() || values.get(1).isBlank() || values.get(2).isBlank() || values.get(4).isBlank()) {
             throw new IllegalArgumentException("Mã sản phẩm, tên sản phẩm, danh mục và đơn vị tính là bắt buộc.");
         }
@@ -1756,6 +1761,22 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
         requireFieldLength(values.get(1).trim(), 180, "Tên sản phẩm");
         requireFieldLength(values.get(3), 80, "Dạng bào chế");
         requireFieldLength(values.get(4).trim(), 30, "Đơn vị tính");
+        parseMinimumAge(values.get(9));
+    }
+
+    static int parseMinimumAge(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return 0;
+        }
+        try {
+            int age = Integer.parseInt(raw.trim());
+            if (age < 0 || age > 120) {
+                throw new IllegalArgumentException("Tuổi tối thiểu phải là số nguyên từ 0 đến 120.");
+            }
+            return age;
+        } catch (NumberFormatException exception) {
+            throw new IllegalArgumentException("Tuổi tối thiểu phải là số nguyên từ 0 đến 120.", exception);
+        }
     }
 
     static java.math.BigDecimal parseUnitPrice(String raw) {
