@@ -104,7 +104,7 @@ foreach ($line in [System.IO.File]::ReadAllLines($envFile)) {
     }
     $separator = $line.IndexOf('=')
     if ($separator -lt 1) {
-        throw "Invalid .env line; expected KEY=VALUE: $line"
+        throw 'Invalid .env line. Use KEY=VALUE.'
     }
 
     $key = $line.Substring(0, $separator).Trim()
