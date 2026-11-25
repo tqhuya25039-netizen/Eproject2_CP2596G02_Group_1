@@ -67,12 +67,12 @@ class FeatureServicesTest {
 
         ModuleRow created = products.create(productsModule,
                 List.of("TEST01", "Test Product", "Test Category", "Tablet", "Box",
-                        "12000", "No", "ACTIVE", "Test Supplier"));
+                        "12000", "No", "ACTIVE", "Test Supplier", "0"));
         assertEquals(originalSize + 1, products.findAll(productsModule).size());
 
         products.update(productsModule, created.id(),
                 List.of("TEST01", "Updated Product", "Test Category", "Tablet", "Box",
-                        "12000", "No", "ACTIVE", "Test Supplier"));
+                        "12000", "No", "ACTIVE", "Test Supplier", "0"));
         assertTrue(products.findAll(productsModule).stream()
                 .anyMatch(row -> row.id().equals(created.id())
                         && row.values().get(1).equals("Updated Product")));
@@ -95,7 +95,7 @@ class FeatureServicesTest {
 
         ModuleRow created = products.create(productsModule,
                 List.of("TEST02", "Test Product", "Test Category", "Tablet", "Box",
-                        "12000", "No", "ACTIVE", "Test Supplier A, Test Supplier B"));
+                        "12000", "No", "ACTIVE", "Test Supplier A, Test Supplier B", "0"));
         List<ModuleRow> categoryRows = services.forModule(categoryReport).findAll(categoryReport);
         assertTrue(categoryRows.stream()
                 .anyMatch(row -> row.values().get(1).equals("Test Category")

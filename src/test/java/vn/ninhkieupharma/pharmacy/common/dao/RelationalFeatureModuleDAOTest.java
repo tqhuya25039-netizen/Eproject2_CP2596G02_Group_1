@@ -44,10 +44,22 @@ class RelationalFeatureModuleDAOTest {
     @Test
     void validatesProductCodeAndParsesGroupedSellingPrices() {
         assertThrows(IllegalArgumentException.class, () -> dao.create("UC-08",
-                List.of("X".repeat(31), "T", "N", "", "Hộp", "10", "FALSE", "ACTIVE", "")));
+                List.of("X".repeat(31), "T", "N", "", "Hộp", "10", "FALSE", "ACTIVE", "", "0")));
         assertEquals(new BigDecimal("1234.56"), RelationalFeatureModuleDAO.parseUnitPrice("1.234,56 ₫"));
         assertEquals(new BigDecimal("1234.56"), RelationalFeatureModuleDAO.parseUnitPrice("1,234.56 VND"));
         assertThrows(IllegalArgumentException.class, () -> RelationalFeatureModuleDAO.parseUnitPrice("1,2,3"));
+    }
+
+    @Test
+    void validatesProductMinimumAgeBeforeConnecting() {
+        assertEquals(18, RelationalFeatureModuleDAO.parseMinimumAge("18"));
+        assertEquals(0, RelationalFeatureModuleDAO.parseMinimumAge(""));
+        assertThrows(IllegalArgumentException.class,
+                () -> RelationalFeatureModuleDAO.parseMinimumAge("-1"));
+        assertThrows(IllegalArgumentException.class,
+                () -> RelationalFeatureModuleDAO.parseMinimumAge("121"));
+        assertThrows(IllegalArgumentException.class,
+                () -> RelationalFeatureModuleDAO.parseMinimumAge("not-a-number"));
     }
 
     @Test

@@ -20,7 +20,7 @@ public final class DatabaseConnection {
             "promotion_point_tiers", "sale_items", "inventory_movements", "product_ingredients");
     private static final java.util.Map<String, java.util.Set<String>> REQUIRED_COLUMNS = java.util.Map.of(
             "customers", java.util.Set.of("is_blocked", "block_reason", "date_of_birth"),
-            "products", java.util.Set.of("selling_price"),
+            "products", java.util.Set.of("selling_price", "minimum_age_years"),
             "sales", java.util.Set.of("promotion_discount_amount", "points_discount_amount",
                     "redeem_points", "requested_points", "revision", "prescription_code", "prescription_date", "prescribing_doctor",
                     "clinic", "diagnosis", "note"),

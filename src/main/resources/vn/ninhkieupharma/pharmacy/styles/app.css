@@ -118,6 +118,25 @@
     -fx-border-width: 1.5px;
 }
 
+.supplier-multiselect {
+    -fx-background-color: #FFFFFF;
+    -fx-background-insets: 0;
+    -fx-background-radius: 7px;
+    -fx-border-color: #D1D5DB;
+    -fx-border-insets: 0;
+    -fx-border-radius: 7px;
+    -fx-border-width: 1px;
+    -fx-padding: 10px 12px;
+    -fx-alignment: CENTER_LEFT;
+    -fx-font-size: 14px;
+    -fx-text-fill: #111827;
+}
+
+.supplier-multiselect:hover,
+.supplier-multiselect:showing {
+    -fx-border-color: #1E40AF;
+}
+
 .checkout-line {
     -fx-padding: 7px;
     -fx-background-color: #FFFFFF;

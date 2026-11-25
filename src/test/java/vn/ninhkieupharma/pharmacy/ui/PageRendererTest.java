@@ -59,6 +59,18 @@ class PageRendererTest {
     }
 
     @Test
+    void productTableAndFormIncludeMinimumAge() {
+        ModuleDefinition products = ModuleCatalog.MODULES.stream()
+                .filter(module -> module.id().equals("UC-08"))
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals(10, products.columns().size());
+        assertEquals("Tuổi tối thiểu", products.columns().get(9));
+        assertEquals(products.columns(), products.formFields());
+    }
+
+    @Test
     void staffCanManageCustomersButOnlyAdminsCanArchiveOrConfigureSales() {
         assertTrue(PageRenderer.canWriteModule("UC-16", UserRole.STAFF));
         assertTrue(PageRenderer.canDeleteModule("UC-16", UserRole.ADMIN));

@@ -24,6 +24,7 @@ import javafx.scene.control.Button;
 import javafx.scene.control.ButtonBar;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.CheckBox;
+import javafx.scene.control.CheckMenuItem;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.DatePicker;
 import javafx.scene.control.Dialog;
@@ -31,6 +32,7 @@ import javafx.scene.control.Hyperlink;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
+import javafx.scene.control.MenuButton;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.SelectionMode;
 import javafx.scene.control.ScrollPane;
@@ -745,7 +747,7 @@ public class PageRenderer {
         }
     }
 
-    private HBox createFilters(
+    private FlowPane createFilters(
             ModuleDefinition module,
             List<Node> filterInputs,
             FilteredList<ModuleRow> rows,
@@ -754,10 +756,17 @@ public class PageRenderer {
         filters.setAlignment(Pos.CENTER_LEFT);
         filters.getStyleClass().add("filter-bar");
         for (int index = 0; index < Math.min(module.formFields().size(), 2); index++) {
-            TextField filter = new TextField();
-            filter.setPromptText(module.formFields().get(index));
+            Node filter;
+            if ("UC-10".equals(module.id()) && index == 1) {
+                filter = createCatalogFilter("UC-07", 0, module.formFields().get(index));
+            } else if ("UC-11".equals(module.id()) && index == 1) {
+                filter = createCatalogFilter("UC-09", 1, module.formFields().get(index));
+            } else {
+                TextField textFilter = new TextField();
+                textFilter.setPromptText(module.formFields().get(index));
+                filter = textFilter;
+            }
             filter.getStyleClass().add("filter-input");
-            HBox.setHgrow(filter, Priority.ALWAYS);
             filterInputs.add(filter);
             filters.getChildren().add(filter);
         }
@@ -766,6 +775,21 @@ public class PageRenderer {
         applyButton.setOnAction(event -> applyFilters(rows, search, filterInputs));
         filters.getChildren().add(applyButton);
         return filters;
+    }
+
+    private ComboBox<String> createCatalogFilter(String moduleId, int valueIndex, String prompt) {
+        ModuleDefinition sourceModule = moduleDefinition(moduleId);
+        FeatureModuleService sourceService = featureServices.forModule(sourceModule);
+        List<String> options = sourceService.findAll(sourceModule).stream()
+                .filter(row -> row.values().size() > valueIndex)
+                .map(row -> row.values().get(valueIndex))
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .toList();
+        ComboBox<String> filter = new ComboBox<>(FXCollections.observableArrayList(options));
+        filter.setPromptText(Localization.text(prompt));
+        filter.setMaxWidth(Double.MAX_VALUE);
+        return filter;
     }
 
     private InventoryFilters createInventoryFilters() {
@@ -1539,7 +1563,7 @@ public class PageRenderer {
                 .toList();
         rows.setPredicate(row -> {
             String searchableRow = row.values().stream()
-                    .map(Localization::text)
+                    .map(value -> value + " " + Localization.text(value))
                     .reduce("", (left, right) -> left + " " + right)
                     .toLowerCase(Locale.ROOT);
             return (query.isBlank() || searchableRow.contains(query))
@@ -1550,6 +1574,10 @@ public class PageRenderer {
     private String inputValue(Node node) {
         if (node instanceof TextInputControl textInput) {
             return textInput.getText().trim();
+        }
+        if (node instanceof ComboBox<?> comboBox) {
+            Object value = comboBox.getValue();
+            return value == null ? "" : value.toString().trim();
         }
         return "";
     }
@@ -2215,6 +2243,9 @@ public class PageRenderer {
             return createPromotionDialog(
                     module, (PromotionsLoyaltyService) featureService, existingRow);
         }
+        if ("UC-08".equals(module.id())) {
+            return createProductDialog(module, existingRow);
+        }
         Dialog<ButtonType> dialog = new Dialog<>();
         dialog.setTitle(existingRow == null
                 ? Localization.text(module.actionLabel())
@@ -2228,15 +2259,26 @@ public class PageRenderer {
         fields.setHgap(16);
         fields.setVgap(12);
         fields.setPadding(new Insets(12, 0, 8, 0));
-        List<TextField> inputs = new ArrayList<>();
+        List<Node> inputs = new ArrayList<>();
         List<String> fieldLabels = "UC-04".equals(module.id())
                 ? module.formFields() : module.columns();
         for (int index = 0; index < fieldLabels.size(); index++) {
-            TextField input = new TextField();
-            input.setPromptText(fieldLabels.get(index));
-            input.getStyleClass().add("text-input");
-            if (existingRow != null) {
-                input.setText(Localization.text(existingRow.values().get(index)));
+            Node input;
+            if ("UC-09".equals(module.id()) && index == 5) {
+                ComboBox<String> status = new ComboBox<>(FXCollections.observableArrayList(
+                        Localization.text("Đang hoạt động"), Localization.text("Ngừng hoạt động")));
+                status.setMaxWidth(Double.MAX_VALUE);
+                status.getSelectionModel().select(existingRow != null
+                        && "INACTIVE".equalsIgnoreCase(existingRow.values().get(index)) ? 1 : 0);
+                input = status;
+            } else {
+                TextField textField = new TextField();
+                textField.setPromptText(fieldLabels.get(index));
+                textField.getStyleClass().add("text-input");
+                if (existingRow != null) {
+                    textField.setText(Localization.text(existingRow.values().get(index)));
+                }
+                input = textField;
             }
             if (("UC-03".equals(module.id()) && index == 3)
                     || ("UC-04".equals(module.id()) && existingRow != null && index < 2)) {
@@ -2259,8 +2301,164 @@ public class PageRenderer {
         dialog.setResultConverter(button -> button == ButtonType.OK ? ButtonType.OK : null);
         return dialog.showAndWait()
                 .filter(ButtonType.OK::equals)
-                .map(ignored -> inputs.stream().map(input -> input.getText().trim()).toList())
+                .map(ignored -> inputs.stream()
+                        .map(input -> input instanceof ComboBox<?> comboBox
+                                ? (comboBox.getSelectionModel().getSelectedIndex() == 0 ? "ACTIVE" : "INACTIVE")
+                                : ((TextField) input).getText().trim())
+                        .toList())
                 .map(values -> preserveUnchangedValues(existingRow, values));
+    }
+
+    private java.util.Optional<List<String>> createProductDialog(
+            ModuleDefinition module,
+            ModuleRow existingRow) {
+        List<String> oldValues = existingRow == null ? List.of() : existingRow.values();
+        TextField code = productTextField(module, oldValues, 0, "");
+        TextField name = productTextField(module, oldValues, 1, "");
+        TextField dosageForm = productTextField(module, oldValues, 3, "");
+        TextField unit = productTextField(module, oldValues, 4, "");
+        TextField price = productTextField(module, oldValues, 5, "");
+        TextField minimumAge = productTextField(module, oldValues, 9, "0");
+
+        ComboBox<String> category = new ComboBox<>();
+        category.setMaxWidth(Double.MAX_VALUE);
+        category.setPromptText(Localization.text("Chọn danh mục"));
+        List<String> categoryNames = new ArrayList<>();
+        ModuleDefinition categoriesModule = moduleDefinition("UC-07");
+        for (ModuleRow row : featureServices.forModule(categoriesModule).findAll(categoriesModule)) {
+            if (row.values().size() >= 3 && isActiveOption(row.values().get(2))) {
+                categoryNames.add(row.values().get(0));
+            }
+        }
+        String oldCategory = productValue(oldValues, 2);
+        if (!oldCategory.isBlank() && !categoryNames.contains(oldCategory)) {
+            categoryNames.add(oldCategory);
+        }
+        category.getItems().setAll(categoryNames);
+        category.getSelectionModel().select(oldCategory);
+
+        List<String> selectedSuppliers = new ArrayList<>();
+        String oldSupplierValue = productValue(oldValues, 8);
+        if (!oldSupplierValue.isBlank()) {
+            for (String supplier : oldSupplierValue.split(",")) {
+                String trimmed = supplier.trim();
+                if (!trimmed.isEmpty() && !selectedSuppliers.contains(trimmed)) {
+                    selectedSuppliers.add(trimmed);
+                }
+            }
+        }
+        MenuButton suppliers = new MenuButton();
+        suppliers.setMaxWidth(Double.MAX_VALUE);
+        suppliers.getStyleClass().add("supplier-multiselect");
+        ModuleDefinition suppliersModule = moduleDefinition("UC-09");
+        List<ModuleRow> supplierRows =
+                featureServices.forModule(suppliersModule).findAll(suppliersModule);
+        List<String> supplierNames = new ArrayList<>();
+        for (ModuleRow row : supplierRows) {
+            if (row.values().size() >= 6
+                    && (isActiveOption(row.values().get(5)) || selectedSuppliers.contains(row.values().get(1)))) {
+                supplierNames.add(row.values().get(1));
+            }
+        }
+        for (String selected : selectedSuppliers) {
+            if (!supplierNames.contains(selected)) {
+                supplierNames.add(selected);
+            }
+        }
+        Runnable updateSupplierLabel = () -> suppliers.setText(selectedSuppliers.isEmpty()
+                ? Localization.text("Chọn nhà cung cấp")
+                : Localization.productText(String.join(", ", selectedSuppliers)));
+        for (String supplierName : supplierNames) {
+            CheckMenuItem item = new CheckMenuItem(Localization.productText(supplierName));
+            item.setSelected(selectedSuppliers.contains(supplierName));
+            item.setOnAction(event -> {
+                if (item.isSelected()) {
+                    if (!selectedSuppliers.contains(supplierName)) {
+                        selectedSuppliers.add(supplierName);
+                    }
+                } else {
+                    selectedSuppliers.remove(supplierName);
+                }
+                updateSupplierLabel.run();
+            });
+            suppliers.getItems().add(item);
+        }
+        updateSupplierLabel.run();
+
+        ComboBox<String> prescription = new ComboBox<>(FXCollections.observableArrayList(
+                Localization.text("Có"), Localization.text("Không")));
+        prescription.setMaxWidth(Double.MAX_VALUE);
+        prescription.getSelectionModel().select(
+                "YES".equalsIgnoreCase(productValue(oldValues, 6))
+                        || "TRUE".equalsIgnoreCase(productValue(oldValues, 6)) ? 0 : 1);
+        ComboBox<String> status = new ComboBox<>(FXCollections.observableArrayList(
+                Localization.text("Đang hoạt động"), Localization.text("Ngừng hoạt động")));
+        status.setMaxWidth(Double.MAX_VALUE);
+        status.getSelectionModel().select(
+                "INACTIVE".equalsIgnoreCase(productValue(oldValues, 7)) ? 1 : 0);
+
+        GridPane fields = new GridPane();
+        fields.setHgap(16);
+        fields.setVgap(12);
+        fields.setPadding(new Insets(12, 0, 8, 0));
+        Node[] inputs = {code, name, category, dosageForm, unit, price, prescription, status, suppliers, minimumAge};
+        for (int index = 0; index < inputs.length; index++) {
+            Label label = new Label(Localization.text(module.formFields().get(index)));
+            label.getStyleClass().add("field-label");
+            fields.add(label, 0, index);
+            fields.add(inputs[index], 1, index);
+            GridPane.setHgrow(inputs[index], Priority.ALWAYS);
+        }
+
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.setTitle(Localization.text(existingRow == null
+                ? module.actionLabel() : "Chỉnh sửa") + (existingRow == null ? "" : " · " + module.title()));
+        dialog.setHeaderText(module.title());
+        dialog.initModality(Modality.APPLICATION_MODAL);
+        dialog.getDialogPane().getButtonTypes().addAll(ButtonType.CANCEL, ButtonType.OK);
+        dialog.getDialogPane().getStyleClass().add("form-dialog");
+        dialog.getDialogPane().setContent(fields);
+        dialog.getDialogPane().setPrefWidth(680);
+        dialog.setResultConverter(button -> button == ButtonType.OK ? ButtonType.OK : null);
+        return dialog.showAndWait()
+                .filter(ButtonType.OK::equals)
+                .map(ignored -> List.of(
+                        code.getText().trim(),
+                        name.getText().trim(),
+                        category.getValue() == null ? "" : category.getValue(),
+                        dosageForm.getText().trim(),
+                        unit.getText().trim(),
+                        price.getText().trim(),
+                        prescription.getSelectionModel().getSelectedIndex() == 0 ? "Yes" : "No",
+                        status.getSelectionModel().getSelectedIndex() == 0 ? "ACTIVE" : "INACTIVE",
+                        String.join(", ", selectedSuppliers),
+                        minimumAge.getText().trim()));
+    }
+
+    private TextField productTextField(
+            ModuleDefinition module, List<String> values, int index, String defaultValue) {
+        TextField field = new TextField(values.size() > index ? values.get(index) : defaultValue);
+        field.getStyleClass().add("text-input");
+        field.setPromptText(Localization.text(module.formFields().get(index)));
+        return field;
+    }
+
+    private String productValue(List<String> values, int index) {
+        return values.size() > index ? values.get(index) : "";
+    }
+
+    private boolean isActiveOption(String value) {
+        return "ACTIVE".equalsIgnoreCase(value)
+                || "Active".equalsIgnoreCase(value)
+                || "Đang hoạt động".equalsIgnoreCase(value)
+                || "Đang hợp tác".equalsIgnoreCase(value);
+    }
+
+    private static ModuleDefinition moduleDefinition(String moduleId) {
+        return ModuleCatalog.MODULES.stream()
+                .filter(module -> module.id().equals(moduleId))
+                .findFirst()
+                .orElseThrow();
     }
 
     private java.util.Optional<List<String>> createCustomerDialog(ModuleRow existingRow) {
