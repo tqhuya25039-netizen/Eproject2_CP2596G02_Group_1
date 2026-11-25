@@ -1,14 +1,18 @@
 package vn.ninhkieupharma.pharmacy.common.dao;
 
 import vn.ninhkieupharma.pharmacy.config.DatabaseConnection;
+import vn.ninhkieupharma.pharmacy.common.model.ModuleRow;
 import vn.ninhkieupharma.pharmacy.common.service.Localization;
 import vn.ninhkieupharma.pharmacy.domain.sales.AllergyMatcher;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleAllergyWarning;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleLineRequest;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleOrderRequest;
+import vn.ninhkieupharma.pharmacy.domain.sales.SalePendingOrder;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleProduct;
 import vn.ninhkieupharma.pharmacy.domain.sales.SalePricing;
+import vn.ninhkieupharma.pharmacy.domain.sales.SaleQuote;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleReceipt;
+import vn.ninhkieupharma.pharmacy.domain.sales.SaleStockShortage;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -32,17 +36,37 @@ import java.util.UUID;
 
 public final class SalesCheckoutDAO {
     private static final long ROW_ID_PREFIX = 0x4e4b504841524d41L;
-    private static final long MAX_UNSIGNED_INT = 4_294_967_295L;
+    private static final long MAX_UNSIGNED_INT = SaleOrderRequest.MAX_POINT_BALANCE;
     private static final BigDecimal MAX_SALE_AMOUNT = new BigDecimal("9999999999.99");
     private static final BigDecimal MAX_SALE_QUANTITY = new BigDecimal("999999999.999");
     private static final BigDecimal ZERO_MONEY = new BigDecimal("0.00");
     private static final ZoneId APP_ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
+    private final ConnectionFactory connections;
+
+    public SalesCheckoutDAO() {
+        this(DatabaseConnection::getConnection);
+    }
+
+    SalesCheckoutDAO(ConnectionFactory connections) {
+        this.connections = connections;
+    }
+
+    @FunctionalInterface
+    interface ConnectionFactory {
+        Connection open() throws SQLException;
+    }
 
     private record ProductState(
             long id, String name, boolean prescriptionRequired, BigDecimal price) {
     }
 
     private record Batch(long id, LocalDate expiry, BigDecimal quantity) {
+    }
+
+    private record BatchAllocation(long batchId, long productId, BigDecimal quantity) {
+    }
+
+    private record InventoryPlan(List<BatchAllocation> allocations, List<SaleStockShortage> shortages) {
     }
 
     private record CustomerState(long id, String name, long points) {
@@ -56,6 +80,16 @@ public final class SalesCheckoutDAO {
     private record LoyaltyPolicy(BigDecimal pointsPerThousand, BigDecimal currencyPerPoint) {
     }
 
+    private record PreparedSale(
+            CustomerState customer, Map<Long, ProductState> products, List<BigDecimal> lineTotals,
+            LocalDateTime soldAt, Promotion promotion, SaleQuote quote, List<BatchAllocation> allocations) {
+    }
+
+    @FunctionalInterface
+    private interface SaleTransaction<T> {
+        T execute(Connection connection) throws SQLException;
+    }
+
     public List<SaleProduct> findSaleProducts() {
         String sql = """
                 SELECT p.product_id, p.product_code, p.product_name, p.unit_name,
@@ -65,32 +99,34 @@ public final class SalesCheckoutDAO {
                            ORDER BY pi.ingredient_name SEPARATOR '\\n')
                            FROM product_ingredients pi WHERE pi.product_id = p.product_id), '') AS ingredients
                 FROM products p
-                LEFT JOIN inventory_batches b ON b.product_id = p.product_id
+                LEFT JOIN inventory_batches b ON b.product_id = p.product_id AND b.expiry_date >= ?
                 WHERE p.is_active = 1
                 GROUP BY p.product_id, p.product_code, p.product_name, p.unit_name,
                          p.requires_prescription, p.selling_price
                 ORDER BY p.product_name, p.product_id
                 """;
-        try (Connection connection = DatabaseConnection.getConnection();
-             PreparedStatement statement = connection.prepareStatement(sql);
-             ResultSet resultSet = statement.executeQuery()) {
-            List<SaleProduct> products = new ArrayList<>();
-            while (resultSet.next()) {
-                String encodedIngredients = resultSet.getString("ingredients");
-                List<String> ingredients = encodedIngredients == null || encodedIngredients.isBlank()
-                        ? List.of()
-                        : encodedIngredients.lines().toList();
-                products.add(new SaleProduct(
-                        rowId(resultSet.getLong("product_id")),
-                        resultSet.getString("product_code"),
-                        resultSet.getString("product_name"),
-                        resultSet.getString("unit_name"),
-                        resultSet.getBoolean("requires_prescription"),
-                        resultSet.getBigDecimal("selling_price"),
-                        resultSet.getBigDecimal("stock_on_hand"),
-                        ingredients));
+        try (Connection connection = connections.open();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setObject(1, LocalDate.now(APP_ZONE));
+            try (ResultSet resultSet = statement.executeQuery()) {
+                List<SaleProduct> products = new ArrayList<>();
+                while (resultSet.next()) {
+                    String encodedIngredients = resultSet.getString("ingredients");
+                    List<String> ingredients = encodedIngredients == null || encodedIngredients.isBlank()
+                            ? List.of()
+                            : encodedIngredients.lines().toList();
+                    products.add(new SaleProduct(
+                            rowId(resultSet.getLong("product_id")),
+                            resultSet.getString("product_code"),
+                            resultSet.getString("product_name"),
+                            resultSet.getString("unit_name"),
+                            resultSet.getBoolean("requires_prescription"),
+                            resultSet.getBigDecimal("selling_price"),
+                            resultSet.getBigDecimal("stock_on_hand"),
+                            ingredients));
+                }
+                return List.copyOf(products);
             }
-            return List.copyOf(products);
         } catch (SQLException exception) {
             throw new DataAccessException(Localization.text("Không thể tải danh sách sản phẩm bán."), exception);
         }
@@ -101,7 +137,7 @@ public final class SalesCheckoutDAO {
         if (customerRowId == null || customerRowId.isEmpty() || productRowIds == null || productRowIds.isEmpty()) {
             return List.of();
         }
-        try (Connection connection = DatabaseConnection.getConnection()) {
+        try (Connection connection = connections.open()) {
             return findAllergyWarnings(
                     connection, numericId(customerRowId.orElseThrow()),
                     productRowIds.stream().distinct().map(SalesCheckoutDAO::numericId).toList());
@@ -110,83 +146,162 @@ public final class SalesCheckoutDAO {
         }
     }
 
+    public List<SaleStockShortage> previewSaleStock(List<SaleLineRequest> lines) {
+        validateLines(lines);
+        return inTransaction("Không thể kiểm tra tồn theo lô.", connection -> {
+            Map<Long, ProductState> products = loadProducts(connection, lines, false);
+            return List.copyOf(planInventory(connection, lines, products, LocalDate.now(APP_ZONE), false).shortages());
+        });
+    }
+
     public SaleReceipt completeSale(long authenticatedUserId, SaleOrderRequest request) {
         validateRequest(authenticatedUserId, request);
-        try (Connection connection = DatabaseConnection.getConnection()) {
-            connection.setAutoCommit(false);
-            try {
-                SaleReceipt receipt = completeSale(connection, authenticatedUserId, request);
-                connection.commit();
-                return receipt;
-            } catch (SQLException | RuntimeException exception) {
-                try {
-                    connection.rollback();
-                } catch (SQLException rollbackFailure) {
-                    exception.addSuppressed(rollbackFailure);
+        return inTransaction("Không thể ghi giao dịch bán hàng.", connection -> {
+            long employeeId = requireEmployee(connection, authenticatedUserId);
+            PreparedSale sale = prepareSale(connection, newSaleCode(LocalDateTime.now(APP_ZONE)), request);
+            requireSameWarnings(sale.quote().warnings(), request.acknowledgedAllergyWarnings());
+            return recordSale(connection, authenticatedUserId, employeeId, null, request, sale);
+        });
+    }
+
+    public SalePendingOrder createPendingSale(long authenticatedUserId, SaleOrderRequest request) {
+        validateRequest(authenticatedUserId, request);
+        return inTransaction("Không thể lưu đơn bán hàng đang chờ.", connection ->
+                insertPendingSale(connection, requireEmployee(connection, authenticatedUserId), request));
+    }
+
+    public SalePendingOrder updatePendingSale(
+            long authenticatedUserId, UUID saleRowId, long revision, SaleOrderRequest request) {
+        validateRequest(authenticatedUserId, request);
+        long saleId = numericId(saleRowId);
+        return inTransaction("Không thể cập nhật đơn bán hàng đang chờ.", connection -> {
+            long employeeId = requireEmployee(connection, authenticatedUserId);
+            String saleCode = lockPendingSale(connection, saleId, revision);
+            return replacePendingSale(connection, employeeId, saleId, saleCode, revision, request);
+        });
+    }
+
+    public SalePendingOrder findPendingSale(UUID saleRowId) {
+        long saleId = numericId(saleRowId);
+        return inTransaction("Không thể tải đơn bán hàng đang chờ.", connection ->
+                loadPendingSale(connection, saleId));
+    }
+
+    public SaleQuote quotePendingSale(
+            long authenticatedUserId, UUID saleRowId, long revision, SaleOrderRequest request) {
+        validateRequest(authenticatedUserId, request);
+        long saleId = numericId(saleRowId);
+        return inTransaction("Không thể tính số tiền cần thu.", connection -> {
+            requireEmployee(connection, authenticatedUserId);
+            String saleCode = lockPendingSale(connection, saleId, revision);
+            return prepareSale(connection, saleCode, request).quote();
+        });
+    }
+
+    public SaleReceipt completePendingSale(
+            long authenticatedUserId, UUID saleRowId, long revision,
+            SaleOrderRequest request, SaleQuote acceptedQuote) {
+        validateRequest(authenticatedUserId, request);
+        if (acceptedQuote == null) {
+            throw new IllegalArgumentException(Localization.text("Cần xác nhận số tiền đã thu trước khi hoàn tất."));
+        }
+        long saleId = numericId(saleRowId);
+        return inTransaction("Không thể hoàn tất đơn bán hàng.", connection -> {
+            long employeeId = requireEmployee(connection, authenticatedUserId);
+            String saleCode = lockPendingSale(connection, saleId, revision);
+            PreparedSale sale = prepareSale(connection, saleCode, request);
+            requireSameWarnings(sale.quote().warnings(), acceptedQuote.warnings());
+            if (!sale.quote().amounts().equals(acceptedQuote.amounts())) {
+                throw new IllegalStateException(Localization.text(
+                        "Số tiền hoặc điểm của đơn đã thay đổi. Kiểm tra lại số cần thu trước khi hoàn tất."));
+            }
+            return recordSale(connection, authenticatedUserId, employeeId, saleId, request, sale);
+        });
+    }
+
+    public void cancelPendingSale(long authenticatedUserId, UUID saleRowId, long revision) {
+        if (authenticatedUserId < 1) {
+            throw new IllegalArgumentException(Localization.text(
+                    "Cần có tài khoản nhân viên đăng nhập để hủy đơn."));
+        }
+        long saleId = numericId(saleRowId);
+        inTransaction("Không thể hủy đơn bán hàng đang chờ.", connection -> {
+            requireEmployee(connection, authenticatedUserId);
+            lockPendingSale(connection, saleId, revision);
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    UPDATE sales SET status = 'VOIDED' WHERE sale_id = ?
+                    """)) {
+                statement.setLong(1, saleId);
+                statement.executeUpdate();
+            }
+            return null;
+        });
+    }
+
+    public List<ModuleRow> findSaleDetails(UUID saleRowId) {
+        long saleId = numericId(saleRowId);
+        try (Connection connection = connections.open();
+             PreparedStatement statement = connection.prepareStatement("""
+                     SELECT si.sale_item_id, p.product_code, p.product_name, p.unit_name,
+                            CAST(si.quantity AS CHAR), CAST(si.unit_price AS CHAR),
+                            CAST(si.line_total AS CHAR), COALESCE(si.dosage_instructions, ''),
+                            CAST(si.treatment_days AS CHAR)
+                     FROM sale_items si
+                     JOIN products p ON p.product_id = si.product_id
+                     WHERE si.sale_id = ?
+                     ORDER BY si.sale_item_id
+                     """)) {
+            statement.setLong(1, saleId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                List<ModuleRow> details = new ArrayList<>();
+                while (resultSet.next()) {
+                    details.add(new ModuleRow(rowId(resultSet.getLong("sale_item_id")), List.of(
+                            resultSet.getString("product_code"),
+                            resultSet.getString("product_name"),
+                            resultSet.getString("unit_name"),
+                            resultSet.getString(5),
+                            resultSet.getString(6),
+                            resultSet.getString(7),
+                            resultSet.getString(8),
+                            resultSet.getString(9))));
                 }
-                throw exception;
+                return List.copyOf(details);
             }
         } catch (SQLException exception) {
-            throw new DataAccessException(Localization.text("Không thể ghi giao dịch bán hàng."), exception);
+            throw new DataAccessException(Localization.text("Không thể tải chi tiết đơn bán hàng."), exception);
         }
     }
 
-    private SaleReceipt completeSale(
-            Connection connection, long authenticatedUserId, SaleOrderRequest request) throws SQLException {
-        long employeeId = requireEmployee(connection, authenticatedUserId);
-        Optional<CustomerState> customer = request.customerId()
-                .map(id -> uncheckedCustomer(connection, numericId(id)));
+    private PreparedSale prepareSale(Connection connection, String saleCode, SaleOrderRequest request)
+            throws SQLException {
+        CustomerState customer = requireCustomer(connection, numericId(request.customerId().orElseThrow()));
+        Map<Long, ProductState> products = loadProducts(connection, request.lines(), true);
+        validatePrescription(request, products);
 
-        Map<Long, ProductState> products = lockProducts(connection, request.lines());
-        boolean prescriptionRequired = request.lines().stream()
-                .map(line -> products.get(numericId(line.productId())))
-                .anyMatch(ProductState::prescriptionRequired);
-        validatePrescription(request, prescriptionRequired);
-
-        List<SaleAllergyWarning> warnings = customer.isEmpty()
-                ? List.of()
-                : findAllergyWarnings(connection, customer.orElseThrow().id(),
-                        request.lines().stream().map(line -> numericId(line.productId())).distinct().toList());
-        if (!warningKeys(warnings).equals(warningKeys(request.acknowledgedAllergyWarnings()))) {
-            throw new IllegalStateException(Localization.text(
-                    "Thông tin dị ứng của khách đã thay đổi. Hãy xem lại cảnh báo trước khi hoàn tất đơn."));
-        }
-
-        BigDecimal subtotal = ZERO_MONEY;
-        List<BigDecimal> lineTotals = new ArrayList<>(request.lines().size());
-        for (SaleLineRequest line : request.lines()) {
-            ProductState product = products.get(numericId(line.productId()));
-            BigDecimal lineTotal = line.quantity().multiply(product.price())
-                    .setScale(2, RoundingMode.HALF_UP);
-            requireSaleAmount(lineTotal);
-            lineTotals.add(lineTotal);
-            subtotal = subtotal.add(lineTotal);
-        }
-        subtotal = subtotal.setScale(2, RoundingMode.HALF_UP);
-        requireSaleAmount(subtotal);
-
+        List<SaleAllergyWarning> warnings = findAllergyWarnings(
+                connection, customer.id(),
+                request.lines().stream().map(line -> numericId(line.productId())).distinct().toList());
+        List<BigDecimal> lineTotals = lineTotals(request.lines(), products);
+        BigDecimal subtotal = subtotal(lineTotals);
         LocalDateTime soldAt = LocalDateTime.now(APP_ZONE);
+        List<BatchAllocation> allocations = requireInventory(
+                connection, request.lines(), products, soldAt.toLocalDate());
         Promotion promotion = findBestPromotion(connection, soldAt);
         LoyaltyPolicy loyalty = findLoyaltyPolicy(connection);
         BigDecimal redemptionRate = promotion != null
                 && !soldAt.isBefore(promotion.redemptionStart())
                 ? promotion.redemptionRate()
                 : loyalty == null ? BigDecimal.ZERO : loyalty.currencyPerPoint();
-        long pointsBalance = customer.map(CustomerState::points).orElse(0L);
+        long pointsBalance = customer.points();
         BigDecimal promotionPercent = promotion == null ? BigDecimal.ZERO : promotion.discountPercent();
         SalePricing.Result pricing = SalePricing.calculate(
-                subtotal, promotionPercent, pointsBalance, request.redeemPoints(),
-                redemptionRate, BigDecimal.ZERO, customer.isPresent());
+                subtotal, promotionPercent, pointsBalance, request.requestedPoints(),
+                redemptionRate, BigDecimal.ZERO, true);
         BigDecimal pointsRatePercent = findPointsRate(
                 connection, promotion, soldAt, pricing.total(), loyalty);
         pricing = SalePricing.calculate(
-                subtotal, promotionPercent, pointsBalance, request.redeemPoints(),
-                redemptionRate, pointsRatePercent, customer.isPresent());
-        subtotal = pricing.subtotal();
-        BigDecimal promotionDiscount = pricing.promotionDiscount();
-        BigDecimal pointsDiscount = pricing.pointsDiscount();
-        BigDecimal discountAmount = pricing.totalDiscount();
-        BigDecimal total = pricing.total();
+                subtotal, promotionPercent, pointsBalance, request.requestedPoints(),
+                redemptionRate, pointsRatePercent, true);
         long pointsRedeemed = pricing.pointsRedeemed();
         long pointsEarned = pricing.pointsEarned();
         long remainingPoints = pointsBalance - pointsRedeemed + pointsEarned;
@@ -196,25 +311,274 @@ public final class SalesCheckoutDAO {
                     "Điểm tích lũy vượt quá giới hạn dữ liệu được hỗ trợ."));
         }
 
-        String saleCode = "HD" + soldAt.toLocalDate().toString().replace("-", "")
+        SaleReceipt amounts = new SaleReceipt(
+                saleCode, subtotal, pricing.promotionDiscount(), pricing.pointsDiscount(), pricing.total(),
+                pointsRedeemed, pointsEarned, remainingPoints, promotion == null ? "" : promotion.code());
+        return new PreparedSale(customer, products, lineTotals, soldAt, promotion,
+                new SaleQuote(amounts, warnings), allocations);
+    }
+
+    private static SaleReceipt recordSale(
+            Connection connection, long authenticatedUserId, long employeeId, Long pendingSaleId,
+            SaleOrderRequest request, PreparedSale sale) throws SQLException {
+        SaleReceipt receipt = sale.quote().amounts();
+        long saleId;
+        if (pendingSaleId == null) {
+            saleId = insertSale(connection, sale.customer().id(), employeeId, sale, request);
+        } else {
+            saleId = pendingSaleId;
+            updateCompletedSale(connection, saleId, sale.customer().id(), employeeId, sale, request);
+            try (PreparedStatement statement = connection.prepareStatement(
+                    "DELETE FROM sale_items WHERE sale_id = ?")) {
+                statement.setLong(1, saleId);
+                statement.executeUpdate();
+            }
+        }
+        insertSaleLines(connection, saleId, request.lines(), sale.products(), sale.lineTotals());
+        recordInventory(connection, saleId, authenticatedUserId, sale);
+        updateCustomerPoints(connection, sale.customer().id(), sale.customer().points(),
+                receipt.pointsRedeemed(), receipt.pointsEarned());
+        return receipt;
+    }
+
+    private SalePendingOrder insertPendingSale(
+            Connection connection, long employeeId, SaleOrderRequest request) throws SQLException {
+        CustomerState customer = requireCustomer(connection, numericId(request.customerId().orElseThrow()));
+        Map<Long, ProductState> products = loadProducts(connection, request.lines(), true);
+        validatePrescription(request, products);
+        LocalDateTime createdAt = LocalDateTime.now(APP_ZONE);
+        requireInventory(connection, request.lines(), products, createdAt.toLocalDate());
+        List<BigDecimal> lineTotals = lineTotals(request.lines(), products);
+        BigDecimal subtotal = subtotal(lineTotals);
+
+        String saleCode = newSaleCode(createdAt);
+        long saleId;
+        try (PreparedStatement statement = connection.prepareStatement("""
+                INSERT INTO sales
+                    (sale_code, customer_id, employee_id, sold_at, subtotal,
+                     promotion_discount_amount, points_discount_amount, discount_amount, total_amount,
+                     points_earned, points_redeemed, status, redeem_points, requested_points, prescription_code,
+                     prescription_date, prescribing_doctor, clinic, diagnosis, note)
+                VALUES (?, ?, ?, ?, ?, 0, 0, 0, ?, 0, 0, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?)
+                """, Statement.RETURN_GENERATED_KEYS)) {
+            statement.setString(1, saleCode);
+            statement.setLong(2, customer.id());
+            statement.setLong(3, employeeId);
+            statement.setObject(4, createdAt);
+            statement.setBigDecimal(5, subtotal);
+            statement.setBigDecimal(6, subtotal);
+            bindPointsAndPrescription(statement, 7, request);
+            statement.executeUpdate();
+            try (ResultSet keys = statement.getGeneratedKeys()) {
+                if (!keys.next()) {
+                    throw new SQLException("MySQL did not return the generated pending sale id.");
+                }
+                saleId = keys.getLong(1);
+            }
+        }
+        insertSaleLines(connection, saleId, request.lines(), products, lineTotals);
+        return new SalePendingOrder(rowId(saleId), saleCode, request, subtotal, 0);
+    }
+
+    private SalePendingOrder replacePendingSale(
+            Connection connection, long employeeId, long saleId, String saleCode,
+            long revision, SaleOrderRequest request)
+            throws SQLException {
+        CustomerState customer = requireCustomer(connection, numericId(request.customerId().orElseThrow()));
+        Map<Long, ProductState> products = loadProducts(connection, request.lines(), true);
+        validatePrescription(request, products);
+        LocalDateTime updatedAt = LocalDateTime.now(APP_ZONE);
+        requireInventory(connection, request.lines(), products, updatedAt.toLocalDate());
+        List<BigDecimal> lineTotals = lineTotals(request.lines(), products);
+        BigDecimal subtotal = subtotal(lineTotals);
+
+        try (PreparedStatement statement = connection.prepareStatement("""
+                UPDATE sales
+                SET customer_id = ?, employee_id = ?, sold_at = ?, subtotal = ?,
+                    promotion_id = NULL, promotion_discount_amount = 0, points_discount_amount = 0,
+                    discount_amount = 0, total_amount = ?, points_earned = 0, points_redeemed = 0,
+                    redeem_points = ?, requested_points = ?, revision = revision + 1,
+                    prescription_code = ?, prescription_date = ?,
+                    prescribing_doctor = ?, clinic = ?, diagnosis = ?, note = ?
+                WHERE sale_id = ? AND status = 'PENDING'
+                """)) {
+            statement.setLong(1, customer.id());
+            statement.setLong(2, employeeId);
+            statement.setObject(3, updatedAt);
+            statement.setBigDecimal(4, subtotal);
+            statement.setBigDecimal(5, subtotal);
+            bindPointsAndPrescription(statement, 6, request);
+            statement.setLong(14, saleId);
+            if (statement.executeUpdate() != 1) {
+                throw new IllegalStateException(Localization.text("Chỉ đơn đang chờ mới có thể được chỉnh sửa."));
+            }
+        }
+        try (PreparedStatement statement = connection.prepareStatement(
+                "DELETE FROM sale_items WHERE sale_id = ?")) {
+            statement.setLong(1, saleId);
+            statement.executeUpdate();
+        }
+        insertSaleLines(connection, saleId, request.lines(), products, lineTotals);
+        return new SalePendingOrder(rowId(saleId), saleCode, request, subtotal, revision + 1);
+    }
+
+    private static String lockPendingSale(Connection connection, long saleId, long revision) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT sale_code FROM sales
+                WHERE sale_id = ? AND status = 'PENDING' AND revision = ?
+                FOR UPDATE
+                """)) {
+            statement.setLong(1, saleId);
+            statement.setLong(2, revision);
+            try (ResultSet rows = statement.executeQuery()) {
+                if (rows.next()) {
+                    return rows.getString(1);
+                }
+            }
+        }
+        throw new IllegalStateException(Localization.text(
+                "Đơn đang chờ đã thay đổi hoặc đã đóng. Hãy làm mới danh sách và mở lại đơn."));
+    }
+
+    private SalePendingOrder loadPendingSale(Connection connection, long saleId)
+            throws SQLException {
+        String sql = """
+                SELECT sale_code, customer_id, subtotal, redeem_points, requested_points, revision, prescription_code,
+                       prescription_date, prescribing_doctor, clinic, diagnosis, note
+                FROM sales
+                WHERE sale_id = ? AND status = 'PENDING'
+                FOR UPDATE
+                """;
+        String saleCode;
+        Optional<UUID> customerId;
+        BigDecimal subtotal;
+        long requestedPoints;
+        long revision;
+        String prescriptionCode;
+        LocalDate prescriptionDate;
+        String doctor;
+        String clinic;
+        String diagnosis;
+        String note;
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setLong(1, saleId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    throw new IllegalStateException(Localization.text("Không tìm thấy đơn đang chờ."));
+                }
+                saleCode = resultSet.getString("sale_code");
+                long storedCustomerId = resultSet.getLong("customer_id");
+                customerId = resultSet.wasNull() ? Optional.empty() : Optional.of(rowId(storedCustomerId));
+                subtotal = resultSet.getBigDecimal("subtotal");
+                requestedPoints = resultSet.getLong("requested_points");
+                if (resultSet.wasNull() && resultSet.getBoolean("redeem_points")) {
+                    requestedPoints = SaleOrderRequest.REDEEM_MAXIMUM;
+                }
+                revision = resultSet.getLong("revision");
+                prescriptionCode = resultSet.getString("prescription_code");
+                java.sql.Date date = resultSet.getDate("prescription_date");
+                prescriptionDate = date == null ? null : date.toLocalDate();
+                doctor = resultSet.getString("prescribing_doctor");
+                clinic = resultSet.getString("clinic");
+                diagnosis = resultSet.getString("diagnosis");
+                note = resultSet.getString("note");
+            }
+        }
+
+        List<SaleLineRequest> lines = new ArrayList<>();
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT product_id, quantity, dosage_instructions, treatment_days
+                FROM sale_items
+                WHERE sale_id = ?
+                ORDER BY sale_item_id
+                """)) {
+            statement.setLong(1, saleId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    lines.add(new SaleLineRequest(
+                            rowId(resultSet.getLong("product_id")),
+                            resultSet.getBigDecimal("quantity"),
+                            resultSet.getString("dosage_instructions"),
+                            resultSet.getInt("treatment_days")));
+                }
+            }
+        }
+        SaleOrderRequest request = new SaleOrderRequest(
+                customerId, lines, prescriptionCode, prescriptionDate,
+                doctor, clinic, diagnosis, note, requestedPoints, List.of());
+        return new SalePendingOrder(rowId(saleId), saleCode, request, subtotal, revision);
+    }
+
+    private static List<BigDecimal> lineTotals(
+            List<SaleLineRequest> lines, Map<Long, ProductState> products) {
+        List<BigDecimal> totals = new ArrayList<>(lines.size());
+        for (SaleLineRequest line : lines) {
+            BigDecimal amount = line.quantity()
+                    .multiply(products.get(numericId(line.productId())).price())
+                    .setScale(2, RoundingMode.HALF_UP);
+            requireSaleAmount(amount);
+            totals.add(amount);
+        }
+        return List.copyOf(totals);
+    }
+
+    private static BigDecimal subtotal(List<BigDecimal> lineTotals) {
+        BigDecimal subtotal = lineTotals.stream().reduce(ZERO_MONEY, BigDecimal::add);
+        requireSaleAmount(subtotal);
+        return subtotal;
+    }
+
+    private static String newSaleCode(LocalDateTime createdAt) {
+        return "HD" + createdAt.toLocalDate().toString().replace("-", "")
                 + UUID.randomUUID().toString().replace("-", "").substring(0, 8).toUpperCase(Locale.ROOT);
-        long saleId = insertSale(connection, saleCode, customer.map(CustomerState::id).orElse(null),
-                employeeId, promotion, soldAt, subtotal, promotionDiscount, pointsDiscount,
-                discountAmount, total, pointsEarned, pointsRedeemed, request);
-        for (int index = 0; index < request.lines().size(); index++) {
-            SaleLineRequest line = request.lines().get(index);
+    }
+
+    private static void insertSaleLines(
+            Connection connection, long saleId, List<SaleLineRequest> lines,
+            Map<Long, ProductState> products, List<BigDecimal> lineTotals) throws SQLException {
+        for (int index = 0; index < lines.size(); index++) {
+            SaleLineRequest line = lines.get(index);
             ProductState product = products.get(numericId(line.productId()));
             insertSaleLine(connection, saleId, product.id(), line, product.price(), lineTotals.get(index));
         }
-        allocateInventory(connection, saleId, authenticatedUserId, request.lines(), products, soldAt);
-        if (customer.isPresent()) {
-            updateCustomerPoints(connection, customer.orElseThrow().id(), pointsBalance,
-                    pointsRedeemed, pointsEarned);
+    }
+
+    private static void bindPointsAndPrescription(
+            PreparedStatement statement, int firstIndex, SaleOrderRequest request) throws SQLException {
+        statement.setBoolean(firstIndex, request.redeemPoints());
+        setNullableLong(statement, firstIndex + 1, request.requestedPoints() == SaleOrderRequest.REDEEM_MAXIMUM
+                ? null : request.requestedPoints());
+        firstIndex += 2;
+        setNullableString(statement, firstIndex, request.prescriptionCode());
+        if (request.prescriptionDate() == null) {
+            statement.setNull(firstIndex + 1, Types.DATE);
+        } else {
+            statement.setDate(firstIndex + 1, java.sql.Date.valueOf(request.prescriptionDate()));
         }
-        return new SaleReceipt(
-                saleCode, subtotal, promotionDiscount, pointsDiscount, total,
-                pointsRedeemed, pointsEarned, remainingPoints,
-                promotion == null ? "" : promotion.code());
+        setNullableString(statement, firstIndex + 2, request.prescribingDoctor());
+        setNullableString(statement, firstIndex + 3, request.clinic());
+        setNullableString(statement, firstIndex + 4, request.diagnosis());
+        setNullableString(statement, firstIndex + 5, request.note());
+    }
+
+    private <T> T inTransaction(String failureMessage, SaleTransaction<T> transaction) {
+        try (Connection connection = connections.open()) {
+            connection.setAutoCommit(false);
+            try {
+                T result = transaction.execute(connection);
+                connection.commit();
+                return result;
+            } catch (SQLException | RuntimeException exception) {
+                try {
+                    connection.rollback();
+                } catch (SQLException rollbackFailure) {
+                    exception.addSuppressed(rollbackFailure);
+                }
+                throw exception;
+            }
+        } catch (SQLException exception) {
+            throw DataAccessException.fromSql(exception, failureMessage);
+        }
     }
 
     private static long requireEmployee(Connection connection, long userId) throws SQLException {
@@ -222,13 +586,15 @@ public final class SalesCheckoutDAO {
                 SELECT e.employee_id
                 FROM employees e
                 JOIN users u ON u.user_id = e.user_id
-                WHERE u.user_id = ? AND u.is_active = 1 AND e.employment_status = 'ACTIVE'
+                JOIN roles r ON r.role_id = u.role_id
+                WHERE u.user_id = ? AND u.is_active = 1 AND r.role_code = 'STAFF'
+                  AND e.employment_status = 'ACTIVE'
                 """)) {
             statement.setLong(1, userId);
             try (ResultSet resultSet = statement.executeQuery()) {
                 if (!resultSet.next()) {
                     throw new IllegalStateException(Localization.text(
-                            "Tài khoản đang đăng nhập chưa được liên kết với hồ sơ nhân viên đang hoạt động."));
+                            "Chỉ nhân viên đang hoạt động mới được xử lý đơn bán hàng."));
                 }
                 return resultSet.getLong(1);
             }
@@ -256,16 +622,8 @@ public final class SalesCheckoutDAO {
         }
     }
 
-    private static CustomerState uncheckedCustomer(Connection connection, long customerId) {
-        try {
-            return requireCustomer(connection, customerId);
-        } catch (SQLException exception) {
-            throw new DataAccessException(Localization.text("Không thể xác minh khách hàng đã chọn."), exception);
-        }
-    }
-
-    private static Map<Long, ProductState> lockProducts(
-            Connection connection, List<SaleLineRequest> lines) throws SQLException {
+    private static Map<Long, ProductState> loadProducts(
+            Connection connection, List<SaleLineRequest> lines, boolean lock) throws SQLException {
         List<Long> productIds = lines.stream().map(line -> numericId(line.productId()))
                 .distinct().sorted().toList();
         Map<Long, ProductState> products = new HashMap<>();
@@ -273,8 +631,7 @@ public final class SalesCheckoutDAO {
                 SELECT product_id, product_name, requires_prescription, selling_price
                 FROM products
                 WHERE product_id = ? AND is_active = 1
-                FOR UPDATE
-                """)) {
+                """ + (lock ? "FOR UPDATE" : ""))) {
             for (long productId : productIds) {
                 statement.setLong(1, productId);
                 try (ResultSet resultSet = statement.executeQuery()) {
@@ -296,12 +653,11 @@ public final class SalesCheckoutDAO {
         return products;
     }
 
-    private static void validatePrescription(SaleOrderRequest request, boolean required) {
-        if (!required) {
+    private static void validatePrescription(SaleOrderRequest request, Map<Long, ProductState> products) {
+        if (products.values().stream().noneMatch(ProductState::prescriptionRequired)) {
             return;
         }
         if (blank(request.prescriptionCode()) || request.prescriptionDate() == null
-                || request.prescriptionDate().isAfter(LocalDate.now(APP_ZONE))
                 || blank(request.prescribingDoctor())) {
             throw new IllegalArgumentException(Localization.text(
                     "Thuốc kê đơn yêu cầu mã toa, ngày kê hợp lệ và tên bác sĩ kê đơn."));
@@ -313,8 +669,7 @@ public final class SalesCheckoutDAO {
                 SELECT promotion_id, promotion_code, discount_percent,
                        points_redemption_starts_at, points_earning_ends_at, redemption_vnd_per_point
                 FROM promotions
-                WHERE is_active = 1 AND discount_percent > 0
-                  AND starts_at <= ? AND ends_at >= ?
+                WHERE is_active = 1 AND starts_at <= ? AND ends_at >= ?
                 ORDER BY discount_percent DESC, promotion_id
                 LIMIT 1
                 """)) {
@@ -379,42 +734,23 @@ public final class SalesCheckoutDAO {
     }
 
     private static long insertSale(
-            Connection connection, String saleCode, Long customerId, long employeeId,
-            Promotion promotion, LocalDateTime soldAt, BigDecimal subtotal,
-            BigDecimal promotionDiscount, BigDecimal pointsDiscount, BigDecimal discountAmount,
-            BigDecimal total, long pointsEarned, long pointsRedeemed, SaleOrderRequest request)
+            Connection connection, long customerId, long employeeId,
+            PreparedSale sale, SaleOrderRequest request)
             throws SQLException {
+        SaleReceipt receipt = sale.quote().amounts();
         String sql = """
                 INSERT INTO sales
                     (sale_code, customer_id, employee_id, promotion_id, sold_at, subtotal,
                      promotion_discount_amount, points_discount_amount, discount_amount, total_amount,
-                     points_earned, points_redeemed, status, prescription_code, prescription_date,
-                     prescribing_doctor, clinic, diagnosis, note)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'COMPLETED', ?, ?, ?, ?, ?, ?)
+                     points_earned, points_redeemed, status, redeem_points, requested_points,
+                     prescription_code, prescription_date, prescribing_doctor, clinic, diagnosis, note)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'COMPLETED', ?, ?, ?, ?, ?, ?, ?, ?)
                 """;
         try (PreparedStatement statement = connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
-            statement.setString(1, saleCode);
-            setNullableLong(statement, 2, customerId);
+            statement.setString(1, receipt.saleCode());
+            statement.setLong(2, customerId);
             statement.setLong(3, employeeId);
-            setNullableLong(statement, 4, promotion == null ? null : promotion.id());
-            statement.setObject(5, soldAt);
-            statement.setBigDecimal(6, subtotal);
-            statement.setBigDecimal(7, promotionDiscount);
-            statement.setBigDecimal(8, pointsDiscount);
-            statement.setBigDecimal(9, discountAmount);
-            statement.setBigDecimal(10, total);
-            statement.setLong(11, pointsEarned);
-            statement.setLong(12, pointsRedeemed);
-            setNullableString(statement, 13, request.prescriptionCode());
-            if (request.prescriptionDate() == null) {
-                statement.setNull(14, Types.DATE);
-            } else {
-                statement.setDate(14, java.sql.Date.valueOf(request.prescriptionDate()));
-            }
-            setNullableString(statement, 15, request.prescribingDoctor());
-            setNullableString(statement, 16, request.clinic());
-            setNullableString(statement, 17, request.diagnosis());
-            setNullableString(statement, 18, request.note());
+            bindCompletedSale(statement, 4, sale, request);
             statement.executeUpdate();
             try (ResultSet keys = statement.getGeneratedKeys()) {
                 if (!keys.next()) {
@@ -423,6 +759,45 @@ public final class SalesCheckoutDAO {
                 return keys.getLong(1);
             }
         }
+    }
+
+    private static void updateCompletedSale(
+            Connection connection, long saleId, long customerId, long employeeId,
+            PreparedSale sale, SaleOrderRequest request)
+            throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                UPDATE sales
+                SET customer_id = ?, employee_id = ?, promotion_id = ?, sold_at = ?, subtotal = ?,
+                    promotion_discount_amount = ?, points_discount_amount = ?, discount_amount = ?,
+                    total_amount = ?, points_earned = ?, points_redeemed = ?, status = 'COMPLETED',
+                    redeem_points = ?, requested_points = ?, prescription_code = ?, prescription_date = ?,
+                    prescribing_doctor = ?, clinic = ?, diagnosis = ?, note = ?
+                WHERE sale_id = ? AND status = 'PENDING'
+                """)) {
+            statement.setLong(1, customerId);
+            statement.setLong(2, employeeId);
+            bindCompletedSale(statement, 3, sale, request);
+            statement.setLong(20, saleId);
+            if (statement.executeUpdate() != 1) {
+                throw new IllegalStateException(Localization.text("Chỉ đơn đang chờ mới có thể hoàn tất."));
+            }
+        }
+    }
+
+    private static void bindCompletedSale(
+            PreparedStatement statement, int firstIndex, PreparedSale sale, SaleOrderRequest request)
+            throws SQLException {
+        SaleReceipt receipt = sale.quote().amounts();
+        setNullableLong(statement, firstIndex, sale.promotion() == null ? null : sale.promotion().id());
+        statement.setObject(firstIndex + 1, sale.soldAt());
+        statement.setBigDecimal(firstIndex + 2, receipt.subtotal());
+        statement.setBigDecimal(firstIndex + 3, receipt.promotionDiscount());
+        statement.setBigDecimal(firstIndex + 4, receipt.pointsDiscount());
+        statement.setBigDecimal(firstIndex + 5, receipt.promotionDiscount().add(receipt.pointsDiscount()));
+        statement.setBigDecimal(firstIndex + 6, receipt.total());
+        statement.setLong(firstIndex + 7, receipt.pointsEarned());
+        statement.setLong(firstIndex + 8, receipt.pointsRedeemed());
+        bindPointsAndPrescription(statement, firstIndex + 9, request);
     }
 
     private static void insertSaleLine(
@@ -445,58 +820,92 @@ public final class SalesCheckoutDAO {
         }
     }
 
-    private static void allocateInventory(
-            Connection connection, long saleId, long createdByUserId, List<SaleLineRequest> lines,
-            Map<Long, ProductState> products, LocalDateTime soldAt) throws SQLException {
+    private static List<BatchAllocation> requireInventory(
+            Connection connection, List<SaleLineRequest> lines,
+            Map<Long, ProductState> products, LocalDate saleDate) throws SQLException {
+        InventoryPlan plan = planInventory(connection, lines, products, saleDate, true);
+        if (!plan.shortages().isEmpty()) {
+            SaleStockShortage shortage = plan.shortages().getFirst();
+            throw new IllegalStateException(Localization.text("Không đủ tồn kho chưa hết hạn cho ")
+                    + shortage.productName()
+                    + Localization.text(" đến hết thời gian điều trị đã khai báo."));
+        }
+        return plan.allocations();
+    }
+
+    private static InventoryPlan planInventory(
+            Connection connection, List<SaleLineRequest> lines,
+            Map<Long, ProductState> products, LocalDate saleDate, boolean lock) throws SQLException {
+        Map<Long, List<Batch>> batchesByProduct = new HashMap<>();
+        Map<Long, BigDecimal> remainingByBatch = new HashMap<>();
+        for (long productId : products.keySet().stream().sorted().toList()) {
+            List<Batch> batches = loadEligibleBatches(connection, productId, saleDate, lock);
+            batchesByProduct.put(productId, batches);
+            for (Batch batch : batches) {
+                remainingByBatch.put(batch.id(), batch.quantity());
+            }
+        }
         List<SaleLineRequest> allocationOrder = lines.stream()
                 .sorted(Comparator.comparingInt(SaleLineRequest::treatmentDays).reversed()
                         .thenComparing(line -> numericId(line.productId())))
                 .toList();
+        List<BatchAllocation> allocations = new ArrayList<>();
+        List<SaleStockShortage> shortages = new ArrayList<>();
         for (SaleLineRequest line : allocationOrder) {
             long productId = numericId(line.productId());
-            LocalDate lastTreatmentDate = soldAt.toLocalDate().plusDays(line.treatmentDays() - 1L);
-            List<Batch> batches = lockEligibleBatches(connection, productId, lastTreatmentDate);
+            LocalDate lastTreatmentDate = saleDate.plusDays(line.treatmentDays() - 1L);
             BigDecimal remaining = line.quantity();
-            for (Batch batch : batches) {
+            for (Batch batch : batchesByProduct.get(productId)) {
                 if (remaining.signum() <= 0) {
                     break;
                 }
-                BigDecimal allocated = remaining.min(batch.quantity());
-                try (PreparedStatement update = connection.prepareStatement("""
-                        UPDATE inventory_batches
-                        SET quantity_on_hand = quantity_on_hand - ?
-                        WHERE batch_id = ? AND quantity_on_hand >= ?
-                        """)) {
-                    update.setBigDecimal(1, allocated);
-                    update.setLong(2, batch.id());
-                    update.setBigDecimal(3, allocated);
-                    if (update.executeUpdate() != 1) {
-                        throw new SQLException("Inventory changed while the sale was being completed.");
-                    }
+                BigDecimal available = remainingByBatch.get(batch.id());
+                if (batch.expiry().isBefore(lastTreatmentDate) || available.signum() <= 0) {
+                    continue;
                 }
-                insertSaleMovement(connection, batch.id(), createdByUserId, saleId, allocated,
-                        products.get(productId).name(), soldAt);
+                BigDecimal allocated = remaining.min(available);
+                remainingByBatch.put(batch.id(), available.subtract(allocated));
+                allocations.add(new BatchAllocation(batch.id(), productId, allocated));
                 remaining = remaining.subtract(allocated);
             }
             if (remaining.signum() > 0) {
-                throw new IllegalStateException(Localization.text("Không đủ tồn kho chưa hết hạn cho ")
-                        + products.get(productId).name()
-                        + Localization.text(" đến hết thời gian điều trị đã khai báo."));
+                shortages.add(new SaleStockShortage(products.get(productId).name(), lastTreatmentDate,
+                        line.quantity(), line.quantity().subtract(remaining)));
+            }
+        }
+        return new InventoryPlan(allocations, shortages);
+    }
+
+    private static void recordInventory(
+            Connection connection, long saleId, long createdByUserId, PreparedSale sale) throws SQLException {
+        try (PreparedStatement update = connection.prepareStatement("""
+                UPDATE inventory_batches
+                SET quantity_on_hand = quantity_on_hand - ?
+                WHERE batch_id = ? AND quantity_on_hand >= ?
+                """)) {
+            for (BatchAllocation allocation : sale.allocations()) {
+                update.setBigDecimal(1, allocation.quantity());
+                update.setLong(2, allocation.batchId());
+                update.setBigDecimal(3, allocation.quantity());
+                if (update.executeUpdate() != 1) {
+                    throw new SQLException("Inventory changed while the sale was being completed.");
+                }
+                insertSaleMovement(connection, allocation.batchId(), createdByUserId, saleId, allocation.quantity(),
+                        sale.products().get(allocation.productId()).name(), sale.soldAt());
             }
         }
     }
 
-    private static List<Batch> lockEligibleBatches(
-            Connection connection, long productId, LocalDate lastTreatmentDate) throws SQLException {
+    private static List<Batch> loadEligibleBatches(
+            Connection connection, long productId, LocalDate saleDate, boolean lock) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT batch_id, expiry_date, quantity_on_hand
                 FROM inventory_batches
                 WHERE product_id = ? AND expiry_date >= ? AND quantity_on_hand > 0
                 ORDER BY expiry_date, batch_id
-                FOR UPDATE
-                """)) {
+                """ + (lock ? "FOR UPDATE" : ""))) {
             statement.setLong(1, productId);
-            statement.setDate(2, java.sql.Date.valueOf(lastTreatmentDate));
+            statement.setObject(2, saleDate);
             try (ResultSet resultSet = statement.executeQuery()) {
                 List<Batch> batches = new ArrayList<>();
                 while (resultSet.next()) {
@@ -596,6 +1005,13 @@ public final class SalesCheckoutDAO {
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());
     }
 
+    private static void requireSameWarnings(List<SaleAllergyWarning> current, List<SaleAllergyWarning> accepted) {
+        if (!warningKeys(current).equals(warningKeys(accepted))) {
+            throw new IllegalStateException(Localization.text(
+                    "Thông tin dị ứng của khách đã thay đổi. Hãy xem lại cảnh báo trước khi hoàn tất đơn."));
+        }
+    }
+
     private static void validateRequest(long authenticatedUserId, SaleOrderRequest request) {
         if (authenticatedUserId < 1) {
             throw new IllegalArgumentException(Localization.text(
@@ -605,7 +1021,33 @@ public final class SalesCheckoutDAO {
             throw new IllegalArgumentException(Localization.text(
                     "Vui lòng thêm ít nhất một sản phẩm vào giỏ."));
         }
-        for (SaleLineRequest line : request.lines()) {
+        if (request.customerId().isEmpty()) {
+            throw new IllegalArgumentException(Localization.text(
+                    "Cần chọn hồ sơ khách hàng trước khi lưu hoặc hoàn tất đơn."));
+        }
+        numericId(request.customerId().orElseThrow());
+        if (request.requestedPoints() < 0 || (request.requestedPoints() > MAX_UNSIGNED_INT
+                && request.requestedPoints() != SaleOrderRequest.REDEEM_MAXIMUM)) {
+            throw new IllegalArgumentException(Localization.text("Số điểm muốn đổi vượt quá phạm vi được hỗ trợ."));
+        }
+        validateLines(request.lines());
+        LocalDate prescriptionDate = request.prescriptionDate();
+        if (prescriptionDate != null && (prescriptionDate.getYear() < 1000
+                || prescriptionDate.isAfter(LocalDate.now(APP_ZONE)))) {
+            throw new IllegalArgumentException(Localization.text("Ngày kê đơn phải hợp lệ và không ở tương lai."));
+        }
+        requireMaxLength(request.prescriptionCode(), 80, "Mã toa thuốc");
+        requireMaxLength(request.prescribingDoctor(), 120, "Tên bác sĩ");
+        requireMaxLength(request.clinic(), 180, "Tên cơ sở khám");
+        requireMaxLength(request.diagnosis(), 255, "Chẩn đoán");
+        requireMaxLength(request.note(), 500, "Ghi chú đơn hàng");
+    }
+
+    private static void validateLines(List<SaleLineRequest> lines) {
+        if (lines == null || lines.isEmpty()) {
+            throw new IllegalArgumentException(Localization.text("Vui lòng thêm ít nhất một sản phẩm vào giỏ."));
+        }
+        for (SaleLineRequest line : lines) {
             if (line == null || line.productId() == null || line.quantity() == null
                     || line.quantity().signum() <= 0 || line.quantity().scale() > 3
                     || line.treatmentDays() < 1 || line.treatmentDays() > 3650) {
@@ -613,21 +1055,12 @@ public final class SalesCheckoutDAO {
                         "Mỗi dòng cần có sản phẩm, số lượng dương và thời gian điều trị từ 1 đến 3650 ngày."));
             }
             numericId(line.productId());
-            if (line.quantity().precision() > 12) {
-                throw new IllegalArgumentException(Localization.text(
-                        "Số lượng bán vượt quá phạm vi được hỗ trợ."));
-            }
             if (line.quantity().compareTo(MAX_SALE_QUANTITY) > 0) {
                 throw new IllegalArgumentException(Localization.text(
                         "Số lượng bán vượt quá phạm vi được hỗ trợ."));
             }
             requireMaxLength(line.dosageInstructions(), 255, "Hướng dẫn sử dụng");
         }
-        requireMaxLength(request.prescriptionCode(), 80, "Mã toa thuốc");
-        requireMaxLength(request.prescribingDoctor(), 120, "Tên bác sĩ");
-        requireMaxLength(request.clinic(), 180, "Tên cơ sở khám");
-        requireMaxLength(request.diagnosis(), 255, "Chẩn đoán");
-        requireMaxLength(request.note(), 500, "Ghi chú đơn hàng");
     }
 
     private static void requireSaleAmount(BigDecimal amount) {

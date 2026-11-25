@@ -2,7 +2,10 @@ package vn.ninhkieupharma.pharmacy.common.dao;
 
 import org.junit.jupiter.api.Test;
 import vn.ninhkieupharma.pharmacy.common.service.ModuleCatalog;
+import vn.ninhkieupharma.pharmacy.common.dao.InventoryWorkflowDAO;
 
+import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -27,16 +30,85 @@ class RelationalFeatureModuleDAOTest {
     }
 
     @Test
-    void scheduleAndAttendanceWritesAreImplementedWhileOtherComplexWorkflowsRemainReadOnly() {
+    void rejectsIncompleteOrGenericWritesBeforeOpeningADatabaseConnection() {
         for (String moduleId : List.of("UC-03", "UC-04")) {
-            assertThrows(IllegalArgumentException.class,
-                    () -> dao.create(moduleId, List.of()));
+            assertThrows(IllegalArgumentException.class, () -> dao.create(moduleId, List.of()));
         }
         for (String moduleId : List.of("UC-12", "UC-14", "UC-17")) {
             UnsupportedOperationException error = assertThrows(UnsupportedOperationException.class,
                     () -> dao.create(moduleId, List.of()));
             assertTrue(error.getMessage().contains(moduleId));
         }
+    }
+
+    @Test
+    void validatesProductCodeAndParsesGroupedSellingPrices() {
+        assertThrows(IllegalArgumentException.class, () -> dao.create("UC-08",
+                List.of("X".repeat(31), "T", "N", "", "Hộp", "10", "FALSE", "ACTIVE", "")));
+        assertEquals(new BigDecimal("1234.56"), RelationalFeatureModuleDAO.parseUnitPrice("1.234,56 ₫"));
+        assertEquals(new BigDecimal("1234.56"), RelationalFeatureModuleDAO.parseUnitPrice("1,234.56 VND"));
+        assertThrows(IllegalArgumentException.class, () -> RelationalFeatureModuleDAO.parseUnitPrice("1,2,3"));
+    }
+
+    @Test
+    void validatesCustomerCodeBirthdayAndPointLimitsBeforeConnecting() {
+        assertThrows(IllegalArgumentException.class, () -> dao.create("UC-16",
+                List.of("X".repeat(21), "T", "0901234567", "", "", "0", "ACTIVE", "", "")));
+        assertThrows(IllegalArgumentException.class, () -> dao.create("UC-16",
+                List.of("", "T", "0901234567", "", "", "0", "ACTIVE", "", "9999-01-01")));
+        assertThrows(IllegalArgumentException.class, () -> dao.create("UC-16",
+                List.of("", "T", "0901234567", "", "", "4294967296", "ACTIVE", "", "")));
+    }
+
+    @Test
+    void storageLocationRequiresCodeNameAndValidFieldLengths() {
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.create("UC-13", List.of("", "Kệ A", "", "ACTIVE")));
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.create("UC-13", List.of("K-A", "", "", "ACTIVE")));
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.update("UC-13", UUID.randomUUID(),
+                        List.of("", "Kệ A", "", "ACTIVE")));
+    }
+
+    @Test
+    void inventoryWorkflowsRejectIncompleteAndInvalidRequestsBeforeConnectingToMysql() {
+        assertThrows(IllegalArgumentException.class, () -> dao.create("UC-13",
+                List.of("", "Kệ A · Tầng 1", "", "ACTIVE")));
+        assertThrows(IllegalArgumentException.class, () -> dao.receiveGoods(1,
+                new InventoryWorkflowDAO.ReceiptRequest(1, LocalDate.now(), "", List.of())));
+        assertThrows(IllegalArgumentException.class, () -> dao.receiveGoods(1,
+                new InventoryWorkflowDAO.ReceiptRequest(1, LocalDate.now(), "",
+                        List.of(new InventoryWorkflowDAO.ReceiptLine(
+                                1, 1, "LOT-1", LocalDate.now().plusDays(30),
+                                new BigDecimal("-1"), BigDecimal.ZERO)))));
+        assertThrows(IllegalArgumentException.class, () -> dao.receiveGoods(1,
+                new InventoryWorkflowDAO.ReceiptRequest(1, LocalDate.now().plusDays(1), "",
+                        List.of(new InventoryWorkflowDAO.ReceiptLine(
+                                1, 1, "LOT-1", LocalDate.now().plusDays(30),
+                                new BigDecimal("1"), BigDecimal.ZERO)))));
+        assertThrows(IllegalArgumentException.class, () -> dao.receiveGoods(1,
+                new InventoryWorkflowDAO.ReceiptRequest(1, LocalDate.now(), "",
+                        List.of(new InventoryWorkflowDAO.ReceiptLine(
+                                1, 1, "LOT-1", LocalDate.now().plusDays(30),
+                                new BigDecimal("1"), BigDecimal.ZERO),
+                                new InventoryWorkflowDAO.ReceiptLine(
+                                        1, 1, "LOT-1", LocalDate.now().plusDays(30),
+                                        new BigDecimal("2"), new BigDecimal("1000"))))));
+        assertThrows(IllegalArgumentException.class, () -> dao.receiveGoods(1,
+                new InventoryWorkflowDAO.ReceiptRequest(1, LocalDate.now(), "",
+                        List.of(new InventoryWorkflowDAO.ReceiptLine(
+                                1, 1, "LOT-1", LocalDate.now().plusDays(30),
+                                new BigDecimal("1"), new BigDecimal("1.001"))))));
+        assertThrows(IllegalArgumentException.class, () -> dao.receiveGoods(1,
+                new InventoryWorkflowDAO.ReceiptRequest(1, LocalDate.now(), "",
+                        List.of(new InventoryWorkflowDAO.ReceiptLine(
+                                1, 1, "LOT-1", LocalDate.now().minusDays(1),
+                                new BigDecimal("1"), BigDecimal.ZERO)))));
+        assertThrows(IllegalArgumentException.class, () -> dao.completeStocktake(1,
+                new InventoryWorkflowDAO.StocktakeRequest(1, LocalDate.now(), "", List.of())));
+        assertThrows(IllegalArgumentException.class, () -> dao.recordInventoryLoss(
+                1, 1, InventoryWorkflowDAO.LossType.DAMAGED, BigDecimal.ZERO, ""));
     }
 
     @Test
@@ -129,13 +201,13 @@ class RelationalFeatureModuleDAOTest {
     }
 
     @Test
-    void customerManagementIsNotExposedAsAStaffNavigationModule() {
+    void customerManagementIsAvailableToStaffWithAdminOnlyArchiving() {
         var customerModule = ModuleCatalog.MODULES.stream()
                 .filter(module -> module.id().equals("UC-16"))
                 .findFirst()
                 .orElseThrow();
 
-        assertFalse(customerModule.staffAccessible());
+        assertTrue(customerModule.staffAccessible());
         assertEquals(9, customerModule.columns().size());
 
         var salesModule = ModuleCatalog.MODULES.stream()

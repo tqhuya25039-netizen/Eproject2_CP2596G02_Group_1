@@ -10,8 +10,6 @@ import vn.ninhkieupharma.pharmacy.config.DatabaseConnection;
 import vn.ninhkieupharma.pharmacy.common.auth.UserDAOImpl;
 import vn.ninhkieupharma.pharmacy.common.auth.AuthenticationService;
 import vn.ninhkieupharma.pharmacy.common.dao.DataAccessException;
-import vn.ninhkieupharma.pharmacy.common.dao.RelationalFeatureModuleDAO;
-import vn.ninhkieupharma.pharmacy.common.service.FeatureServices;
 import vn.ninhkieupharma.pharmacy.common.service.ExchangeRateService;
 import vn.ninhkieupharma.pharmacy.ui.LoginController;
 import vn.ninhkieupharma.pharmacy.common.service.Localization;
@@ -22,12 +20,10 @@ import java.util.Objects;
 public class NinhKieuPharmaApp extends Application {
     @Override
     public void start(Stage stage) throws IOException {
-        FeatureServices featureServices;
         AuthenticationService authenticationService;
         ExchangeRateService exchangeRateService;
         try {
             DatabaseConnection.verifySchema();
-            featureServices = new FeatureServices(new RelationalFeatureModuleDAO());
             authenticationService = new AuthenticationService(new UserDAOImpl());
             exchangeRateService = new ExchangeRateService();
         } catch (DataAccessException exception) {
@@ -66,7 +62,7 @@ public class NinhKieuPharmaApp extends Application {
                 .toExternalForm());
 
         loader.<LoginController>getController().setServices(
-                featureServices, authenticationService, exchangeRateService);
+                authenticationService, exchangeRateService);
         stage.setTitle("Ninh Kieu Pharma | "
                 + Localization.text("Quản lý vận hành nhà thuốc"));
         stage.setMinWidth(1080);

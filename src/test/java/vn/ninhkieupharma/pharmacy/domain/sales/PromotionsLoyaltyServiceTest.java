@@ -56,6 +56,11 @@ class PromotionsLoyaltyServiceTest {
         invalidRedemptionValue.set(7, "0");
         assertThrows(IllegalArgumentException.class,
                 () -> service.validateConfiguration(module, invalidRedemptionValue, true, null));
+
+        List<String> unsupportedThreshold = new ArrayList<>(values);
+        unsupportedThreshold.set(8, "0:1;0.001:2");
+        assertThrows(IllegalArgumentException.class,
+                () -> service.validateConfiguration(module, unsupportedThreshold, true, null));
     }
 
     @Test
@@ -97,6 +102,23 @@ class PromotionsLoyaltyServiceTest {
         List<String> updated = service.findAll(module).getFirst().values();
         assertEquals(today.toString(), updated.get(5));
         assertEquals(today.toString(), updated.get(6));
+        assertEquals("INACTIVE", updated.get(9));
+    }
+
+    @Test
+    void endingAnExpiredProgramPreservesItsOriginalDatesAndTiers() {
+        LocalDate today = LocalDate.now();
+        List<String> values = List.of(
+                "PROMO-EXPIRED", "Expired program", "0",
+                today.minusDays(5).toString(), today.minusDays(4).toString(),
+                today.minusDays(3).toString(), today.minusDays(2).toString(),
+                "1000", "0:1;100000:1.5", "ACTIVE");
+        ModuleRow created = dao.create("UC-18", values);
+
+        service.finishImmediately(module, created.id());
+
+        List<String> updated = service.findAll(module).getFirst().values();
+        assertEquals(values.subList(0, 9), updated.subList(0, 9));
         assertEquals("INACTIVE", updated.get(9));
     }
 

@@ -25,4 +25,46 @@ class LocalizationTest {
             }
         }
     }
+
+    @Test
+    void salesAndTopbarLabelsUseTheSameEnglishLocale() {
+        boolean originalLanguage = Localization.isEnglish();
+        if (!originalLanguage) {
+            Localization.toggleLanguage();
+        }
+        try {
+            assertEquals("Average Order Value", Localization.text("Giá trị trung bình"));
+            assertEquals("Invoice Count", Localization.text("Số lượng hóa đơn"));
+            assertEquals("Archived · Sales Restricted", Localization.text("Đã lưu trữ · hạn chế bán"));
+            assertEquals("Pending", Localization.text("Đang chờ"));
+            assertEquals("Completed", Localization.text("Hoàn tất"));
+            assertEquals("Voided", Localization.text("Đã hủy"));
+        } finally {
+            if (Localization.isEnglish() != originalLanguage) {
+                Localization.toggleLanguage();
+            }
+        }
+    }
+
+    @Test
+    void productRowsUseEnglishCatalogValues() {
+        boolean originalLanguage = Localization.isEnglish();
+        if (!originalLanguage) {
+            Localization.toggleLanguage();
+        }
+        try {
+            assertEquals("Pain Relief Medicine", Localization.productText("Thuốc giảm đau"));
+            assertEquals("Medical Supplies", Localization.productText("Vật tư y tế"));
+            assertEquals("Blister Pack", Localization.productText("Vỉ"));
+            assertEquals("Tablet", Localization.productText("Viên nén"));
+            assertEquals("Yes", Localization.productText("Yes"));
+            assertEquals("No", Localization.productText("No"));
+            assertEquals("Active", Localization.productText("ACTIVE"));
+            assertEquals("Inactive", Localization.productText("INACTIVE"));
+        } finally {
+            if (Localization.isEnglish() != originalLanguage) {
+                Localization.toggleLanguage();
+            }
+        }
+    }
 }

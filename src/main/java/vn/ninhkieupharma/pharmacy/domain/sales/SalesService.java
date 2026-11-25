@@ -6,11 +6,11 @@ import vn.ninhkieupharma.pharmacy.common.service.AbstractFeatureModuleService;
 import vn.ninhkieupharma.pharmacy.common.model.ModuleDefinition;
 import vn.ninhkieupharma.pharmacy.common.service.Localization;
 
+import java.math.BigDecimal;
 import java.text.NumberFormat;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -33,6 +33,10 @@ public final class SalesService extends AbstractFeatureModuleService {
         return repository.findSaleProducts();
     }
 
+    public List<SaleStockShortage> previewSaleStock(List<SaleLineRequest> lines) {
+        return repository.previewSaleStock(lines);
+    }
+
     public List<SaleAllergyWarning> findAllergyWarnings(
             Optional<UUID> customerId, List<UUID> productIds) {
         return repository.findSaleAllergyWarnings(customerId, productIds);
@@ -40,6 +44,56 @@ public final class SalesService extends AbstractFeatureModuleService {
 
     public SaleReceipt completeSale(long authenticatedUserId, SaleOrderRequest request) {
         return repository.completeSale(authenticatedUserId, request);
+    }
+
+    public SalePendingOrder createPendingSale(long authenticatedUserId, SaleOrderRequest request) {
+        return repository.createPendingSale(authenticatedUserId, request);
+    }
+
+    public SalePendingOrder updatePendingSale(
+            long authenticatedUserId, UUID saleId, long revision, SaleOrderRequest request) {
+        return repository.updatePendingSale(authenticatedUserId, saleId, revision, request);
+    }
+
+    public SalePendingOrder findPendingSale(UUID saleId) {
+        return repository.findPendingSale(saleId);
+    }
+
+    public SaleQuote quotePendingSale(
+            long authenticatedUserId, UUID saleId, long revision, SaleOrderRequest request) {
+        return repository.quotePendingSale(authenticatedUserId, saleId, revision, request);
+    }
+
+    public SaleReceipt completePendingSale(
+            long authenticatedUserId, UUID saleId, long revision, SaleOrderRequest request, SaleQuote acceptedQuote) {
+        return repository.completePendingSale(authenticatedUserId, saleId, revision, request, acceptedQuote);
+    }
+
+    public void cancelPendingSale(long authenticatedUserId, UUID saleId, long revision) {
+        repository.cancelPendingSale(authenticatedUserId, saleId, revision);
+    }
+
+    public List<ModuleRow> findSaleDetails(UUID saleId) {
+        return repository.findSaleDetails(saleId);
+    }
+
+    public SalesReport salesReport(SalesReport.Period period, int year, int selection) {
+        LocalDate start = period.start(year, selection);
+        List<SalesReport.Row> days = completedSalesByDay(start, period.endExclusive(start));
+        Map<LocalDate, SalesReport.Totals> grouped = new TreeMap<>();
+        for (SalesReport.Row day : days) {
+            grouped.merge(period.groupStart(day.start()), day.totals(), SalesReport.Totals::plus);
+        }
+        List<SalesReport.Row> rows = grouped.entrySet().stream()
+                .map(entry -> new SalesReport.Row(entry.getKey(), entry.getValue()))
+                .toList();
+        return new SalesReport(period, start, rows);
+    }
+
+    public SalesReport.Totals completedSalesTotals() {
+        return completedSalesByDay(null, null).stream()
+                .map(SalesReport.Row::totals)
+                .reduce(SalesReport.Totals.ZERO, SalesReport.Totals::plus);
     }
 
     @Override
@@ -91,30 +145,44 @@ public final class SalesService extends AbstractFeatureModuleService {
     }
 
     private List<ModuleRow> revenueReport(ModuleDefinition module) {
-        Map<LocalDate, DailyRevenue> totals = new TreeMap<>((left, right) -> right.compareTo(left));
-        for (ModuleRow invoice : repository.findAll("UC-17")) {
-            if (invoice.values().size() < 5) {
-                throw new IllegalStateException("Invoice record is missing date or total values.");
-            }
-            LocalDate date = parseDate(invoice.values().get(1));
-            long amount = parseAmount(invoice.values().get(4));
-            totals.merge(date, new DailyRevenue(1, amount),
-                    (left, right) -> new DailyRevenue(
-                            left.count() + right.count(), left.amount() + right.amount()));
-        }
-
-        List<List<String>> report = new ArrayList<>();
-        for (Map.Entry<LocalDate, DailyRevenue> entry : totals.entrySet()) {
-            DailyRevenue revenue = entry.getValue();
-            report.add(List.of(
-                    entry.getKey().format(DATE_FORMAT),
-                    Integer.toString(revenue.count()),
-                    formatCurrency(revenue.amount()),
-                    formatCurrency(0),
-                    formatCurrency(revenue.amount() / revenue.count())));
-        }
+        List<List<String>> report = completedSalesByDay(null, null).reversed().stream()
+                .map(day -> {
+                    SalesReport.Totals totals = day.totals();
+                    return List.of(day.start().format(DATE_FORMAT),
+                            Long.toString(totals.orderCount()),
+                            formatCurrency(totals.revenue()),
+                            formatCurrency(totals.discount()),
+                            formatCurrency(totals.revenue().divideToIntegralValue(
+                                    BigDecimal.valueOf(totals.orderCount()))));
+                })
+                .toList();
         repository.replaceAll("UC-19", report);
         return super.findAll(module);
+    }
+
+    private List<SalesReport.Row> completedSalesByDay(LocalDate fromInclusive, LocalDate toExclusive) {
+        if (repository.supportsNativeReports()) {
+            return repository.findCompletedSalesByDay(fromInclusive, toExclusive);
+        }
+        Map<LocalDate, SalesReport.Totals> totals = new TreeMap<>();
+        for (ModuleRow invoice : repository.findAll("UC-17")) {
+            if (invoice.values().size() < 6) {
+                throw new IllegalStateException("Invoice record is missing date, total or status.");
+            }
+            String status = invoice.values().get(5);
+            if (!"COMPLETED".equalsIgnoreCase(status) && !"Hoàn tất".equalsIgnoreCase(status)) {
+                continue;
+            }
+            LocalDate date = parseDate(invoice.values().get(1));
+            if (fromInclusive != null && (date.isBefore(fromInclusive) || !date.isBefore(toExclusive))) {
+                continue;
+            }
+            BigDecimal amount = BigDecimal.valueOf(parseAmount(invoice.values().get(4)));
+            totals.merge(date, new SalesReport.Totals(1, amount, BigDecimal.ZERO), SalesReport.Totals::plus);
+        }
+        return totals.entrySet().stream()
+                .map(entry -> new SalesReport.Row(entry.getKey(), entry.getValue()))
+                .toList();
     }
 
     private LocalDate parseDate(String value) {
@@ -141,10 +209,7 @@ public final class SalesService extends AbstractFeatureModuleService {
         }
     }
 
-    private String formatCurrency(long amount) {
+    private String formatCurrency(BigDecimal amount) {
         return NumberFormat.getNumberInstance(Locale.forLanguageTag("vi-VN")).format(amount) + " ₫";
-    }
-
-    private record DailyRevenue(int count, long amount) {
     }
 }

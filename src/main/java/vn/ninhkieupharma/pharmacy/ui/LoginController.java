@@ -11,7 +11,7 @@ import javafx.stage.Stage;
 import vn.ninhkieupharma.pharmacy.NinhKieuPharmaApp;
 import vn.ninhkieupharma.pharmacy.common.auth.User;
 import vn.ninhkieupharma.pharmacy.common.auth.AuthenticationService;
-import vn.ninhkieupharma.pharmacy.ui.MainController;
+import vn.ninhkieupharma.pharmacy.common.dao.RelationalFeatureModuleDAO;
 import vn.ninhkieupharma.pharmacy.common.service.FeatureServices;
 import vn.ninhkieupharma.pharmacy.common.service.ExchangeRateService;
 import vn.ninhkieupharma.pharmacy.common.service.Localization;
@@ -38,7 +38,6 @@ public class LoginController {
     @FXML private Button loginButton;
     @FXML private Button languageButton;
 
-    private FeatureServices featureServices;
     private AuthenticationService authenticationService;
     private ExchangeRateService exchangeRateService;
     @FXML
@@ -48,10 +47,8 @@ public class LoginController {
     }
 
     public void setServices(
-            FeatureServices featureServices,
             AuthenticationService authenticationService,
             ExchangeRateService exchangeRateService) {
-        this.featureServices = Objects.requireNonNull(featureServices);
         this.authenticationService = Objects.requireNonNull(authenticationService);
         this.exchangeRateService = Objects.requireNonNull(exchangeRateService);
         applyLanguage();
@@ -99,6 +96,7 @@ public class LoginController {
                         "/vn/ninhkieupharma/pharmacy/styles/app.css")).toExternalForm());
 
         MainController controller = loader.getController();
+        FeatureServices featureServices = new FeatureServices(new RelationalFeatureModuleDAO(user));
         controller.setSession(
                 user.id(), user.username(), user.role(),
                 featureServices, authenticationService, exchangeRateService);

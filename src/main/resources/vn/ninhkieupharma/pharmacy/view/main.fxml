@@ -5,6 +5,7 @@
 <?import javafx.scene.control.ScrollPane?>
 <?import javafx.scene.control.Separator?>
 <?import javafx.scene.layout.BorderPane?>
+<?import javafx.scene.layout.FlowPane?>
 <?import javafx.scene.layout.HBox?>
 <?import javafx.scene.layout.StackPane?>
 <?import javafx.scene.layout.VBox?>
@@ -47,10 +48,13 @@
         <HBox alignment="CENTER_LEFT" styleClass="topbar">
             <Label fx:id="breadcrumbLabel" text="Tổng quan" styleClass="topbar-title"/>
             <HBox HBox.hgrow="ALWAYS"/>
-            <Label fx:id="exchangeRateStatusLabel" text="" styleClass="helper-text"/>
-            <Button fx:id="languageButton" text="English" onAction="#handleToggleLanguage"
-                    styleClass="button-secondary"/>
-            <Label fx:id="demoBadgeLabel" text="MYSQL" styleClass="demo-badge"/>
+            <FlowPane fx:id="topActions" alignment="CENTER_RIGHT" hgap="8.0" vgap="6.0"
+                      prefWrapLength="430.0" styleClass="topbar-actions">
+                <Label fx:id="exchangeRateStatusLabel" text="" styleClass="exchange-rate-status"/>
+                <Button fx:id="languageButton" text="English" onAction="#handleToggleLanguage"
+                        styleClass="button-secondary"/>
+                <Label fx:id="demoBadgeLabel" text="MYSQL" styleClass="demo-badge"/>
+            </FlowPane>
         </HBox>
     </top>
     <center>

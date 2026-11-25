@@ -106,10 +106,14 @@ public final class DemoData {
                     List.of("KK00030", "Kệ B · Tầng 1", "30/10/2026", "-1 sản phẩm", "Đã xác nhận"),
                     List.of("KK00029", "Kệ A · Tầng 2", "27/10/2026", "Khớp tồn", "Hoàn tất"))),
             Map.entry("UC-15", List.of(
-                    List.of("01/11/2026 09:30", "Paracetamol 500mg · Lô P102", "Bán hàng", "-2 hộp", "Hóa đơn HD00842"),
-                    List.of("01/11/2026 08:15", "Vitamin C 500mg · Lô V203", "Nhập hàng", "+24 hộp", "Phiếu PN00125"),
-                    List.of("31/10/2026 16:40", "Nước muối sinh lý · Lô N081", "Hư hỏng", "-1 chai", "Bao bì rò rỉ"),
-                    List.of("30/10/2026 10:05", "Men vi sinh BioCare · Lô M112", "Sắp hết hạn", "8 hộp", "Hạn dùng 30/11/2026"))),
+                    List.of("01/11/2026 09:30", "Paracetamol 500mg · Lô P102", "Bán hàng", "-2 hộp",
+                            "Hóa đơn HD00842", "2027-06-30", "K-A01 · Kệ A · Tầng 1"),
+                    List.of("01/11/2026 08:15", "Vitamin C 500mg · Lô V203", "Nhập hàng", "+24 hộp",
+                            "Phiếu PN00125", "2027-03-31", "K-A02 · Kệ A · Tầng 2"),
+                    List.of("31/10/2026 16:40", "Nước muối sinh lý · Lô N081", "Hư hỏng", "-1 chai",
+                            "Bao bì rò rỉ", "2027-01-31", "K-B01 · Kệ B · Tầng 1"),
+                    List.of("30/10/2026 10:05", "Men vi sinh BioCare · Lô M112", "Sắp hết hạn", "8 hộp",
+                            "Hạn dùng 30/11/2026", "2026-11-30", "T-KHO · Tủ bảo quản"))),
             Map.entry("UC-16", List.of(
                     List.of("KH0001", "Nguyễn Thị Mai", "0905 111 222", "mai@example.com", "", "1.250",
                             "ACTIVE", "", ""),

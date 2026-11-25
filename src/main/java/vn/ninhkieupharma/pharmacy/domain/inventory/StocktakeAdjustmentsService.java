@@ -33,14 +33,14 @@ public final class StocktakeAdjustmentsService extends AbstractFeatureModuleServ
         for (ModuleRow receipt : repository.findAll("UC-12")) {
             List<String> values = receipt.values();
             movements.add(List.of(values.get(2), values.get(1), "Nhập hàng",
-                    quantity(values.get(3)), "Phiếu " + values.get(0)));
+                    quantity(values.get(3)), "Phiếu " + values.get(0), "", ""));
         }
         for (ModuleRow stocktake : repository.findAll("UC-14")) {
             List<String> values = stocktake.values();
             String variance = values.get(3);
             if (!variance.contains("Khớp tồn") && !variance.equals(Localization.text("Khớp tồn"))) {
                 movements.add(List.of(values.get(2), values.get(1), "Điều chỉnh",
-                        quantity(variance), "Phiên " + values.get(0)));
+                        quantity(variance), "Phiên " + values.get(0), "", ""));
             }
         }
         for (ModuleRow sample : repository.findAll("UC-15")) {
