@@ -203,6 +203,21 @@ class FeatureServicesTest {
     }
 
     @Test
+    void workHourReportAcceptsMysqlAttendanceTimestamps() {
+        FeatureServices services = new FeatureServices();
+        ModuleDefinition attendanceModule = module("UC-04");
+        ModuleDefinition payrollReport = module("UC-05");
+
+        services.forModule(attendanceModule).create(attendanceModule,
+                List.of("Timestamp Employee", "Morning shift", "2026-11-25 09:00",
+                        "2026-11-25 17:00", ""));
+
+        assertTrue(services.forModule(payrollReport).findAll(payrollReport).stream()
+                .anyMatch(row -> row.values().get(0).equals("Timestamp Employee")
+                        && row.values().get(3).startsWith("8,0")));
+    }
+
+    @Test
     void revenueReportIsProjectedFromSessionInvoices() {
         FeatureServices services = new FeatureServices();
         ModuleDefinition salesModule = module("UC-17");

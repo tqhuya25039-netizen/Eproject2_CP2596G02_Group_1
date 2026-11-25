@@ -587,10 +587,10 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
     // --- UC-03: Quản lý lịch làm cửa hàng (Xếp lịch khả dụng + Xử lý trùng lịch & thiếu ca) ---
     private ModuleRow createStoreSchedule(List<String> values) {
         requireSize("UC-03", values, 5);
-        LocalDate weekStart = parseIsoDate(values.get(0), "Tuần bắt đầu");
-        LocalDate workDate = parseIsoDate(values.get(1), "Ngày làm");
-        String shiftName = values.get(2).trim();
-        String employeeName = values.get(3).trim();
+        LocalDate workDate = parseIsoDate(values.get(0), "Ngày làm");
+        LocalDate weekStart = workDate.minusDays(workDate.getDayOfWeek().getValue() - 1L);
+        String shiftName = values.get(1).trim();
+        String employeeName = values.get(2).trim();
         String note = values.get(4).trim();
 
         long employeeId = resolveId("SELECT employee_id FROM employees WHERE full_name = ? ORDER BY employee_id", employeeName);
@@ -615,10 +615,10 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
 
     private ModuleRow updateStoreSchedule(long assignmentId, List<String> values) {
         requireSize("UC-03", values, 5);
-        LocalDate weekStart = parseIsoDate(values.get(0), "Tuần bắt đầu");
-        LocalDate workDate = parseIsoDate(values.get(1), "Ngày làm");
-        String shiftName = values.get(2).trim();
-        String employeeName = values.get(3).trim();
+        LocalDate workDate = parseIsoDate(values.get(0), "Ngày làm");
+        LocalDate weekStart = workDate.minusDays(workDate.getDayOfWeek().getValue() - 1L);
+        String shiftName = values.get(1).trim();
+        String employeeName = values.get(2).trim();
         String note = values.get(4).trim();
 
         long employeeId = resolveId("SELECT employee_id FROM employees WHERE full_name = ? ORDER BY employee_id", employeeName);
@@ -641,7 +641,7 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO {
             });
             return null;
         });
-        return row(assignmentId, List.of(workDate.toString(), shiftName, employeeName, "PLANNED", finalNote));
+        return row(assignmentId, List.of(workDate.toString(), shiftName, employeeName, values.get(3), finalNote));
     }
 
     private String validateScheduleAndAvailability(long employeeId, String employeeName,

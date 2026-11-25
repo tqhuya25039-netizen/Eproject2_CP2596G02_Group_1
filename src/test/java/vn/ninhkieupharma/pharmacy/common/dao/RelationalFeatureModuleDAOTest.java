@@ -27,8 +27,12 @@ class RelationalFeatureModuleDAOTest {
     }
 
     @Test
-    void complexWorkflowsRemainReadOnlyInsteadOfWritingPartialRecords() {
-        for (String moduleId : List.of("UC-03", "UC-04", "UC-12", "UC-14", "UC-17")) {
+    void scheduleAndAttendanceWritesAreImplementedWhileOtherComplexWorkflowsRemainReadOnly() {
+        for (String moduleId : List.of("UC-03", "UC-04")) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> dao.create(moduleId, List.of()));
+        }
+        for (String moduleId : List.of("UC-12", "UC-14", "UC-17")) {
             UnsupportedOperationException error = assertThrows(UnsupportedOperationException.class,
                     () -> dao.create(moduleId, List.of()));
             assertTrue(error.getMessage().contains(moduleId));

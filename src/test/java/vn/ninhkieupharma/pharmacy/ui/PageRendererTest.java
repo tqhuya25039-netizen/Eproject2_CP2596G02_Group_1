@@ -38,4 +38,14 @@ class PageRendererTest {
             assertFalse(PageRenderer.canWriteModule(moduleId, UserRole.STAFF));
         }
     }
+
+    @Test
+    void availabilitySchedulingAndAttendanceAllowStaffWritesButPayrollRemainsReadOnly() {
+        for (String moduleId : List.of("UC-02", "UC-03", "UC-04")) {
+            assertTrue(PageRenderer.canWriteModule(moduleId, UserRole.ADMIN));
+            assertTrue(PageRenderer.canWriteModule(moduleId, UserRole.STAFF));
+        }
+        assertFalse(PageRenderer.canWriteModule("UC-05", UserRole.ADMIN));
+        assertFalse(PageRenderer.canWriteModule("UC-05", UserRole.STAFF));
+    }
 }

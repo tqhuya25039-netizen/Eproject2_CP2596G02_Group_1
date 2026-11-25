@@ -907,14 +907,20 @@ public class PageRenderer {
         fields.setVgap(12);
         fields.setPadding(new Insets(12, 0, 8, 0));
         List<TextField> inputs = new ArrayList<>();
-        for (int index = 0; index < module.columns().size(); index++) {
+        List<String> fieldLabels = "UC-04".equals(module.id())
+                ? module.formFields() : module.columns();
+        for (int index = 0; index < fieldLabels.size(); index++) {
             TextField input = new TextField();
-            input.setPromptText(module.columns().get(index));
+            input.setPromptText(fieldLabels.get(index));
             input.getStyleClass().add("text-input");
             if (existingRow != null) {
                 input.setText(Localization.text(existingRow.values().get(index)));
             }
-            Label label = new Label(module.columns().get(index));
+            if (("UC-03".equals(module.id()) && index == 3)
+                    || ("UC-04".equals(module.id()) && existingRow != null && index < 2)) {
+                input.setDisable(true);
+            }
+            Label label = new Label(fieldLabels.get(index));
             label.getStyleClass().add("field-label");
             fields.add(label, 0, index);
             fields.add(input, 1, index);
@@ -1517,7 +1523,7 @@ public class PageRenderer {
     }
 
     private static boolean isWritableModule(String moduleId) {
-        return List.of("UC-01", "UC-02", "UC-07", "UC-08", "UC-09", "UC-13", "UC-16", "UC-18")
+        return List.of("UC-01", "UC-02", "UC-03", "UC-04", "UC-07", "UC-08", "UC-09", "UC-13", "UC-16", "UC-18")
                 .contains(moduleId);
     }
 
