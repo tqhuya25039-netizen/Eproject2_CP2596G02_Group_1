@@ -1,6 +1,8 @@
 package vn.ninhkieupharma.pharmacy.common.dao;
 
 import org.junit.jupiter.api.Test;
+import vn.ninhkieupharma.pharmacy.common.auth.User;
+import vn.ninhkieupharma.pharmacy.common.auth.UserRole;
 import vn.ninhkieupharma.pharmacy.common.service.ModuleCatalog;
 import vn.ninhkieupharma.pharmacy.common.dao.InventoryWorkflowDAO;
 
@@ -16,6 +18,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 
 class RelationalFeatureModuleDAOTest {
     private final RelationalFeatureModuleDAO dao = new RelationalFeatureModuleDAO();
+    private final RelationalFeatureModuleDAO adminDao = new RelationalFeatureModuleDAO(
+            new User(1, "admin", "", UserRole.ADMIN, true));
 
     @Test
     void categoryFormMatchesTheNormalizedSchemaFields() {
@@ -36,7 +40,7 @@ class RelationalFeatureModuleDAOTest {
         }
         for (String moduleId : List.of("UC-12", "UC-14", "UC-17")) {
             UnsupportedOperationException error = assertThrows(UnsupportedOperationException.class,
-                    () -> dao.create(moduleId, List.of()));
+                    () -> adminDao.create(moduleId, List.of()));
             assertTrue(error.getMessage().contains(moduleId));
         }
     }
@@ -44,10 +48,22 @@ class RelationalFeatureModuleDAOTest {
     @Test
     void validatesProductCodeAndParsesGroupedSellingPrices() {
         assertThrows(IllegalArgumentException.class, () -> dao.create("UC-08",
-                List.of("X".repeat(31), "T", "N", "", "Hộp", "10", "FALSE", "ACTIVE", "")));
+                List.of("X".repeat(31), "T", "N", "", "Hộp", "10", "FALSE", "ACTIVE", "", "0")));
         assertEquals(new BigDecimal("1234.56"), RelationalFeatureModuleDAO.parseUnitPrice("1.234,56 ₫"));
         assertEquals(new BigDecimal("1234.56"), RelationalFeatureModuleDAO.parseUnitPrice("1,234.56 VND"));
         assertThrows(IllegalArgumentException.class, () -> RelationalFeatureModuleDAO.parseUnitPrice("1,2,3"));
+    }
+
+    @Test
+    void validatesProductMinimumAgeBeforeConnecting() {
+        assertEquals(18, RelationalFeatureModuleDAO.parseMinimumAge("18"));
+        assertEquals(0, RelationalFeatureModuleDAO.parseMinimumAge(""));
+        assertThrows(IllegalArgumentException.class,
+                () -> RelationalFeatureModuleDAO.parseMinimumAge("-1"));
+        assertThrows(IllegalArgumentException.class,
+                () -> RelationalFeatureModuleDAO.parseMinimumAge("121"));
+        assertThrows(IllegalArgumentException.class,
+                () -> RelationalFeatureModuleDAO.parseMinimumAge("not-a-number"));
     }
 
     @Test
@@ -63,31 +79,55 @@ class RelationalFeatureModuleDAOTest {
     @Test
     void storageLocationRequiresCodeNameAndValidFieldLengths() {
         assertThrows(IllegalArgumentException.class,
-                () -> dao.create("UC-13", List.of("", "Kệ A", "", "ACTIVE")));
+                () -> adminDao.create("UC-13", List.of("", "Kệ A", "", "ACTIVE")));
         assertThrows(IllegalArgumentException.class,
-                () -> dao.create("UC-13", List.of("K-A", "", "", "ACTIVE")));
+                () -> adminDao.create("UC-13", List.of("K-A", "", "", "ACTIVE")));
         assertThrows(IllegalArgumentException.class,
-                () -> dao.update("UC-13", UUID.randomUUID(),
+                () -> adminDao.update("UC-13", new UUID(0x4e4b504841524d41L, 1),
                         List.of("", "Kệ A", "", "ACTIVE")));
     }
 
     @Test
+    void staffCannotConfirmInventoryWorkflowsOrMaintainStorageLocations() {
+        RelationalFeatureModuleDAO staffDao = new RelationalFeatureModuleDAO(
+                new User(1, "staff", "", UserRole.STAFF, true));
+        UUID rowId = new UUID(0x4e4b504841524d41L, 1);
+
+        assertThrows(SecurityException.class, () -> staffDao.confirmGoodsReceipt(1, rowId));
+        assertThrows(SecurityException.class, () -> staffDao.confirmStocktake(1, rowId));
+        assertThrows(SecurityException.class, () -> staffDao.create("UC-13",
+                List.of("K-A", "Kệ A", "", "ACTIVE")));
+        assertThrows(SecurityException.class, () -> staffDao.update("UC-13", rowId,
+                List.of("K-A", "Kệ A", "", "ACTIVE")));
+        assertThrows(SecurityException.class, () -> staffDao.delete("UC-13", rowId));
+        assertThrows(SecurityException.class, () -> staffDao.findAll("UC-15"));
+        assertThrows(SecurityException.class, () -> staffDao.recordInventoryLoss(
+                1, 1, InventoryWorkflowDAO.LossType.DAMAGED, BigDecimal.ONE, ""));
+    }
+
+    @Test
+    void deletingStorageLocationsRequiresAdministrator() {
+        assertThrows(SecurityException.class,
+                () -> dao.delete("UC-13", new UUID(0x4e4b504841524d41L, 1)));
+    }
+
+    @Test
     void inventoryWorkflowsRejectIncompleteAndInvalidRequestsBeforeConnectingToMysql() {
-        assertThrows(IllegalArgumentException.class, () -> dao.create("UC-13",
+        assertThrows(IllegalArgumentException.class, () -> adminDao.create("UC-13",
                 List.of("", "Kệ A · Tầng 1", "", "ACTIVE")));
-        assertThrows(IllegalArgumentException.class, () -> dao.receiveGoods(1,
+        assertThrows(IllegalArgumentException.class, () -> dao.createGoodsReceiptDraft(1,
                 new InventoryWorkflowDAO.ReceiptRequest(1, LocalDate.now(), "", List.of())));
-        assertThrows(IllegalArgumentException.class, () -> dao.receiveGoods(1,
+        assertThrows(IllegalArgumentException.class, () -> dao.createGoodsReceiptDraft(1,
                 new InventoryWorkflowDAO.ReceiptRequest(1, LocalDate.now(), "",
                         List.of(new InventoryWorkflowDAO.ReceiptLine(
                                 1, 1, "LOT-1", LocalDate.now().plusDays(30),
                                 new BigDecimal("-1"), BigDecimal.ZERO)))));
-        assertThrows(IllegalArgumentException.class, () -> dao.receiveGoods(1,
+        assertThrows(IllegalArgumentException.class, () -> dao.createGoodsReceiptDraft(1,
                 new InventoryWorkflowDAO.ReceiptRequest(1, LocalDate.now().plusDays(1), "",
                         List.of(new InventoryWorkflowDAO.ReceiptLine(
                                 1, 1, "LOT-1", LocalDate.now().plusDays(30),
                                 new BigDecimal("1"), BigDecimal.ZERO)))));
-        assertThrows(IllegalArgumentException.class, () -> dao.receiveGoods(1,
+        assertThrows(IllegalArgumentException.class, () -> dao.createGoodsReceiptDraft(1,
                 new InventoryWorkflowDAO.ReceiptRequest(1, LocalDate.now(), "",
                         List.of(new InventoryWorkflowDAO.ReceiptLine(
                                 1, 1, "LOT-1", LocalDate.now().plusDays(30),
@@ -95,17 +135,17 @@ class RelationalFeatureModuleDAOTest {
                                 new InventoryWorkflowDAO.ReceiptLine(
                                         1, 1, "LOT-1", LocalDate.now().plusDays(30),
                                         new BigDecimal("2"), new BigDecimal("1000"))))));
-        assertThrows(IllegalArgumentException.class, () -> dao.receiveGoods(1,
+        assertThrows(IllegalArgumentException.class, () -> dao.createGoodsReceiptDraft(1,
                 new InventoryWorkflowDAO.ReceiptRequest(1, LocalDate.now(), "",
                         List.of(new InventoryWorkflowDAO.ReceiptLine(
                                 1, 1, "LOT-1", LocalDate.now().plusDays(30),
                                 new BigDecimal("1"), new BigDecimal("1.001"))))));
-        assertThrows(IllegalArgumentException.class, () -> dao.receiveGoods(1,
+        assertThrows(IllegalArgumentException.class, () -> dao.createGoodsReceiptDraft(1,
                 new InventoryWorkflowDAO.ReceiptRequest(1, LocalDate.now(), "",
                         List.of(new InventoryWorkflowDAO.ReceiptLine(
                                 1, 1, "LOT-1", LocalDate.now().minusDays(1),
                                 new BigDecimal("1"), BigDecimal.ZERO)))));
-        assertThrows(IllegalArgumentException.class, () -> dao.completeStocktake(1,
+        assertThrows(IllegalArgumentException.class, () -> dao.createStocktakeDraft(1,
                 new InventoryWorkflowDAO.StocktakeRequest(1, LocalDate.now(), "", List.of())));
         assertThrows(IllegalArgumentException.class, () -> dao.recordInventoryLoss(
                 1, 1, InventoryWorkflowDAO.LossType.DAMAGED, BigDecimal.ZERO, ""));

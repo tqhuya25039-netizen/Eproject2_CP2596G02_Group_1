@@ -64,9 +64,9 @@ public abstract class AbstractFeatureModuleService implements FeatureModuleServi
     }
 
     private void validate(ModuleDefinition module, List<String> values) {
-        if (values.size() != module.columns().size()) {
+        if (values.size() != module.formFields().size()) {
             throw new IllegalArgumentException(
-                    Localization.text("Expected ") + module.columns().size()
+                    Localization.text("Expected ") + module.formFields().size()
                             + Localization.text(" values."));
         }
         if (values.stream().anyMatch(value -> value == null)) {

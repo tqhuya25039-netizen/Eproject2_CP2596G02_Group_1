@@ -7,6 +7,7 @@ import vn.ninhkieupharma.pharmacy.common.service.Localization;
 import vn.ninhkieupharma.pharmacy.common.service.AbstractFeatureModuleService;
 
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
@@ -72,14 +73,6 @@ public final class AttendanceService extends AbstractFeatureModuleService {
         }
         validateTime(values.get(2), false);
         validateTime(values.get(3), true);
-        if (values.size() > 4
-                && values.get(4) != null
-                && (values.get(4).contains("Trễ")
-                || values.get(4).toLowerCase(Locale.ROOT).contains("late"))
-                && !values.get(4).matches(".*\\d+.*")) {
-            throw new IllegalArgumentException(Localization.text(
-                    "Late status must include the delay in minutes."));
-        }
     }
 
     private void validateTime(String value, boolean allowMissing) {
@@ -90,10 +83,25 @@ public final class AttendanceService extends AbstractFeatureModuleService {
             return;
         }
         try {
-            LocalTime.parse(value, DateTimeFormatter.ofPattern("H:mm"));
+            parseAttendanceTime(value);
         } catch (DateTimeParseException exception) {
             throw new IllegalArgumentException(
-                    Localization.text("Time must use H:mm format: ") + value, exception);
+                    Localization.text("Time must use H:mm or YYYY-MM-DD HH:mm format: ") + value,
+                    exception);
+        }
+    }
+
+    private LocalTime parseAttendanceTime(String value) {
+        try {
+            return LocalTime.parse(value, DateTimeFormatter.ofPattern("H:mm"));
+        } catch (DateTimeParseException timeException) {
+            try {
+                return LocalDateTime.parse(value, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+                        .toLocalTime();
+            } catch (DateTimeParseException dateTimeException) {
+                dateTimeException.addSuppressed(timeException);
+                throw dateTimeException;
+            }
         }
     }
 
@@ -103,12 +111,19 @@ public final class AttendanceService extends AbstractFeatureModuleService {
             return 0;
         }
         try {
-            LocalTime start = LocalTime.parse(values.get(2), DateTimeFormatter.ofPattern("H:mm"));
-            LocalTime end = LocalTime.parse(values.get(3), DateTimeFormatter.ofPattern("H:mm"));
-            return Duration.between(start, end).toMinutes() / 60.0;
+            DateTimeFormatter dateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+            try {
+                LocalDateTime start = LocalDateTime.parse(values.get(2), dateTimeFormatter);
+                LocalDateTime end = LocalDateTime.parse(values.get(3), dateTimeFormatter);
+                return Duration.between(start, end).toMinutes() / 60.0;
+            } catch (DateTimeParseException ignored) {
+                LocalTime start = parseAttendanceTime(values.get(2));
+                LocalTime end = parseAttendanceTime(values.get(3));
+                return Duration.between(start, end).toMinutes() / 60.0;
+            }
         } catch (DateTimeParseException exception) {
             throw new IllegalArgumentException(
-                    Localization.text("Attendance times must use H:mm format: ")
+                    Localization.text("Attendance times must use H:mm or YYYY-MM-DD HH:mm format: ")
                             + values.get(2) + "–" + values.get(3),
                     exception);
         }

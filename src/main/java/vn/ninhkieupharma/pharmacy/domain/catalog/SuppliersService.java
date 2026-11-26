@@ -8,6 +8,7 @@ import vn.ninhkieupharma.pharmacy.common.service.AbstractFeatureModuleService;
 import java.text.NumberFormat;
 import java.time.YearMonth;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -27,7 +28,13 @@ public final class SuppliersService extends AbstractFeatureModuleService {
 
     @Override
     public List<ModuleRow> findAll(ModuleDefinition module) {
-        if (!module.id().equals("UC-11") || repository.supportsNativeReports()) {
+        if (repository.supportsNativeReports()) {
+            return super.findAll(module);
+        }
+        if (module.id().equals("UC-09")) {
+            return suppliersWithProductCounts(module);
+        }
+        if (!module.id().equals("UC-11")) {
             return super.findAll(module);
         }
         Map<String, Integer> counts = new LinkedHashMap<>();
@@ -56,6 +63,28 @@ public final class SuppliersService extends AbstractFeatureModuleService {
         }
         repository.replaceAll("UC-11", report);
         return super.findAll(module);
+    }
+
+    private List<ModuleRow> suppliersWithProductCounts(ModuleDefinition module) {
+        Map<String, Integer> counts = new HashMap<>();
+        for (ModuleRow product : repository.findAll("UC-08")) {
+            List<String> values = product.values();
+            if (values.size() <= PRODUCT_SUPPLIER_COLUMN) {
+                continue;
+            }
+            for (String supplier : values.get(PRODUCT_SUPPLIER_COLUMN).split(",")) {
+                if (!supplier.isBlank()) {
+                    counts.merge(supplier.trim(), 1, Integer::sum);
+                }
+            }
+        }
+        return super.findAll(module).stream()
+                .map(supplier -> {
+                    List<String> values = new ArrayList<>(supplier.values());
+                    values.add(Integer.toString(counts.getOrDefault(values.get(1), 0)));
+                    return new ModuleRow(supplier.id(), values);
+                })
+                .toList();
     }
 
     private boolean isActive(String status) {
