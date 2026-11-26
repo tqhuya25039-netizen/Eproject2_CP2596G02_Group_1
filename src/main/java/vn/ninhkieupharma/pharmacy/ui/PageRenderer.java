@@ -787,9 +787,6 @@ public class PageRenderer {
         }
 
         if (module.report()) {
-<<<<<<< HEAD
-            page.getChildren().addAll(title, description,
-=======
             page.getChildren().addAll(title, description);
             if (!"UC-10".equals(module.id())
                     && !"UC-11".equals(module.id())
@@ -797,7 +794,6 @@ public class PageRenderer {
                 page.getChildren().add(createReportSummary(module, featureService));
             }
             page.getChildren().addAll(
->>>>>>> 54921761a3095ecb8919f62602fd2517fb311178
                     filters, actions, createReportCharts(module, featureService), renderedTable.table());
         } else {
             String note = salesCustomerEntry != null
@@ -1181,11 +1177,7 @@ public class PageRenderer {
         }
     }
 
-<<<<<<< HEAD
-   private FlowPane createFilters(
-=======
     private FlowPane createFilters(
->>>>>>> 54921761a3095ecb8919f62602fd2517fb311178
             ModuleDefinition module,
             List<Node> filterInputs,
             FilteredList<ModuleRow> rows,
@@ -1991,8 +1983,6 @@ public class PageRenderer {
         return result;
     }
 
-<<<<<<< HEAD
-=======
     private double reportColumnWidth(String moduleId, int columnIndex) {
         double[] widths = switch (moduleId) {
             case "UC-10" -> new double[] {100, 160, 220, 100, 210};
@@ -2013,7 +2003,6 @@ public class PageRenderer {
         return summary;
     }
 
->>>>>>> 54921761a3095ecb8919f62602fd2517fb311178
     private Node createReportCharts(ModuleDefinition module, FeatureModuleService featureService) {
         FlowPane charts = new FlowPane(16, 16);
         charts.getStyleClass().add("report-chart-row");
@@ -3249,59 +3238,49 @@ public class PageRenderer {
         fields.setHgap(16);
         fields.setVgap(12);
         fields.setPadding(new Insets(12, 0, 8, 0));
-<<<<<<< HEAD
         List<java.util.function.Supplier<String>> valueReaders = new ArrayList<>();
         List<String> fieldLabels = "UC-04".equals(module.id())
                 ? module.formFields() : module.columns();
         for (int index = 0; index < fieldLabels.size(); index++) {
             Label label = new Label(fieldLabels.get(index));
             label.getStyleClass().add("field-label");
+            Node input;
             if ("UC-03".equals(module.id()) && index == 3) {
                 ComboBox<String> statusInput = new ComboBox<>();
                 statusInput.getItems().setAll("PLANNED", "COMPLETED", "CANCELLED");
                 statusInput.setValue(existingRow == null ? "PLANNED" : existingRow.values().get(index));
                 statusInput.getStyleClass().add("text-input");
                 statusInput.setMaxWidth(Double.MAX_VALUE);
-                fields.add(label, 0, index);
-                fields.add(statusInput, 1, index);
-                GridPane.setHgrow(statusInput, Priority.ALWAYS);
+                input = statusInput;
                 valueReaders.add(statusInput::getValue);
-                continue;
-            }
-            TextField input = new TextField();
-            input.setPromptText(fieldLabels.get(index));
-            input.getStyleClass().add("text-input");
-            if (existingRow != null) {
-                String value = Localization.text(existingRow.values().get(index));
-                if ("UC-04".equals(module.id()) && index >= 2) {
-                    value = formatDisplayDate(value);
-                }
-                input.setText(value);
-=======
-        List<Node> inputs = new ArrayList<>();
-        List<String> fieldLabels = module.formFields();
-        for (int index = 0; index < fieldLabels.size(); index++) {
-            Node input;
-            if ("UC-09".equals(module.id()) && index == 5) {
+            } else if ("UC-09".equals(module.id()) && index == 5) {
                 ComboBox<String> status = new ComboBox<>(FXCollections.observableArrayList(
                         Localization.text("Đang hoạt động"), Localization.text("Ngừng hoạt động")));
                 status.setMaxWidth(Double.MAX_VALUE);
                 status.getSelectionModel().select(existingRow != null
                         && "INACTIVE".equalsIgnoreCase(existingRow.values().get(index)) ? 1 : 0);
                 input = status;
+                valueReaders.add(() ->
+                        status.getSelectionModel().getSelectedIndex() == 0 ? "ACTIVE" : "INACTIVE");
             } else {
                 TextField textField = new TextField();
                 textField.setPromptText(fieldLabels.get(index));
                 textField.getStyleClass().add("text-input");
                 if (existingRow != null) {
-                    textField.setText(Localization.text(existingRow.values().get(index)));
+                    String value = Localization.text(existingRow.values().get(index));
+                    if ("UC-04".equals(module.id()) && index >= 2) {
+                        value = formatDisplayDate(value);
+                    }
+                    textField.setText(value);
                 }
                 input = textField;
->>>>>>> 54921761a3095ecb8919f62602fd2517fb311178
+                valueReaders.add(() -> textField.getText().trim());
             }
             if ("UC-04".equals(module.id()) && userRole == UserRole.STAFF
                     && existingRow == null && index == 0) {
-                input.setText(currentEmployeeName);
+                if (input instanceof TextField textField) {
+                    textField.setText(currentEmployeeName);
+                }
                 input.setDisable(true);
             }
             if ("UC-04".equals(module.id()) && existingRow != null && index < 2) {
@@ -3310,7 +3289,6 @@ public class PageRenderer {
             fields.add(label, 0, index);
             fields.add(input, 1, index);
             GridPane.setHgrow(input, Priority.ALWAYS);
-            valueReaders.add(input::getText);
         }
         Label note = new Label(Localization.text(
                 "Dữ liệu nghiệp vụ được lưu trong MySQL; kết quả báo cáo được tính lại khi mở."));
@@ -3322,8 +3300,7 @@ public class PageRenderer {
         dialog.setResultConverter(button -> button == ButtonType.OK ? ButtonType.OK : null);
         return dialog.showAndWait()
                 .filter(ButtonType.OK::equals)
-<<<<<<< HEAD
-                .map(ignored -> valueReaders.stream().map(reader -> reader.get().trim()).toList())
+                .map(ignored -> valueReaders.stream().map(java.util.function.Supplier::get).toList())
                 .map(values -> preserveUnchangedValues(existingRow, values));
     }
 
@@ -3346,13 +3323,6 @@ public class PageRenderer {
             showInformation(Localization.text("Thao tác chưa hỗ trợ"),
                     Localization.text(exception.getMessage()));
         }
-=======
-                .map(ignored -> inputs.stream()
-                        .map(input -> input instanceof ComboBox<?> comboBox
-                                ? (comboBox.getSelectionModel().getSelectedIndex() == 0 ? "ACTIVE" : "INACTIVE")
-                                : ((TextField) input).getText().trim())
-                        .toList())
-                .map(values -> preserveUnchangedValues(existingRow, values));
     }
 
     private java.util.Optional<List<String>> createProductDialog(
@@ -3505,7 +3475,6 @@ public class PageRenderer {
                 .filter(module -> module.id().equals(moduleId))
                 .findFirst()
                 .orElseThrow();
->>>>>>> 54921761a3095ecb8919f62602fd2517fb311178
     }
 
     private java.util.Optional<List<String>> createCustomerDialog(ModuleRow existingRow) {
@@ -4192,15 +4161,11 @@ public class PageRenderer {
         return role != null && isWritableModule(moduleId)
                 && (role == UserRole.ADMIN
                 || role == UserRole.STAFF
-<<<<<<< HEAD
-                && !List.of("UC-03", "UC-07", "UC-08", "UC-09", "UC-18").contains(moduleId));
-=======
-                && !List.of("UC-07", "UC-08", "UC-09", "UC-13", "UC-18").contains(moduleId));
+                && !List.of("UC-03", "UC-07", "UC-08", "UC-09", "UC-13", "UC-18").contains(moduleId));
     }
 
     static boolean canConfirmInventoryWorkflow(String moduleId, UserRole role) {
         return role == UserRole.ADMIN && List.of("UC-12", "UC-14").contains(moduleId);
->>>>>>> 54921761a3095ecb8919f62602fd2517fb311178
     }
 
     static boolean canDeleteModule(String moduleId, UserRole role) {

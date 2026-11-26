@@ -68,13 +68,14 @@ class PageRendererTest {
     }
 
     @Test
-<<<<<<< HEAD
     void onlyAdministratorsCanManageTheStoreSchedule() {
         assertTrue(PageRenderer.canWriteModule("UC-03", UserRole.ADMIN));
         assertTrue(PageRenderer.canDeleteModule("UC-03", UserRole.ADMIN));
         assertFalse(PageRenderer.canWriteModule("UC-03", UserRole.STAFF));
         assertFalse(PageRenderer.canDeleteModule("UC-03", UserRole.STAFF));
-=======
+    }
+
+    @Test
     void productTableAndFormIncludeMinimumAge() {
         ModuleDefinition products = ModuleCatalog.MODULES.stream()
                 .filter(module -> module.id().equals("UC-08"))
@@ -145,7 +146,6 @@ class PageRendererTest {
             assertFalse(PageRenderer.canConfirmInventoryWorkflow(moduleId, UserRole.STAFF));
         }
         assertFalse(PageRenderer.canConfirmInventoryWorkflow("UC-15", UserRole.ADMIN));
->>>>>>> 54921761a3095ecb8919f62602fd2517fb311178
     }
 
     @Test

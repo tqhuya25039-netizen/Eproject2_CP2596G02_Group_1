@@ -52,14 +52,12 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
     private final SalesCheckoutDAO salesCheckoutDAO = new SalesCheckoutDAO();
     private final long actorUserId;
     private final UserRole actorRole;
-    private final long actorUserId;
 
     private record EmployeeIdentity(long id, String fullName) {
     }
 
     /** Creates a repository without access to administrative sales operations. */
     public RelationalFeatureModuleDAO() {
-        actorUserId = 0;
         actorRole = null;
         actorUserId = -1;
     }
@@ -71,7 +69,6 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
         }
         actorUserId = authenticatedUser.id();
         actorRole = Objects.requireNonNull(authenticatedUser.role());
-        actorUserId = authenticatedUser.id();
     }
 
     private void requireSalesAdministrationAccess(String moduleId) {
@@ -88,7 +85,6 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
         }
     }
 
-<<<<<<< HEAD
     private void requireAttendanceAccess() {
         if (actorRole == null) {
             throw new SecurityException(Localization.text(
@@ -102,7 +98,6 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
         }
     }
 
-=======
     private void requireInventoryActor() {
         if (actorRole != UserRole.ADMIN && actorRole != UserRole.STAFF) {
             throw new SecurityException(Localization.text("Cần đăng nhập để sử dụng chức năng kho hàng."));
@@ -122,7 +117,6 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
             throw new SecurityException(Localization.text("Chỉ quản trị viên được xác nhận nghiệp vụ kho hàng."));
         }
     }
->>>>>>> 54921761a3095ecb8919f62602fd2517fb311178
     @Override
     public boolean supportsNativeReports() {
         return true;
