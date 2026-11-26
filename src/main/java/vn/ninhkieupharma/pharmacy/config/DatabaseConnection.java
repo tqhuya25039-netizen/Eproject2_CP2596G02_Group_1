@@ -17,10 +17,12 @@ public final class DatabaseConnection {
             "warehouse_locations", "inventory_batches", "goods_receipts",
             "goods_receipt_items", "stocktakes", "stocktake_items", "customers",
             "customer_allergies", "loyalty_programs", "promotions", "sales",
-            "promotion_point_tiers", "sale_items", "inventory_movements", "product_ingredients");
+            "promotion_point_tiers", "sale_items", "inventory_movements", "product_ingredients",
+            "goods_receipt_draft_items");
     private static final java.util.Map<String, java.util.Set<String>> REQUIRED_COLUMNS = java.util.Map.of(
             "customers", java.util.Set.of("is_blocked", "block_reason", "date_of_birth"),
             "products", java.util.Set.of("selling_price", "minimum_age_years"),
+            "goods_receipts", java.util.Set.of("is_confirmed"),
             "sales", java.util.Set.of("promotion_discount_amount", "points_discount_amount",
                     "redeem_points", "requested_points", "revision", "prescription_code", "prescription_date", "prescribing_doctor",
                     "clinic", "diagnosis", "note"),
@@ -67,7 +69,7 @@ public final class DatabaseConnection {
                 if (!missingColumns.isEmpty()) {
                     throw new MissingSchemaException(SCHEMA_MISMATCH_PREFIX + " "
                             + entry.getKey() + " columns: " + String.join(", ", missingColumns)
-                            + ". Back up the existing database, then run the applicable scripts (V2 through V6) "
+                            + ". Back up the existing database, then run the applicable scripts (V2 through V8) "
                             + "from environment/migrations in order "
                             + "using MySQL/phpMyAdmin. Do not run the full schema script against an existing database.");
                 }

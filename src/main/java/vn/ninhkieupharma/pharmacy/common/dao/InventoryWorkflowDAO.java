@@ -67,6 +67,12 @@ public interface InventoryWorkflowDAO {
         }
     }
 
+    record ReceiptDraft(long supplierId, LocalDate receivedDate, String note, List<ReceiptLine> lines) {
+        public ReceiptDraft {
+            lines = List.copyOf(lines);
+        }
+    }
+
     record ReceiptDetail(
             String productCode,
             String productName,
@@ -105,6 +111,16 @@ public interface InventoryWorkflowDAO {
         }
     }
 
+    record StocktakeDraft(
+            long locationId,
+            LocalDate stocktakeDate,
+            String note,
+            List<StocktakeCount> counts) {
+        public StocktakeDraft {
+            counts = List.copyOf(counts);
+        }
+    }
+
     enum LossType {
         DAMAGED,
         EXPIRED
@@ -120,11 +136,27 @@ public interface InventoryWorkflowDAO {
 
     List<ReceiptDetail> findGoodsReceiptDetails(UUID receiptId);
 
+    ReceiptDraft findGoodsReceiptDraft(UUID receiptId);
+
     List<StocktakeDetail> findStocktakeDetails(UUID stocktakeId);
 
-    ModuleRow receiveGoods(long authenticatedUserId, ReceiptRequest request);
+    StocktakeDraft findStocktakeDraft(UUID stocktakeId);
 
-    ModuleRow completeStocktake(long authenticatedUserId, StocktakeRequest request);
+    ModuleRow createGoodsReceiptDraft(long authenticatedUserId, ReceiptRequest request);
+
+    ModuleRow updateGoodsReceiptDraft(long authenticatedUserId, UUID receiptId, ReceiptRequest request);
+
+    void cancelGoodsReceiptDraft(long authenticatedUserId, UUID receiptId);
+
+    ModuleRow confirmGoodsReceipt(long authenticatedUserId, UUID receiptId);
+
+    ModuleRow createStocktakeDraft(long authenticatedUserId, StocktakeRequest request);
+
+    ModuleRow updateStocktakeDraft(long authenticatedUserId, UUID stocktakeId, StocktakeRequest request);
+
+    void cancelStocktakeDraft(long authenticatedUserId, UUID stocktakeId);
+
+    ModuleRow confirmStocktake(long authenticatedUserId, UUID stocktakeId);
 
     void recordInventoryLoss(long authenticatedUserId, long batchId, LossType lossType,
                              BigDecimal quantity, String note);

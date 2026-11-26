@@ -233,6 +233,7 @@ CREATE TABLE goods_receipts (
     received_by BIGINT UNSIGNED NOT NULL,
     received_at DATETIME NOT NULL,
     status VARCHAR(20) NOT NULL DEFAULT 'RECEIVED',
+    is_confirmed TINYINT(1) NOT NULL DEFAULT 1,
     note VARCHAR(255) NULL,
     PRIMARY KEY (receipt_id),
     UNIQUE KEY uq_receipts_code (receipt_code),
@@ -241,6 +242,27 @@ CREATE TABLE goods_receipts (
     CONSTRAINT fk_receipts_user
         FOREIGN KEY (received_by) REFERENCES users (user_id),
     CONSTRAINT chk_receipts_status CHECK (status IN ('RECEIVED', 'CANCELLED'))
+) ENGINE=InnoDB;
+
+CREATE TABLE goods_receipt_draft_items (
+    draft_item_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    receipt_id BIGINT UNSIGNED NOT NULL,
+    product_id BIGINT UNSIGNED NOT NULL,
+    location_id BIGINT UNSIGNED NOT NULL,
+    batch_code VARCHAR(50) NOT NULL,
+    expiry_date DATE NULL,
+    quantity DECIMAL(12, 3) NOT NULL,
+    unit_cost DECIMAL(12, 2) NOT NULL,
+    PRIMARY KEY (draft_item_id),
+    UNIQUE KEY uq_receipt_draft_batch (receipt_id, product_id, location_id, batch_code),
+    CONSTRAINT fk_receipt_draft_receipt
+        FOREIGN KEY (receipt_id) REFERENCES goods_receipts (receipt_id) ON DELETE CASCADE,
+    CONSTRAINT fk_receipt_draft_product
+        FOREIGN KEY (product_id) REFERENCES products (product_id),
+    CONSTRAINT fk_receipt_draft_location
+        FOREIGN KEY (location_id) REFERENCES warehouse_locations (location_id),
+    CONSTRAINT chk_receipt_draft_quantity CHECK (quantity > 0),
+    CONSTRAINT chk_receipt_draft_cost CHECK (unit_cost >= 0)
 ) ENGINE=InnoDB;
 
 CREATE TABLE goods_receipt_items (
@@ -458,7 +480,12 @@ CREATE TABLE inventory_movements (
         FOREIGN KEY (created_by) REFERENCES users (user_id),
     CONSTRAINT chk_movements_type
         CHECK (movement_type IN ('RECEIPT', 'SALE', 'ADJUSTMENT', 'DAMAGED', 'EXPIRED')),
-    CONSTRAINT chk_movements_quantity CHECK (quantity_delta <> 0)
+    CONSTRAINT chk_movements_quantity CHECK (quantity_delta <> 0),
+    CONSTRAINT chk_movements_direction CHECK (
+        (movement_type = 'RECEIPT' AND quantity_delta > 0)
+        OR (movement_type IN ('SALE', 'DAMAGED', 'EXPIRED') AND quantity_delta < 0)
+        OR movement_type = 'ADJUSTMENT'
+    )
 ) ENGINE=InnoDB;
 
 -- Du lieu mau: moi bang co tu 1 den 10 dong, cac khoa ngoai deu tro den du lieu ton tai.

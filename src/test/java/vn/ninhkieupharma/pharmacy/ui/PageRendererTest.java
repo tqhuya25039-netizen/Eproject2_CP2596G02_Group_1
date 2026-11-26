@@ -52,7 +52,7 @@ class PageRendererTest {
 
     @Test
     void catalogMutationsAreAdminOnly() {
-        for (String moduleId : List.of("UC-07", "UC-08", "UC-09")) {
+        for (String moduleId : List.of("UC-07", "UC-08", "UC-09", "UC-13")) {
             assertTrue(PageRenderer.canWriteModule(moduleId, UserRole.ADMIN));
             assertFalse(PageRenderer.canWriteModule(moduleId, UserRole.STAFF));
         }
@@ -120,6 +120,15 @@ class PageRendererTest {
         assertEquals(List.of(1, 2), data.series().get("Ngành A"));
         assertEquals(List.of(3, 0), data.series().get("Ngành B"));
         assertEquals(List.of(2, 0), data.latestPeriodTotals());
+    }
+
+    @Test
+    void onlyAdminsCanConfirmGoodsReceiptsAndStocktakes() {
+        for (String moduleId : List.of("UC-12", "UC-14")) {
+            assertTrue(PageRenderer.canConfirmInventoryWorkflow(moduleId, UserRole.ADMIN));
+            assertFalse(PageRenderer.canConfirmInventoryWorkflow(moduleId, UserRole.STAFF));
+        }
+        assertFalse(PageRenderer.canConfirmInventoryWorkflow("UC-15", UserRole.ADMIN));
     }
 
     @Test
@@ -217,4 +226,21 @@ class PageRendererTest {
                 row, "", null, null, "SALE", "ALL", "ALL",
                 LocalDate.of(2026, 11, 23)));
     }
+
+    @Test
+    void inventorySearchMatchesTheVisibleMovementTypeLabel() {
+        List<String> row = List.of(
+                "2026-11-23 00:00",
+                "Paracetamol / LOT-1",
+                "RECEIPT",
+                "2",
+                "Nhập hàng PN-1",
+                "2027-01-01",
+                "KE-A1 · Ke A tầng 1");
+
+        assertTrue(PageRenderer.matchesInventoryRow(
+                row, Localization.movementTypeText("RECEIPT"), null, null,
+                "ALL", "ALL", "ALL", LocalDate.of(2026, 11, 23)));
+    }
+
 }

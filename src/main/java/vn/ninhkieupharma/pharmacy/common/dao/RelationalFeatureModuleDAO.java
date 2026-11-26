@@ -45,12 +45,17 @@ import java.util.stream.Collectors;
  */
 public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, InventoryWorkflowDAO {
     private static final long ROW_ID_PREFIX = 0x4e4b504841524d41L;
+    private record StocktakeEntry(long batchId, BigDecimal expected, BigDecimal counted, BigDecimal difference) {
+    }
+
     private final SalesCheckoutDAO salesCheckoutDAO = new SalesCheckoutDAO();
     private final UserRole actorRole;
+    private final long actorUserId;
 
     /** Creates a repository without access to administrative sales operations. */
     public RelationalFeatureModuleDAO() {
         actorRole = null;
+        actorUserId = -1;
     }
 
     public RelationalFeatureModuleDAO(User authenticatedUser) {
@@ -59,11 +64,14 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
             throw new IllegalArgumentException("An active user is required.");
         }
         actorRole = Objects.requireNonNull(authenticatedUser.role());
+        actorUserId = authenticatedUser.id();
     }
 
     private void requireSalesAdministrationAccess(String moduleId) {
-        if ("UC-18".equals(moduleId) || "UC-19".equals(moduleId)) {
+        if ("UC-15".equals(moduleId) || "UC-18".equals(moduleId) || "UC-19".equals(moduleId)) {
             requireAdministrator();
+        } else if (List.of("UC-12", "UC-13", "UC-14").contains(moduleId)) {
+            requireInventoryActor();
         }
     }
 
@@ -73,6 +81,25 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
         }
     }
 
+    private void requireInventoryActor() {
+        if (actorRole != UserRole.ADMIN && actorRole != UserRole.STAFF) {
+            throw new SecurityException(Localization.text("Cần đăng nhập để sử dụng chức năng kho hàng."));
+        }
+    }
+
+    private void requireInventoryActor(long authenticatedUserId) {
+        requireInventoryActor();
+        if (authenticatedUserId != actorUserId) {
+            throw new SecurityException(Localization.text("Tài khoản hiện tại không được thực hiện thao tác này."));
+        }
+    }
+
+    private void requireInventoryAdministrator(long authenticatedUserId) {
+        requireInventoryActor(authenticatedUserId);
+        if (actorRole != UserRole.ADMIN) {
+            throw new SecurityException(Localization.text("Chỉ quản trị viên được xác nhận nghiệp vụ kho hàng."));
+        }
+    }
     @Override
     public boolean supportsNativeReports() {
         return true;
@@ -264,7 +291,7 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
                         FROM goods_receipts gr
                         JOIN goods_receipt_items gri ON gri.receipt_id = gr.receipt_id
                         JOIN inventory_batches ib ON ib.batch_id = gri.batch_id
-                        WHERE gr.status = 'RECEIVED'
+                        WHERE gr.status = 'RECEIVED' AND gr.is_confirmed = 1
                         GROUP BY DATE_FORMAT(gr.received_at, '%Y-%m'), gr.supplier_id, ib.product_id
                     ),
                     month_totals AS (
@@ -302,12 +329,19 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
             case "UC-12" -> query(moduleId, """
                     SELECT gr.receipt_id, gr.receipt_code, s.supplier_name,
                            DATE_FORMAT(gr.received_at, '%Y-%m-%d'),
-                           COUNT(gri.receipt_item_id),
-                           CASE WHEN gr.status = 'RECEIVED' THEN 'Đã nhận' ELSE 'Đã hủy' END
+                           COUNT(DISTINCT gri.receipt_item_id) + COUNT(DISTINCT dri.draft_item_id),
+                           CASE
+                               WHEN gr.status = 'CANCELLED' THEN 'Đã hủy'
+                               WHEN gr.is_confirmed = 0 THEN 'Chưa xác nhận'
+                               WHEN gr.status = 'RECEIVED' THEN 'Đã xác nhận'
+                               ELSE 'Đã hủy'
+                           END
                     FROM goods_receipts gr
                     JOIN suppliers s ON s.supplier_id = gr.supplier_id
                     LEFT JOIN goods_receipt_items gri ON gri.receipt_id = gr.receipt_id
-                    GROUP BY gr.receipt_id, gr.receipt_code, s.supplier_name, gr.received_at, gr.status
+                    LEFT JOIN goods_receipt_draft_items dri ON dri.receipt_id = gr.receipt_id
+                    GROUP BY gr.receipt_id, gr.receipt_code, s.supplier_name, gr.received_at,
+                             gr.status, gr.is_confirmed
                     ORDER BY gr.received_at DESC
                     """);
             case "UC-13" -> query(moduleId, """
@@ -317,7 +351,13 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
                     """);
             case "UC-14" -> query(moduleId, """
                     SELECT st.stocktake_id, CONCAT('ST-', st.stocktake_id), wl.location_name,
-                           st.stocktake_date, COALESCE(SUM(si.difference_quantity), 0), st.status
+                           st.stocktake_date,                            COALESCE(SUM(si.difference_quantity), 0),
+                           CASE st.status
+                               WHEN 'DRAFT' THEN 'Chưa xác nhận'
+                               WHEN 'COMPLETED' THEN 'Đã xác nhận'
+                               ELSE 'Đã hủy'
+                           END,
+                           COALESCE(st.note, '')
                     FROM stocktakes st
                     JOIN warehouse_locations wl ON wl.location_id = st.location_id
                     LEFT JOIN stocktake_items si ON si.stocktake_id = st.stocktake_id
@@ -335,7 +375,7 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
                     JOIN inventory_batches b ON b.batch_id = im.batch_id
                     JOIN products p ON p.product_id = b.product_id
                     JOIN warehouse_locations wl ON wl.location_id = b.location_id
-                    ORDER BY im.moved_at DESC
+                    ORDER BY 2 DESC, 1
                     """);
             case "UC-16" -> query(moduleId, """
                     SELECT c.customer_id, c.customer_code, c.full_name, COALESCE(c.phone, ''),
@@ -625,6 +665,7 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
 
     @Override
     public List<SupplierOption> findInventorySuppliers() {
+        requireInventoryActor();
         return queryOptions(
                 "SELECT supplier_id, supplier_code, supplier_name FROM suppliers "
                         + "WHERE is_active = 1 ORDER BY supplier_name",
@@ -636,6 +677,7 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
 
     @Override
     public List<ProductOption> findInventoryProducts() {
+        requireInventoryActor();
         return queryOptions(
                 "SELECT product_id, product_code, product_name, unit_name FROM products "
                         + "WHERE is_active = 1 ORDER BY product_name, product_code",
@@ -648,6 +690,7 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
 
     @Override
     public List<LocationOption> findInventoryLocations() {
+        requireInventoryActor();
         return queryOptions(
                 "SELECT location_id, location_code, location_name FROM warehouse_locations "
                         + "WHERE is_active = 1 ORDER BY location_code",
@@ -659,6 +702,7 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
 
     @Override
     public List<BatchOption> findInventoryBatches(Long locationId) {
+        requireInventoryActor();
         String sql = """
                 SELECT b.batch_id, p.product_id, b.location_id, p.product_code, p.product_name,
                        b.batch_code, b.expiry_date, b.quantity_on_hand,
@@ -698,36 +742,59 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
 
     @Override
     public List<ReceiptDetail> findGoodsReceiptDetails(UUID receiptId) {
+        requireInventoryActor();
         long id = numericId(receiptId);
-        try (Connection connection = DatabaseConnection.getConnection();
-             PreparedStatement statement = connection.prepareStatement("""
-                     SELECT p.product_code, p.product_name, p.unit_name,
-                            b.batch_code, b.expiry_date, gri.quantity, gri.unit_cost,
-                            wl.location_code, wl.location_name
-                     FROM goods_receipt_items gri
-                     JOIN inventory_batches b ON b.batch_id = gri.batch_id
-                     JOIN products p ON p.product_id = b.product_id
-                     JOIN warehouse_locations wl ON wl.location_id = b.location_id
-                     WHERE gri.receipt_id = ?
-                     ORDER BY p.product_code, b.expiry_date, b.batch_code
-                     """)) {
-            statement.setLong(1, id);
-            try (ResultSet resultSet = statement.executeQuery()) {
-                List<ReceiptDetail> details = new ArrayList<>();
-                while (resultSet.next()) {
-                    java.sql.Date expiry = resultSet.getDate("expiry_date");
-                    details.add(new ReceiptDetail(
-                            resultSet.getString("product_code"),
-                            resultSet.getString("product_name"),
-                            resultSet.getString("unit_name"),
-                            resultSet.getString("batch_code"),
-                            expiry == null ? null : expiry.toLocalDate(),
-                            resultSet.getBigDecimal("quantity"),
-                            resultSet.getBigDecimal("unit_cost"),
-                            resultSet.getString("location_code"),
-                            resultSet.getString("location_name")));
+        try (Connection connection = DatabaseConnection.getConnection()) {
+            boolean confirmed;
+            try (PreparedStatement statement = connection.prepareStatement(
+                    "SELECT is_confirmed FROM goods_receipts WHERE receipt_id = ?")) {
+                statement.setLong(1, id);
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    if (!resultSet.next()) {
+                        throw new IllegalArgumentException("Không tìm thấy phiếu nhập đã chọn.");
+                    }
+                    confirmed = resultSet.getBoolean("is_confirmed");
                 }
-                return List.copyOf(details);
+            }
+            String sql = confirmed ? """
+                    SELECT p.product_code, p.product_name, p.unit_name,
+                           b.batch_code, b.expiry_date, gri.quantity, gri.unit_cost,
+                           wl.location_code, wl.location_name
+                    FROM goods_receipt_items gri
+                    JOIN inventory_batches b ON b.batch_id = gri.batch_id
+                    JOIN products p ON p.product_id = b.product_id
+                    JOIN warehouse_locations wl ON wl.location_id = b.location_id
+                    WHERE gri.receipt_id = ?
+                    ORDER BY p.product_code, b.expiry_date, b.batch_code
+                    """ : """
+                    SELECT p.product_code, p.product_name, p.unit_name,
+                           dri.batch_code, dri.expiry_date, dri.quantity, dri.unit_cost,
+                           wl.location_code, wl.location_name
+                    FROM goods_receipt_draft_items dri
+                    JOIN products p ON p.product_id = dri.product_id
+                    JOIN warehouse_locations wl ON wl.location_id = dri.location_id
+                    WHERE dri.receipt_id = ?
+                    ORDER BY p.product_code, dri.expiry_date, dri.batch_code
+                    """;
+            try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                statement.setLong(1, id);
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    List<ReceiptDetail> details = new ArrayList<>();
+                    while (resultSet.next()) {
+                        java.sql.Date expiry = resultSet.getDate("expiry_date");
+                        details.add(new ReceiptDetail(
+                                resultSet.getString("product_code"),
+                                resultSet.getString("product_name"),
+                                resultSet.getString("unit_name"),
+                                resultSet.getString("batch_code"),
+                                expiry == null ? null : expiry.toLocalDate(),
+                                resultSet.getBigDecimal("quantity"),
+                                resultSet.getBigDecimal("unit_cost"),
+                                resultSet.getString("location_code"),
+                                resultSet.getString("location_name")));
+                    }
+                    return List.copyOf(details);
+                }
             }
         } catch (SQLException exception) {
             throw new DataAccessException("Could not load goods receipt details.", exception);
@@ -735,7 +802,59 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
     }
 
     @Override
+    public ReceiptDraft findGoodsReceiptDraft(UUID receiptId) {
+        requireInventoryActor();
+        long id = numericId(receiptId);
+        try (Connection connection = DatabaseConnection.getConnection();
+             PreparedStatement statement = connection.prepareStatement("""
+                     SELECT supplier_id, received_at, note, is_confirmed, status
+                     FROM goods_receipts
+                     WHERE receipt_id = ?
+                     """)) {
+            statement.setLong(1, id);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    throw new IllegalArgumentException("Không tìm thấy phiếu nhập đã chọn.");
+                }
+                if (resultSet.getBoolean("is_confirmed")
+                        || !"RECEIVED".equals(resultSet.getString("status"))) {
+                    throw new IllegalArgumentException("Phiếu đã xác nhận hoặc đã hủy.");
+                }
+                java.sql.Timestamp receivedAt = resultSet.getTimestamp("received_at");
+                long supplierId = resultSet.getLong("supplier_id");
+                String note = resultSet.getString("note");
+                List<ReceiptLine> lines = new ArrayList<>();
+                try (PreparedStatement lineStatement = connection.prepareStatement("""
+                        SELECT product_id, location_id, batch_code, expiry_date, quantity, unit_cost
+                        FROM goods_receipt_draft_items
+                        WHERE receipt_id = ?
+                        ORDER BY draft_item_id
+                        """)) {
+                    lineStatement.setLong(1, id);
+                    try (ResultSet lineResult = lineStatement.executeQuery()) {
+                        while (lineResult.next()) {
+                            java.sql.Date expiry = lineResult.getDate("expiry_date");
+                            lines.add(new ReceiptLine(
+                                    lineResult.getLong("product_id"),
+                                    lineResult.getLong("location_id"),
+                                    lineResult.getString("batch_code"),
+                                    expiry == null ? null : expiry.toLocalDate(),
+                                    lineResult.getBigDecimal("quantity"),
+                                    lineResult.getBigDecimal("unit_cost")));
+                        }
+                    }
+                }
+                return new ReceiptDraft(
+                        supplierId, receivedAt.toLocalDateTime().toLocalDate(), note, lines);
+            }
+        } catch (SQLException exception) {
+            throw new DataAccessException("Could not load the goods receipt draft.", exception);
+        }
+    }
+
+    @Override
     public List<StocktakeDetail> findStocktakeDetails(UUID stocktakeId) {
+        requireInventoryActor();
         long id = numericId(stocktakeId);
         try (Connection connection = DatabaseConnection.getConnection();
              PreparedStatement statement = connection.prepareStatement("""
@@ -775,8 +894,53 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
     }
 
     @Override
-    public ModuleRow receiveGoods(long authenticatedUserId, ReceiptRequest request) {
+    public StocktakeDraft findStocktakeDraft(UUID stocktakeId) {
+        requireInventoryActor();
+        long id = numericId(stocktakeId);
+        try (Connection connection = DatabaseConnection.getConnection();
+             PreparedStatement statement = connection.prepareStatement("""
+                     SELECT location_id, stocktake_date, note, status
+                     FROM stocktakes
+                     WHERE stocktake_id = ?
+                     """)) {
+            statement.setLong(1, id);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    throw new IllegalArgumentException("Không tìm thấy phiên kiểm kê đã chọn.");
+                }
+                if (!"DRAFT".equals(resultSet.getString("status"))) {
+                    throw new IllegalArgumentException("Phiên kiểm kê đã xác nhận nên không thể chỉnh sửa.");
+                }
+                long locationId = resultSet.getLong("location_id");
+                LocalDate stocktakeDate = resultSet.getDate("stocktake_date").toLocalDate();
+                String note = resultSet.getString("note");
+                List<StocktakeCount> counts = new ArrayList<>();
+                try (PreparedStatement countStatement = connection.prepareStatement("""
+                        SELECT batch_id, counted_quantity
+                        FROM stocktake_items
+                        WHERE stocktake_id = ?
+                        ORDER BY batch_id
+                        """)) {
+                    countStatement.setLong(1, id);
+                    try (ResultSet countResult = countStatement.executeQuery()) {
+                        while (countResult.next()) {
+                            counts.add(new StocktakeCount(
+                                    countResult.getLong("batch_id"),
+                                    countResult.getBigDecimal("counted_quantity")));
+                        }
+                    }
+                }
+                return new StocktakeDraft(locationId, stocktakeDate, note, counts);
+            }
+        } catch (SQLException exception) {
+            throw new DataAccessException("Could not load the stocktake draft.", exception);
+        }
+    }
+
+    @Override
+    public ModuleRow createGoodsReceiptDraft(long authenticatedUserId, ReceiptRequest request) {
         validateReceiptRequest(authenticatedUserId, request);
+        requireInventoryActor(authenticatedUserId);
         return transaction(connection -> {
             requireActiveRecord(connection,
                     "SELECT is_active FROM suppliers WHERE supplier_id = ?", request.supplierId(),
@@ -793,8 +957,8 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
                     + "-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(Locale.ROOT);
             long receiptId = insert(connection, """
                     INSERT INTO goods_receipts
-                        (receipt_code, supplier_id, received_by, received_at, status, note)
-                    VALUES (?, ?, ?, ?, 'RECEIVED', ?)
+                        (receipt_code, supplier_id, received_by, received_at, status, note, is_confirmed)
+                    VALUES (?, ?, ?, ?, 'RECEIVED', ?, 0)
                     """, statement -> {
                 statement.setString(1, receiptCode);
                 statement.setLong(2, request.supplierId());
@@ -802,66 +966,179 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
                 statement.setTimestamp(4, Timestamp.valueOf(request.receivedDate().atStartOfDay()));
                 setNullableString(statement, 5, request.note());
             });
+            replaceReceiptDraftLines(connection, receiptId, request.lines());
 
+            String supplierName = resolveName(connection,
+                    "SELECT supplier_name FROM suppliers WHERE supplier_id = ?", request.supplierId());
+            return row(receiptId, List.of(receiptCode, supplierName,
+                    request.receivedDate().toString(), request.lines().size() + " mặt hàng",
+                    "Chưa xác nhận"));
+        });
+    }
+
+    @Override
+    public ModuleRow updateGoodsReceiptDraft(
+            long authenticatedUserId, UUID receiptId, ReceiptRequest request) {
+        validateReceiptRequest(authenticatedUserId, request);
+        requireInventoryActor(authenticatedUserId);
+        long id = numericId(receiptId);
+        return transaction(connection -> {
+            requireEditableReceiptDraft(connection, id);
+            requireActiveRecord(connection,
+                    "SELECT is_active FROM suppliers WHERE supplier_id = ?", request.supplierId(),
+                    "Nhà cung cấp đã chọn không còn hoạt động.");
             for (ReceiptLine line : request.lines()) {
+                requireActiveRecord(connection,
+                        "SELECT is_active FROM products WHERE product_id = ?", line.productId(),
+                        "Sản phẩm đã chọn không còn hoạt động.");
+                requireActiveRecord(connection,
+                        "SELECT is_active FROM warehouse_locations WHERE location_id = ?", line.locationId(),
+                        "Vị trí kho đã chọn không còn hoạt động.");
+            }
+            execute(connection, """
+                    UPDATE goods_receipts
+                    SET supplier_id = ?, received_at = ?, note = ?
+                    WHERE receipt_id = ? AND is_confirmed = 0 AND status = 'RECEIVED'
+                    """, statement -> {
+                statement.setLong(1, request.supplierId());
+                statement.setTimestamp(2, Timestamp.valueOf(request.receivedDate().atStartOfDay()));
+                setNullableString(statement, 3, request.note());
+                statement.setLong(4, id);
+            });
+            execute(connection, "DELETE FROM goods_receipt_draft_items WHERE receipt_id = ?",
+                    statement -> statement.setLong(1, id));
+            replaceReceiptDraftLines(connection, id, request.lines());
+            String receiptCode = resolveName(connection,
+                    "SELECT receipt_code FROM goods_receipts WHERE receipt_id = ?", id);
+            String supplierName = resolveName(connection,
+                    "SELECT supplier_name FROM suppliers WHERE supplier_id = ?", request.supplierId());
+            return row(id, List.of(receiptCode, supplierName, request.receivedDate().toString(),
+                    request.lines().size() + " mặt hàng", "Chưa xác nhận"));
+        });
+    }
+
+    @Override
+    public void cancelGoodsReceiptDraft(long authenticatedUserId, UUID receiptId) {
+        if (authenticatedUserId < 1) {
+            throw new IllegalArgumentException("A valid authenticated user is required.");
+        }
+        requireInventoryActor(authenticatedUserId);
+        long id = numericId(receiptId);
+        transaction(connection -> {
+            requireEditableReceiptDraft(connection, id);
+            execute(connection, """
+                    UPDATE goods_receipts SET status = 'CANCELLED'
+                    WHERE receipt_id = ? AND is_confirmed = 0 AND status = 'RECEIVED'
+                    """, statement -> statement.setLong(1, id));
+            return null;
+        });
+    }
+
+    @Override
+    public ModuleRow confirmGoodsReceipt(long authenticatedUserId, UUID receiptId) {
+        if (authenticatedUserId < 1) {
+            throw new IllegalArgumentException("A valid authenticated user is required.");
+        }
+        requireInventoryAdministrator(authenticatedUserId);
+        long id = numericId(receiptId);
+        return transaction(connection -> {
+            String receiptCode;
+            long supplierId;
+            LocalDate receivedDate;
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT receipt_code, supplier_id, received_at, status, is_confirmed
+                    FROM goods_receipts
+                    WHERE receipt_id = ?
+                    FOR UPDATE
+                    """)) {
+                statement.setLong(1, id);
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    if (!resultSet.next()) {
+                        throw new IllegalArgumentException("Không tìm thấy phiếu nhập đã chọn.");
+                    }
+                    if (resultSet.getBoolean("is_confirmed")
+                            || !"RECEIVED".equals(resultSet.getString("status"))) {
+                        throw new IllegalArgumentException("Phiếu đã xác nhận hoặc đã hủy.");
+                    }
+                    receiptCode = resultSet.getString("receipt_code");
+                    supplierId = resultSet.getLong("supplier_id");
+                    receivedDate = resultSet.getTimestamp("received_at").toLocalDateTime().toLocalDate();
+                }
+            }
+            requireActiveRecord(connection,
+                    "SELECT is_active FROM suppliers WHERE supplier_id = ?", supplierId,
+                    "Nhà cung cấp của phiếu không còn hoạt động.");
+            List<ReceiptLine> lines = new ArrayList<>();
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT product_id, location_id, batch_code, expiry_date, quantity, unit_cost
+                    FROM goods_receipt_draft_items
+                    WHERE receipt_id = ?
+                    ORDER BY draft_item_id
+                    FOR UPDATE
+                    """)) {
+                statement.setLong(1, id);
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    while (resultSet.next()) {
+                        java.sql.Date expiry = resultSet.getDate("expiry_date");
+                        lines.add(new ReceiptLine(
+                                resultSet.getLong("product_id"),
+                                resultSet.getLong("location_id"),
+                                resultSet.getString("batch_code"),
+                                expiry == null ? null : expiry.toLocalDate(),
+                                resultSet.getBigDecimal("quantity"),
+                                resultSet.getBigDecimal("unit_cost")));
+                    }
+                }
+            }
+            if (lines.isEmpty()) {
+                throw new IllegalArgumentException("Phiếu nhập không có mặt hàng để xác nhận.");
+            }
+            for (ReceiptLine line : lines) {
+                requireActiveRecord(connection,
+                        "SELECT is_active FROM products WHERE product_id = ?", line.productId(),
+                        "Sản phẩm trong phiếu không còn hoạt động.");
+                requireActiveRecord(connection,
+                        "SELECT is_active FROM warehouse_locations WHERE location_id = ?", line.locationId(),
+                        "Vị trí kho trong phiếu không còn hoạt động.");
                 long batchId = addReceivedQuantity(connection, line);
                 insert(connection, """
                         INSERT INTO goods_receipt_items (receipt_id, batch_id, quantity, unit_cost)
                         VALUES (?, ?, ?, ?)
                         """, statement -> {
-                    statement.setLong(1, receiptId);
+                    statement.setLong(1, id);
                     statement.setLong(2, batchId);
                     statement.setBigDecimal(3, line.quantity());
                     statement.setBigDecimal(4, line.unitCost());
                 });
                 insertInventoryMovement(connection, batchId, "RECEIPT", line.quantity(),
-                        "GOODS_RECEIPT", receiptId, request.receivedDate(), authenticatedUserId,
+                        "GOODS_RECEIPT", id, receivedDate, authenticatedUserId,
                         "Nhập hàng " + receiptCode);
             }
-
+            execute(connection, "DELETE FROM goods_receipt_draft_items WHERE receipt_id = ?",
+                    statement -> statement.setLong(1, id));
+            execute(connection, """
+                    UPDATE goods_receipts SET is_confirmed = 1
+                    WHERE receipt_id = ? AND is_confirmed = 0 AND status = 'RECEIVED'
+                    """, statement -> statement.setLong(1, id));
             String supplierName = resolveName(connection,
-                    "SELECT supplier_name FROM suppliers WHERE supplier_id = ?", request.supplierId());
-            return row(receiptId, List.of(receiptCode, supplierName,
-                    request.receivedDate().toString(), request.lines().size() + " mặt hàng", "Đã nhận"));
+                    "SELECT supplier_name FROM suppliers WHERE supplier_id = ?", supplierId);
+            return row(id, List.of(receiptCode, supplierName, receivedDate.toString(),
+                    lines.size() + " mặt hàng", "Đã xác nhận"));
         });
     }
 
     @Override
-    public ModuleRow completeStocktake(long authenticatedUserId, StocktakeRequest request) {
+    public ModuleRow createStocktakeDraft(long authenticatedUserId, StocktakeRequest request) {
         validateStocktakeRequest(authenticatedUserId, request);
+        requireInventoryActor(authenticatedUserId);
         return transaction(connection -> {
             requireActiveRecord(connection,
                     "SELECT is_active FROM warehouse_locations WHERE location_id = ?", request.locationId(),
                     "Vị trí kho đã chọn không còn hoạt động.");
             String locationName = resolveName(connection,
                     "SELECT location_name FROM warehouse_locations WHERE location_id = ?", request.locationId());
-            Map<Long, BigDecimal> currentQuantities = new java.util.LinkedHashMap<>();
-            try (PreparedStatement statement = connection.prepareStatement("""
-                    SELECT batch_id, quantity_on_hand
-                    FROM inventory_batches
-                    WHERE location_id = ?
-                    ORDER BY batch_id
-                    FOR UPDATE
-                    """)) {
-                statement.setLong(1, request.locationId());
-                try (ResultSet resultSet = statement.executeQuery()) {
-                    while (resultSet.next()) {
-                        currentQuantities.put(resultSet.getLong("batch_id"),
-                                resultSet.getBigDecimal("quantity_on_hand"));
-                    }
-                }
-            }
-            Set<Long> submittedBatchIds = new HashSet<>();
-            for (StocktakeCount count : request.counts()) {
-                if (!submittedBatchIds.add(count.batchId())) {
-                    throw new IllegalArgumentException("Không được kiểm kê trùng một lô hàng.");
-                }
-            }
-            if (currentQuantities.isEmpty() || !submittedBatchIds.equals(currentQuantities.keySet())) {
-                throw new IllegalArgumentException(
-                        "Danh sách lô tại vị trí đã thay đổi hoặc đang trống. Tải lại danh sách trước khi kiểm kê.");
-            }
-
+            Map<Long, BigDecimal> currentQuantities = lockLocationQuantities(connection, request.locationId());
+            validateStocktakeBatches(currentQuantities, request.counts());
             long stocktakeId = insert(connection, """
                     INSERT INTO stocktakes (location_id, stocktake_date, status, created_by, note)
                     VALUES (?, ?, 'DRAFT', ?, ?)
@@ -871,46 +1148,129 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
                 statement.setLong(3, authenticatedUserId);
                 setNullableString(statement, 4, request.note());
             });
+            BigDecimal totalVariance = insertStocktakeItems(
+                connection, stocktakeId, request.counts(), currentQuantities);
+            return row(stocktakeId, List.of("KK-" + stocktakeId, locationName,
+                request.stocktakeDate().toString(), formatVariance(totalVariance), "Chưa xác nhận"));
+        });
+    }
+
+    @Override
+    public ModuleRow updateStocktakeDraft(
+            long authenticatedUserId, UUID stocktakeId, StocktakeRequest request) {
+        validateStocktakeRequest(authenticatedUserId, request);
+        requireInventoryActor(authenticatedUserId);
+        long id = numericId(stocktakeId);
+        return transaction(connection -> {
+            requireEditableStocktake(connection, id);
+            requireActiveRecord(connection,
+                "SELECT is_active FROM warehouse_locations WHERE location_id = ?", request.locationId(),
+                "Vị trí kho đã chọn không còn hoạt động.");
+            Map<Long, BigDecimal> currentQuantities = lockLocationQuantities(connection, request.locationId());
+            validateStocktakeBatches(currentQuantities, request.counts());
+            execute(connection, """
+                UPDATE stocktakes
+                SET location_id = ?, stocktake_date = ?, note = ?
+                WHERE stocktake_id = ? AND status = 'DRAFT'
+                """, statement -> {
+            statement.setLong(1, request.locationId());
+            statement.setDate(2, java.sql.Date.valueOf(request.stocktakeDate()));
+            setNullableString(statement, 3, request.note());
+            statement.setLong(4, id);
+            });
+            execute(connection, "DELETE FROM stocktake_items WHERE stocktake_id = ?",
+                statement -> statement.setLong(1, id));
+            BigDecimal totalVariance = insertStocktakeItems(connection, id, request.counts(), currentQuantities);
+            String locationName = resolveName(connection,
+                "SELECT location_name FROM warehouse_locations WHERE location_id = ?", request.locationId());
+            return row(id, List.of("KK-" + id, locationName,
+                request.stocktakeDate().toString(), formatVariance(totalVariance), "Chưa xác nhận"));
+        });
+    }
+
+    @Override
+    public void cancelStocktakeDraft(long authenticatedUserId, UUID stocktakeId) {
+        if (authenticatedUserId < 1) {
+            throw new IllegalArgumentException("A valid authenticated user is required.");
+        }
+        requireInventoryActor(authenticatedUserId);
+        long id = numericId(stocktakeId);
+        transaction(connection -> {
+            requireEditableStocktake(connection, id);
+            execute(connection, "UPDATE stocktakes SET status = 'CANCELLED' WHERE stocktake_id = ? AND status = 'DRAFT'",
+                statement -> statement.setLong(1, id));
+            return null;
+        });
+    }
+
+    @Override
+    public ModuleRow confirmStocktake(long authenticatedUserId, UUID stocktakeId) {
+        if (authenticatedUserId < 1) {
+            throw new IllegalArgumentException("A valid authenticated user is required.");
+        }
+        requireInventoryAdministrator(authenticatedUserId);
+        long id = numericId(stocktakeId);
+        return transaction(connection -> {
+            long locationId;
+            LocalDate stocktakeDate;
+            try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT location_id, stocktake_date, status
+                FROM stocktakes
+                WHERE stocktake_id = ?
+                FOR UPDATE
+                """)) {
+            statement.setLong(1, id);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    throw new IllegalArgumentException("Không tìm thấy phiên kiểm kê đã chọn.");
+                }
+                if (!"DRAFT".equals(resultSet.getString("status"))) {
+                    throw new IllegalArgumentException("Phiên kiểm kê đã xác nhận hoặc đã hủy.");
+                }
+                locationId = resultSet.getLong("location_id");
+                stocktakeDate = resultSet.getDate("stocktake_date").toLocalDate();
+            }
+            }
+            requireActiveRecord(connection,
+                "SELECT is_active FROM warehouse_locations WHERE location_id = ?", locationId,
+                "Vị trí kho của phiên kiểm kê không còn hoạt động.");
+            Map<Long, BigDecimal> currentQuantities = lockLocationQuantities(connection, locationId);
+            List<StocktakeEntry> entries = findStocktakeEntries(connection, id);
+            if (entries.isEmpty()) {
+            throw new IllegalArgumentException("Phiên kiểm kê chưa có số liệu để xác nhận.");
+            }
+            Set<Long> storedBatchIds = entries.stream()
+                .map(StocktakeEntry::batchId)
+                .collect(Collectors.toSet());
+            if (!storedBatchIds.equals(currentQuantities.keySet())
+                || entries.stream().anyMatch(entry -> entry.expected().compareTo(
+                        currentQuantities.get(entry.batchId())) != 0)) {
+            throw new IllegalArgumentException(
+                    "Tồn kho đã thay đổi sau khi lập phiên. Hãy sửa lại phiên rồi xác nhận lại.");
+            }
             BigDecimal totalVariance = BigDecimal.ZERO;
-            for (StocktakeCount count : request.counts()) {
-                BigDecimal expected = currentQuantities.get(count.batchId());
-                BigDecimal difference = count.countedQuantity().subtract(expected);
-                if (!isValidQuantity(difference)) {
-                    throw new IllegalArgumentException(
-                            "Chênh lệch vượt quá giới hạn lưu trữ; vui lòng kiểm kê lô này riêng.");
-                }
-                totalVariance = totalVariance.add(difference);
-                insert(connection, """
-                        INSERT INTO stocktake_items
-                            (stocktake_id, batch_id, expected_quantity, counted_quantity, difference_quantity)
-                        VALUES (?, ?, ?, ?, ?)
+            for (StocktakeEntry entry : entries) {
+            totalVariance = totalVariance.add(entry.difference());
+            if (entry.difference().signum() != 0) {
+                execute(connection, """
+                        UPDATE inventory_batches SET quantity_on_hand = ?
+                        WHERE batch_id = ? AND location_id = ?
                         """, statement -> {
-                    statement.setLong(1, stocktakeId);
-                    statement.setLong(2, count.batchId());
-                    statement.setBigDecimal(3, expected);
-                    statement.setBigDecimal(4, count.countedQuantity());
-                    statement.setBigDecimal(5, difference);
+                    statement.setBigDecimal(1, entry.counted());
+                    statement.setLong(2, entry.batchId());
+                    statement.setLong(3, locationId);
                 });
-                if (difference.signum() != 0) {
-                    execute(connection, """
-                            UPDATE inventory_batches SET quantity_on_hand = ?
-                            WHERE batch_id = ? AND location_id = ?
-                            """, statement -> {
-                        statement.setBigDecimal(1, count.countedQuantity());
-                        statement.setLong(2, count.batchId());
-                        statement.setLong(3, request.locationId());
-                    });
-                    insertInventoryMovement(connection, count.batchId(), "ADJUSTMENT", difference,
-                            "STOCKTAKE", stocktakeId, request.stocktakeDate(), authenticatedUserId,
-                            "Điều chỉnh từ phiên KK-" + stocktakeId);
-                }
+                insertInventoryMovement(connection, entry.batchId(), "ADJUSTMENT", entry.difference(),
+                        "STOCKTAKE", id, stocktakeDate, authenticatedUserId,
+                        "Điều chỉnh từ phiên KK-" + id);
+            }
             }
             execute(connection, "UPDATE stocktakes SET status = 'COMPLETED' WHERE stocktake_id = ?",
-                    statement -> statement.setLong(1, stocktakeId));
-            String variance = totalVariance.signum() > 0 ? "+" + formatQuantity(totalVariance)
-                    : formatQuantity(totalVariance);
-            return row(stocktakeId, List.of("KK-" + stocktakeId, locationName,
-                    request.stocktakeDate().toString(), variance, "COMPLETED"));
+                statement -> statement.setLong(1, id));
+            String locationName = resolveName(connection,
+                "SELECT location_name FROM warehouse_locations WHERE location_id = ?", locationId);
+            return row(id, List.of("KK-" + id, locationName, stocktakeDate.toString(),
+                formatVariance(totalVariance), "Đã xác nhận"));
         });
     }
 
@@ -924,6 +1284,7 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
                 || !isValidQuantity(quantity) || quantity.signum() <= 0) {
             throw new IllegalArgumentException("Chọn lô hợp lệ và nhập số lượng hủy lớn hơn 0.");
         }
+        requireInventoryAdministrator(authenticatedUserId);
         transaction(connection -> {
             BigDecimal available;
             LocalDate expiryDate;
@@ -956,8 +1317,11 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
                         statement.setBigDecimal(1, quantity);
                         statement.setLong(2, batchId);
                     });
+            String movementNote = note == null || note.isBlank()
+                    ? (lossType == LossType.DAMAGED ? "Ghi nhận hư hỏng" : "Ghi nhận hết hạn")
+                    : note.trim();
             insertInventoryMovement(connection, batchId, lossType.name(), quantity.negate(),
-                    "MANUAL", null, LocalDate.now(), authenticatedUserId, note);
+                    "MANUAL", null, LocalDate.now(), authenticatedUserId, movementNote);
             return null;
         });
     }
@@ -979,7 +1343,10 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
             case "UC-07" -> createCategory(values);
             case "UC-08" -> createProduct(values);
             case "UC-09" -> createSupplier(values);
-            case "UC-13" -> createLocation(values);
+            case "UC-13" -> {
+                requireAdministrator();
+                yield createLocation(values);
+            }
             case "UC-16" -> createCustomer(values);
             case "UC-18" -> createPromotion(values);
             default -> throw readOnly(moduleId);
@@ -1105,7 +1472,10 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
             case "UC-07" -> updateCategory(id, values);
             case "UC-08" -> updateProduct(id, values);
             case "UC-09" -> updateSupplier(id, values);
-            case "UC-13" -> updateLocation(id, values);
+            case "UC-13" -> {
+                requireAdministrator();
+                yield updateLocation(id, values);
+            }
             case "UC-16" -> updateCustomer(id, values);
             case "UC-18" -> updatePromotion(id, values);
             default -> throw readOnly(moduleId);
@@ -1145,10 +1515,59 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
             return;
         }
         if ("UC-13".equals(moduleId)) {
-            execute("""
-                    UPDATE warehouse_locations SET is_active = 0
-                    WHERE location_id = ?
-                    """, statement -> statement.setLong(1, id));
+            requireAdministrator();
+            transaction(connection -> {
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        SELECT location_id FROM warehouse_locations
+                        WHERE location_id = ?
+                        FOR UPDATE
+                        """)) {
+                    statement.setLong(1, id);
+                    try (ResultSet resultSet = statement.executeQuery()) {
+                        if (!resultSet.next()) {
+                            throw new IllegalArgumentException("Không tìm thấy vị trí kho đã chọn.");
+                        }
+                    }
+                }
+
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        SELECT batch_id FROM inventory_batches
+                        WHERE location_id = ? AND quantity_on_hand > 0
+                        LIMIT 1
+                        FOR UPDATE
+                        """)) {
+                    statement.setLong(1, id);
+                    try (ResultSet resultSet = statement.executeQuery()) {
+                        if (resultSet.next()) {
+                            throw new IllegalStateException(
+                                    "Không thể xóa vị trí vì vẫn còn hàng tồn kho.");
+                        }
+                    }
+                }
+
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        SELECT 1 FROM inventory_batches WHERE location_id = ?
+                        UNION ALL
+                        SELECT 1 FROM goods_receipt_draft_items WHERE location_id = ?
+                        UNION ALL
+                        SELECT 1 FROM stocktakes WHERE location_id = ?
+                        LIMIT 1
+                        """)) {
+                    statement.setLong(1, id);
+                    statement.setLong(2, id);
+                    statement.setLong(3, id);
+                    try (ResultSet resultSet = statement.executeQuery()) {
+                        if (resultSet.next()) {
+                            throw new IllegalStateException(
+                                    "Không thể xóa vị trí vì có dữ liệu lô hàng hoặc lịch sử nhập kho, kiểm kê đang tham chiếu. Hãy ngừng sử dụng vị trí để giữ lịch sử.");
+                        }
+                    }
+                }
+
+                execute(connection, "DELETE FROM warehouse_locations WHERE location_id = ?",
+                        statement -> statement.setLong(1, id));
+                return null;
+            });
             return;
         }
         if ("UC-16".equals(moduleId)) {
@@ -1211,6 +1630,49 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
         }
     }
 
+    private void replaceReceiptDraftLines(Connection connection, long receiptId, List<ReceiptLine> lines)
+            throws SQLException {
+        for (ReceiptLine line : lines) {
+            insert(connection, """
+                    INSERT INTO goods_receipt_draft_items
+                        (receipt_id, product_id, location_id, batch_code, expiry_date, quantity, unit_cost)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, statement -> {
+                statement.setLong(1, receiptId);
+                statement.setLong(2, line.productId());
+                statement.setLong(3, line.locationId());
+                statement.setString(4, line.batchCode().trim());
+                if (line.expiryDate() == null) {
+                    statement.setNull(5, java.sql.Types.DATE);
+                } else {
+                    statement.setDate(5, java.sql.Date.valueOf(line.expiryDate()));
+                }
+                statement.setBigDecimal(6, line.quantity());
+                statement.setBigDecimal(7, line.unitCost());
+            });
+        }
+    }
+
+    private void requireEditableReceiptDraft(Connection connection, long receiptId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT status, is_confirmed
+                FROM goods_receipts
+                WHERE receipt_id = ?
+                FOR UPDATE
+                """)) {
+            statement.setLong(1, receiptId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    throw new IllegalArgumentException("Không tìm thấy phiếu nhập đã chọn.");
+                }
+                if (resultSet.getBoolean("is_confirmed")
+                        || !"RECEIVED".equals(resultSet.getString("status"))) {
+                    throw new IllegalArgumentException("Phiếu đã xác nhận hoặc đã hủy.");
+                }
+            }
+        }
+    }
+
     private void validateStocktakeRequest(long authenticatedUserId, StocktakeRequest request) {
         if (authenticatedUserId < 1 || request == null || request.locationId() < 1
                 || request.stocktakeDate() == null || request.counts().isEmpty()) {
@@ -1227,6 +1689,117 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
                     || !isValidQuantity(count.countedQuantity())
                     || count.countedQuantity().signum() < 0) {
                 throw new IllegalArgumentException("Số lượng kiểm kê phải là số không âm, tối đa 3 chữ số thập phân.");
+            }
+        }
+    }
+
+    private Map<Long, BigDecimal> lockLocationQuantities(Connection connection, long locationId)
+            throws SQLException {
+        Map<Long, BigDecimal> quantities = new LinkedHashMap<>();
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT batch_id, quantity_on_hand
+                FROM inventory_batches
+                WHERE location_id = ?
+                ORDER BY batch_id
+                FOR UPDATE
+                """)) {
+            statement.setLong(1, locationId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    quantities.put(resultSet.getLong("batch_id"), resultSet.getBigDecimal("quantity_on_hand"));
+                }
+            }
+        }
+        return quantities;
+    }
+
+    private void validateStocktakeBatches(
+            Map<Long, BigDecimal> currentQuantities, List<StocktakeCount> counts) {
+        Set<Long> submittedBatchIds = new HashSet<>();
+        for (StocktakeCount count : counts) {
+            if (!submittedBatchIds.add(count.batchId())) {
+                throw new IllegalArgumentException("Không được kiểm kê trùng một lô hàng.");
+            }
+        }
+        if (currentQuantities.isEmpty() || !submittedBatchIds.equals(currentQuantities.keySet())) {
+            throw new IllegalArgumentException(
+                    "Danh sách lô tại vị trí đã thay đổi hoặc đang trống. Tải lại danh sách trước khi kiểm kê.");
+        }
+    }
+
+    private BigDecimal insertStocktakeItems(
+            Connection connection,
+            long stocktakeId,
+            List<StocktakeCount> counts,
+            Map<Long, BigDecimal> currentQuantities) throws SQLException {
+        BigDecimal totalVariance = BigDecimal.ZERO;
+        for (StocktakeCount count : counts) {
+            BigDecimal expected = currentQuantities.get(count.batchId());
+            BigDecimal difference = count.countedQuantity().subtract(expected);
+            if (!isValidQuantity(difference)) {
+                throw new IllegalArgumentException(
+                        "Chênh lệch vượt quá giới hạn lưu trữ; vui lòng kiểm kê lô này riêng.");
+            }
+            totalVariance = totalVariance.add(difference);
+            insert(connection, """
+                    INSERT INTO stocktake_items
+                        (stocktake_id, batch_id, expected_quantity, counted_quantity, difference_quantity)
+                    VALUES (?, ?, ?, ?, ?)
+                    """, statement -> {
+                statement.setLong(1, stocktakeId);
+                statement.setLong(2, count.batchId());
+                statement.setBigDecimal(3, expected);
+                statement.setBigDecimal(4, count.countedQuantity());
+                statement.setBigDecimal(5, difference);
+            });
+        }
+        return totalVariance;
+    }
+
+    private List<StocktakeEntry> findStocktakeEntries(Connection connection, long stocktakeId)
+            throws SQLException {
+        List<StocktakeEntry> entries = new ArrayList<>();
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT batch_id, expected_quantity, counted_quantity, difference_quantity
+                FROM stocktake_items
+                WHERE stocktake_id = ?
+                ORDER BY batch_id
+                FOR UPDATE
+                """)) {
+            statement.setLong(1, stocktakeId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    entries.add(new StocktakeEntry(
+                            resultSet.getLong("batch_id"),
+                            resultSet.getBigDecimal("expected_quantity"),
+                            resultSet.getBigDecimal("counted_quantity"),
+                            resultSet.getBigDecimal("difference_quantity")));
+                }
+            }
+        }
+        return entries;
+    }
+
+    private String formatVariance(BigDecimal totalVariance) {
+        return totalVariance.signum() > 0 ? "+" + formatQuantity(totalVariance) : formatQuantity(totalVariance);
+    }
+
+    private void requireEditableStocktake(Connection connection, long stocktakeId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT status
+                FROM stocktakes
+                WHERE stocktake_id = ?
+                FOR UPDATE
+                """)) {
+            statement.setLong(1, stocktakeId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    throw new IllegalArgumentException("Không tìm thấy phiên kiểm kê đã chọn.");
+                }
+                if (!"DRAFT".equals(resultSet.getString("status"))) {
+                    throw new IllegalArgumentException(
+                            "Phiên kiểm kê đã xác nhận nên không thể sửa hoặc xóa.");
+                }
             }
         }
     }

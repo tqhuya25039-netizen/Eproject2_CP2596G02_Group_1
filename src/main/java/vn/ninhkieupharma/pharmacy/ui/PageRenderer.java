@@ -267,6 +267,15 @@ public class PageRenderer {
         InventoryFilters inventoryFilters = null;
         ReportFilters reportFilters = null;
         ProductFilters productFilters = null;
+        ComboBox<String> workflowStatusFilter = null;
+        if ("UC-12".equals(module.id()) || "UC-14".equals(module.id())) {
+            workflowStatusFilter = new ComboBox<>(FXCollections.observableArrayList(
+                    Localization.text("Tất cả trạng thái"),
+                    Localization.text("Chưa xác nhận"),
+                    Localization.text("Đã xác nhận"),
+                    Localization.text("Đã hủy")));
+            workflowStatusFilter.getSelectionModel().selectFirst();
+        }
         Node filters = null;
         if (module.report()) {
             if ("UC-15".equals(module.id())) {
@@ -326,8 +335,12 @@ public class PageRenderer {
             InventoryFilters capturedInventoryFilters = inventoryFilters;
             ReportFilters capturedReportFilters = reportFilters;
             ProductFilters capturedProductFilters = productFilters;
+            ComboBox<String> capturedWorkflowStatusFilter = workflowStatusFilter;
             search.textProperty().addListener((observable, oldValue, newValue) -> {
-                if (capturedInventoryFilters != null) {
+                if (capturedWorkflowStatusFilter != null) {
+                    applyStatusFilters(
+                            renderedTable.filteredRows(), search, capturedWorkflowStatusFilter);
+                } else if (capturedInventoryFilters != null) {
                     applyInventoryFilters(
                             renderedTable.filteredRows(), search, capturedInventoryFilters);
                 } else if (capturedReportFilters != null) {
@@ -347,6 +360,11 @@ public class PageRenderer {
                     applyPromotionFilters(renderedTable.filteredRows(), search, capturedFilters);
                 }
             });
+            if (capturedWorkflowStatusFilter != null) {
+                capturedWorkflowStatusFilter.valueProperty().addListener(
+                        (observable, oldValue, newValue) -> applyStatusFilters(
+                                renderedTable.filteredRows(), search, capturedWorkflowStatusFilter));
+            }
         }
 
         FlowPane actions = new FlowPane(12, 8);
@@ -357,6 +375,9 @@ public class PageRenderer {
         search.setPrefWidth(420);
         search.setMaxWidth(Double.MAX_VALUE);
         actions.getChildren().add(search);
+        if (workflowStatusFilter != null) {
+            actions.getChildren().add(workflowStatusFilter);
+        }
         if (module.report()) {
             Button exportButton = new Button(Localization.text("Xuất báo cáo"));
             exportButton.getStyleClass().add("button-secondary");
@@ -366,10 +387,14 @@ public class PageRenderer {
             Button refreshButton = new Button(Localization.text("Làm mới"));
             refreshButton.getStyleClass().add("button-secondary");
             InventoryFilters capturedInventoryFilters = inventoryFilters;
+            ComboBox<String> capturedRefreshStatusFilter = workflowStatusFilter;
             refreshButton.setOnAction(event -> {
                 refreshRows(renderedTable, featureService, module);
                 if (capturedInventoryFilters != null) {
                     applyInventoryFilters(renderedTable.filteredRows(), search, capturedInventoryFilters);
+                } else if (capturedRefreshStatusFilter != null) {
+                    applyStatusFilters(
+                            renderedTable.filteredRows(), search, capturedRefreshStatusFilter);
                 } else {
                     applyFilters(renderedTable.filteredRows(), search, filterInputs);
                 }
@@ -415,8 +440,64 @@ public class PageRenderer {
             receiveButton.setOnAction(event -> createGoodsReceiptDialog()
                     .ifPresent(request -> runMutation(
                             () -> featureServices.inventoryWorkflowService()
-                                    .receiveGoods(authenticatedUserId, request),
+                                    .createGoodsReceiptDraft(authenticatedUserId, request),
                             () -> refreshRows(renderedTable, featureService, module))));
+            Button confirmButton = new Button(Localization.text("Xác nhận phiếu"));
+            confirmButton.getStyleClass().add("button-primary");
+            confirmButton.setVisible(canConfirmInventoryWorkflow(module.id(), userRole));
+            confirmButton.setManaged(canConfirmInventoryWorkflow(module.id(), userRole));
+            Button editButton = new Button(Localization.text("Sửa phiếu"));
+            editButton.getStyleClass().add("button-secondary");
+            Button cancelReceiptButton = new Button(Localization.text("Hủy phiếu"));
+            cancelReceiptButton.getStyleClass().add("button-secondary");
+            javafx.beans.value.ObservableValue<ModuleRow> selectedReceipt =
+                    renderedTable.table().getSelectionModel().selectedItemProperty();
+            Runnable updateReceiptActions = () -> {
+                ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+                boolean draft = isUnconfirmedReceipt(selected);
+                confirmButton.setDisable(!draft || !canConfirmInventoryWorkflow(module.id(), userRole));
+                editButton.setDisable(!draft);
+                cancelReceiptButton.setDisable(!draft);
+            };
+            selectedReceipt.addListener((observable, oldValue, newValue) -> updateReceiptActions.run());
+            updateReceiptActions.run();
+            confirmButton.setOnAction(event -> {
+                ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+                if (canConfirmInventoryWorkflow(module.id(), userRole)
+                        && isUnconfirmedReceipt(selected) && confirmGoodsReceipt(selected)) {
+                    runMutation(
+                            () -> featureServices.inventoryWorkflowService()
+                                    .confirmReceipt(authenticatedUserId, selected.id()),
+                            () -> refreshRows(renderedTable, featureService, module));
+                }
+            });
+            editButton.setOnAction(event -> {
+                ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+                if (!isUnconfirmedReceipt(selected)) {
+                    return;
+                }
+                try {
+                    InventoryWorkflowDAO.ReceiptDraft draft =
+                            featureServices.inventoryWorkflowService().findReceiptDraft(selected.id());
+                    createGoodsReceiptDialog(draft).ifPresent(request -> runMutation(
+                            () -> featureServices.inventoryWorkflowService().updateReceiptDraft(
+                                    authenticatedUserId, selected.id(), request),
+                            () -> refreshRows(renderedTable, featureService, module)));
+                } catch (IllegalArgumentException | IllegalStateException
+                         | vn.ninhkieupharma.pharmacy.common.dao.DataAccessException exception) {
+                    showInformation(Localization.text("Không thể sửa phiếu nhập"),
+                            Localization.text(exception.getMessage()));
+                }
+            });
+            cancelReceiptButton.setOnAction(event -> {
+                ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+                if (isUnconfirmedReceipt(selected) && confirmCancelReceiptDraft(selected)) {
+                    runMutation(
+                            () -> featureServices.inventoryWorkflowService()
+                                    .cancelReceiptDraft(authenticatedUserId, selected.id()),
+                            () -> refreshRows(renderedTable, featureService, module));
+                }
+            });
             Button detailButton = new Button(Localization.text("Xem lô hàng"));
             detailButton.getStyleClass().add("button-secondary");
             detailButton.disableProperty().bind(
@@ -427,16 +508,83 @@ public class PageRenderer {
                     showGoodsReceiptDetails(selected);
                 }
             });
-            actions.getChildren().addAll(receiveButton, detailButton);
+            actions.getChildren().addAll(
+                    receiveButton, confirmButton, editButton, cancelReceiptButton, detailButton);
         } else if ("UC-14".equals(module.id())) {
             Button stocktakeButton = new Button(module.actionLabel());
             stocktakeButton.getStyleClass().add("button-primary");
             stocktakeButton.setOnAction(event -> createStocktakeDialog()
                     .ifPresent(request -> runMutation(
                             () -> featureServices.inventoryWorkflowService()
-                                    .completeStocktake(authenticatedUserId, request),
+                                    .createStocktakeDraft(authenticatedUserId, request),
                             () -> refreshRows(renderedTable, featureService, module))));
-            actions.getChildren().add(stocktakeButton);
+            Button confirmButton = new Button(Localization.text("Xác nhận phiên"));
+            confirmButton.getStyleClass().add("button-primary");
+            confirmButton.setVisible(canConfirmInventoryWorkflow(module.id(), userRole));
+            confirmButton.setManaged(canConfirmInventoryWorkflow(module.id(), userRole));
+            Button editButton = new Button(Localization.text("Sửa phiên"));
+            editButton.getStyleClass().add("button-secondary");
+            Button cancelStocktakeButton = new Button(Localization.text("Hủy phiên"));
+            cancelStocktakeButton.getStyleClass().add("button-secondary");
+            Button detailsButton = new Button(Localization.text("Xem chi tiết"));
+            detailsButton.getStyleClass().add("button-secondary");
+            javafx.beans.value.ObservableValue<ModuleRow> selectedStocktake =
+                    renderedTable.table().getSelectionModel().selectedItemProperty();
+            Runnable updateStocktakeActions = () -> {
+                ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+                boolean draft = isUnconfirmedStocktake(selected);
+                confirmButton.setDisable(!draft || !canConfirmInventoryWorkflow(module.id(), userRole));
+                editButton.setDisable(!draft);
+                cancelStocktakeButton.setDisable(!draft);
+                detailsButton.setDisable(selected == null);
+            };
+            selectedStocktake.addListener((observable, oldValue, newValue) -> updateStocktakeActions.run());
+            updateStocktakeActions.run();
+            confirmButton.setOnAction(event -> {
+                ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+                if (canConfirmInventoryWorkflow(module.id(), userRole)
+                        && isUnconfirmedStocktake(selected) && confirmStocktake(selected)) {
+                    runMutation(
+                            () -> featureServices.inventoryWorkflowService()
+                                    .confirmStocktake(authenticatedUserId, selected.id()),
+                            () -> refreshRows(renderedTable, featureService, module));
+                }
+            });
+            editButton.setOnAction(event -> {
+                ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+                if (!isUnconfirmedStocktake(selected)) {
+                    return;
+                }
+                try {
+                    InventoryWorkflowDAO.StocktakeDraft draft =
+                            featureServices.inventoryWorkflowService().findStocktakeDraft(selected.id());
+                    createStocktakeDialog(draft).ifPresent(request -> runMutation(
+                            () -> featureServices.inventoryWorkflowService().updateStocktakeDraft(
+                                    authenticatedUserId, selected.id(), request),
+                            () -> refreshRows(renderedTable, featureService, module)));
+                } catch (IllegalArgumentException | IllegalStateException
+                         | vn.ninhkieupharma.pharmacy.common.dao.DataAccessException exception) {
+                    showInformation(Localization.text("Không thể sửa phiên kiểm kê"),
+                            Localization.text(exception.getMessage()));
+                }
+            });
+            cancelStocktakeButton.setOnAction(event -> {
+                ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+                if (isUnconfirmedStocktake(selected) && confirmCancelStocktake(selected)) {
+                    runMutation(
+                            () -> featureServices.inventoryWorkflowService()
+                                    .cancelStocktakeDraft(authenticatedUserId, selected.id()),
+                            () -> refreshRows(renderedTable, featureService, module));
+                }
+            });
+            detailsButton.setOnAction(event -> {
+                ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+                if (selected != null) {
+                    showStocktakeDetails(selected);
+                }
+            });
+            actions.getChildren().addAll(
+                    stocktakeButton, confirmButton, editButton, cancelStocktakeButton, detailsButton);
         } else if (canWriteModule(module.id(), userRole)) {
             Button addButton = new Button(module.actionLabel());
             addButton.getStyleClass().add("button-primary");
@@ -517,6 +665,20 @@ public class PageRenderer {
                                 () -> refreshRows(renderedTable, featureService, module));
                     });
                     actions.getChildren().addAll(editButton, statusSelector);
+                    if (canDeleteModule(module.id(), userRole)) {
+                        Button deleteLocationButton = new Button(Localization.text("Xóa vị trí"));
+                        deleteLocationButton.getStyleClass().add("button-secondary");
+                        deleteLocationButton.disableProperty().bind(
+                                renderedTable.table().getSelectionModel().selectedItemProperty().isNull());
+                        deleteLocationButton.setOnAction(event -> {
+                            ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+                            if (selected != null && confirmDeleteLocation(selected)) {
+                                runMutation(() -> featureService.delete(module, selected.id()),
+                                        () -> refreshRows(renderedTable, featureService, module));
+                            }
+                        });
+                        actions.getChildren().add(deleteLocationButton);
+                    }
                 } else {
                     actions.getChildren().add(editButton);
                     if (canDeleteModule(module.id(), userRole)) {
@@ -586,7 +748,9 @@ public class PageRenderer {
 
         if (module.report()) {
             page.getChildren().addAll(title, description);
-            if (!"UC-10".equals(module.id()) && !"UC-11".equals(module.id())) {
+            if (!"UC-10".equals(module.id())
+                    && !"UC-11".equals(module.id())
+                    && !"UC-15".equals(module.id())) {
                 page.getChildren().add(createReportSummary(module, featureService));
             }
             page.getChildren().addAll(
@@ -1224,7 +1388,9 @@ public class PageRenderer {
         if (values == null || values.size() < 7) {
             return false;
         }
-        String searchable = normalize(String.join(" ", values));
+        String searchableText = String.join(" ", values);
+        searchableText += " " + Localization.movementTypeText(values.get(2));
+        String searchable = normalize(searchableText);
         String normalizedQuery = normalize(query);
         if (!normalizedQuery.isBlank() && !searchable.contains(normalizedQuery)) {
             return false;
@@ -1586,7 +1752,8 @@ public class PageRenderer {
         ObservableList<ModuleRow> source = FXCollections.observableArrayList(rows);
         FilteredList<ModuleRow> filteredRows = new FilteredList<>(source, row -> true);
         table.setItems(filteredRows);
-        if ("UC-12".equals(module.id()) || "UC-13".equals(module.id()) || "UC-14".equals(module.id())) {
+        if ("UC-12".equals(module.id()) || "UC-13".equals(module.id())
+                || "UC-14".equals(module.id()) || "UC-15".equals(module.id())) {
             table.setRowFactory(view -> {
                 javafx.scene.control.TableRow<ModuleRow> row =
                         new javafx.scene.control.TableRow<>();
@@ -1601,6 +1768,8 @@ public class PageRenderer {
                             showGoodsReceiptDetails(row.getItem());
                         } else if ("UC-14".equals(module.id())) {
                             showStocktakeDetails(row.getItem());
+                        } else if ("UC-15".equals(module.id())) {
+                            showInventoryMovementDetails(row.getItem());
                         } else {
                             if ("UC-13".equals(module.id())) {
                                 editRow(module, featureService, row.getItem())
@@ -1980,6 +2149,72 @@ public class PageRenderer {
         return true;
     }
 
+    private void applyStatusFilters(
+            FilteredList<ModuleRow> rows, TextField search, ComboBox<String> statusFilter) {
+        String query = search.getText() == null
+                ? "" : search.getText().trim().toLowerCase(Locale.ROOT);
+        String status = statusFilter.getValue();
+        rows.setPredicate(row -> {
+            String searchableRow = row.values().stream()
+                    .map(Localization::text)
+                    .reduce("", (left, right) -> left + " " + right)
+                    .toLowerCase(Locale.ROOT);
+            return (query.isBlank() || searchableRow.contains(query))
+                    && (status == null || Localization.text("Tất cả trạng thái").equals(status)
+                    || row.values().size() > 4 && status.equals(Localization.text(row.values().get(4))));
+        });
+    }
+
+    private boolean isUnconfirmedReceipt(ModuleRow receipt) {
+        return receipt != null && receipt.values().size() > 4
+                && "Chưa xác nhận".equals(receipt.values().get(4));
+    }
+
+    private boolean isUnconfirmedStocktake(ModuleRow stocktake) {
+        return stocktake != null && stocktake.values().size() > 4
+                && "Chưa xác nhận".equals(stocktake.values().get(4));
+    }
+
+    private boolean confirmGoodsReceipt(ModuleRow receipt) {
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+        alert.setTitle(Localization.text("Xác nhận phiếu nhập"));
+        alert.setHeaderText(receipt.values().get(0));
+        alert.setContentText(Localization.text(
+                "Xác nhận phiếu sẽ cập nhật tồn kho. Sau khi xác nhận, không thể sửa hoặc xóa phiếu."));
+        alert.getButtonTypes().setAll(ButtonType.CANCEL, ButtonType.OK);
+        return alert.showAndWait().filter(ButtonType.OK::equals).isPresent();
+    }
+
+    private boolean confirmCancelReceiptDraft(ModuleRow receipt) {
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+        alert.setTitle(Localization.text("Hủy phiếu nhập"));
+        alert.setHeaderText(receipt.values().get(0));
+        alert.setContentText(Localization.text(
+                "Phiếu chưa xác nhận sẽ được chuyển sang trạng thái đã hủy và vẫn được lưu trong lịch sử. Tồn kho không thay đổi."));
+        alert.getButtonTypes().setAll(ButtonType.CANCEL, ButtonType.OK);
+        return alert.showAndWait().filter(ButtonType.OK::equals).isPresent();
+    }
+
+    private boolean confirmStocktake(ModuleRow stocktake) {
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+        alert.setTitle(Localization.text("Xác nhận phiên kiểm kê"));
+        alert.setHeaderText(stocktake.values().get(0));
+        alert.setContentText(Localization.text(
+                "Xác nhận sẽ điều chỉnh tồn kho theo số đếm. Sau đó không thể sửa hoặc xóa phiên."));
+        alert.getButtonTypes().setAll(ButtonType.CANCEL, ButtonType.OK);
+        return alert.showAndWait().filter(ButtonType.OK::equals).isPresent();
+    }
+
+    private boolean confirmCancelStocktake(ModuleRow stocktake) {
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+        alert.setTitle(Localization.text("Hủy phiên kiểm kê"));
+        alert.setHeaderText(stocktake.values().get(0));
+        alert.setContentText(Localization.text(
+                "Phiên chưa xác nhận sẽ được chuyển sang trạng thái đã hủy và vẫn được lưu trong lịch sử. Tồn kho không thay đổi."));
+        alert.getButtonTypes().setAll(ButtonType.CANCEL, ButtonType.OK);
+        return alert.showAndWait().filter(ButtonType.OK::equals).isPresent();
+    }
+
     private String inputValue(Node node) {
         if (node instanceof TextInputControl textInput) {
             return textInput.getText().trim();
@@ -2091,6 +2326,12 @@ public class PageRenderer {
         addCustomerField(summary, 1, "Chênh lệch", new Label(stocktake.values().get(3)));
         addCustomerField(summary, 2, "Trạng thái", new Label(
                 Localization.text(stocktake.values().get(4))));
+        if (stocktake.values().size() > 5 && !stocktake.values().get(5).isBlank()) {
+            Label note = new Label(stocktake.values().get(5));
+            note.setWrapText(true);
+            note.setMaxWidth(Double.MAX_VALUE);
+            addCustomerField(summary, 3, "Ghi chú", note);
+        }
 
         TableView<InventoryWorkflowDAO.StocktakeDetail> table = new TableView<>();
         table.getStyleClass().add("data-table");
@@ -2123,6 +2364,40 @@ public class PageRenderer {
         dialog.showAndWait();
     }
 
+    private void showInventoryMovementDetails(ModuleRow movement) {
+        List<String> values = movement.values();
+
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.setTitle(Localization.text("Chi tiết biến động kho"));
+        dialog.setHeaderText(Localization.text(values.get(1)));
+        dialog.initModality(Modality.APPLICATION_MODAL);
+        dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        dialog.getDialogPane().getStyleClass().add("form-dialog");
+        dialog.getDialogPane().setPrefWidth(720);
+
+        GridPane fields = new GridPane();
+        fields.setHgap(16);
+        fields.setVgap(12);
+        addCustomerField(fields, 0, "Thời điểm", new Label(Localization.text(values.get(0))));
+        addCustomerField(fields, 1, "Sản phẩm / lô", new Label(Localization.text(values.get(1))));
+        addCustomerField(fields, 2, "Loại biến động",
+                new Label(Localization.movementTypeText(values.get(2))));
+        addCustomerField(fields, 3, "Số lượng", new Label(Localization.text(values.get(3))));
+        Label explanation = new Label(Localization.text(
+                values.get(4).isBlank() ? "Không có ghi chú" : values.get(4)));
+        explanation.setWrapText(true);
+        addCustomerField(fields, 4, "Diễn giải", explanation);
+        addCustomerField(fields, 5, "Hạn sử dụng",
+                new Label(Localization.text("—".equals(values.get(5))
+                        ? "Không có hạn sử dụng" : values.get(5))));
+        addCustomerField(fields, 6, "Vị trí kho", new Label(Localization.text(values.get(6))));
+
+        VBox content = new VBox(12, fields);
+        content.setPadding(new Insets(12, 0, 8, 0));
+        dialog.getDialogPane().setContent(content);
+        dialog.showAndWait();
+    }
+
     private String formatSignedQuantity(BigDecimal quantity) {
         String formatted = quantity.stripTrailingZeros().toPlainString();
         if (quantity.signum() > 0) {
@@ -2146,6 +2421,11 @@ public class PageRenderer {
     }
 
     private java.util.Optional<InventoryWorkflowDAO.ReceiptRequest> createGoodsReceiptDialog() {
+        return createGoodsReceiptDialog(null);
+    }
+
+    private java.util.Optional<InventoryWorkflowDAO.ReceiptRequest> createGoodsReceiptDialog(
+            InventoryWorkflowDAO.ReceiptDraft initialDraft) {
         InventoryWorkflowService service = featureServices.inventoryWorkflowService();
         List<InventoryWorkflowDAO.SupplierOption> suppliers = service.findSuppliers();
         List<InventoryWorkflowDAO.ProductOption> products = service.findProducts();
@@ -2157,8 +2437,9 @@ public class PageRenderer {
         }
 
         Dialog<InventoryWorkflowDAO.ReceiptRequest> dialog = new Dialog<>();
-        dialog.setTitle(Localization.text("Tạo phiếu nhập"));
-        dialog.setHeaderText(Localization.text("Nhập hàng vào kho"));
+        dialog.setTitle(Localization.text(initialDraft == null ? "Tạo phiếu nhập" : "Sửa phiếu nhập"));
+        dialog.setHeaderText(Localization.text(initialDraft == null
+                ? "Nhập hàng vào kho" : "Chỉnh sửa phiếu chưa xác nhận"));
         dialog.initModality(Modality.APPLICATION_MODAL);
         dialog.getDialogPane().getButtonTypes().addAll(ButtonType.CANCEL, ButtonType.OK);
         dialog.getDialogPane().getStyleClass().add("form-dialog");
@@ -2166,16 +2447,27 @@ public class PageRenderer {
 
         ComboBox<InventoryWorkflowDAO.SupplierOption> supplier = new ComboBox<>(
                 FXCollections.observableArrayList(suppliers));
-        supplier.getSelectionModel().selectFirst();
+        if (initialDraft == null) {
+            supplier.getSelectionModel().selectFirst();
+        } else {
+            supplier.getItems().stream()
+                    .filter(option -> option.id() == initialDraft.supplierId())
+                    .findFirst()
+                    .ifPresent(supplier.getSelectionModel()::select);
+        }
         supplier.setMaxWidth(Double.MAX_VALUE);
         Node supplierSelector = searchableInventorySelector(
                 supplier, "Tìm nhà cung cấp...", 460);
-        DatePicker receivedDate = new DatePicker(LocalDate.now());
+        DatePicker receivedDate = new DatePicker(
+                initialDraft == null ? LocalDate.now() : initialDraft.receivedDate());
         TextArea note = new TextArea();
         note.setPromptText(Localization.text("Số hóa đơn nhà cung cấp / ghi chú"));
         note.setPrefRowCount(2);
         note.setWrapText(true);
         note.getStyleClass().add("text-input");
+        if (initialDraft != null && initialDraft.note() != null) {
+            note.setText(initialDraft.note());
+        }
 
         GridPane header = new GridPane();
         header.setHgap(16);
@@ -2192,10 +2484,18 @@ public class PageRenderer {
         Button addLine = new Button(Localization.text("Thêm mặt hàng"));
         addLine.getStyleClass().add("button-secondary");
         addLine.setOnAction(event -> addReceiptLine(lines, lineRows, products));
-        addReceiptLine(lines, lineRows, products);
+        if (initialDraft == null) {
+            addReceiptLine(lines, lineRows, products);
+        } else {
+            for (InventoryWorkflowDAO.ReceiptLine line : initialDraft.lines()) {
+                addReceiptLine(lines, lineRows, products, line);
+            }
+        }
 
         VBox content = new VBox(12,
                 header,
+                new Label(Localization.text(
+                        "Phiếu mới sẽ ở trạng thái chưa xác nhận và chưa làm thay đổi tồn kho.")),
                 new Label(Localization.text(
                         "Mỗi dòng nhập lưu sản phẩm, mã lô, hạn sử dụng, vị trí, số lượng và giá nhập.")),
                 lineScroll,
@@ -2236,13 +2536,12 @@ public class PageRenderer {
             if (selected != null && !filteredItems.contains(selected)) {
                 combo.getSelectionModel().clearSelection();
             }
-        });
-        combo.valueProperty().addListener((observable, oldValue, newValue) -> {
-            if (newValue != null && !search.getText().isBlank()) {
-                search.clear();
+            if (query.isBlank() || filteredItems.isEmpty()) {
+                combo.hide();
+            } else {
+                combo.show();
             }
         });
-
         VBox selector = new VBox(4, search, combo);
         selector.setPrefWidth(width);
         selector.setMinWidth(0);
@@ -2253,6 +2552,14 @@ public class PageRenderer {
             List<ReceiptLineInput> lines,
             VBox lineRows,
             List<InventoryWorkflowDAO.ProductOption> products) {
+        addReceiptLine(lines, lineRows, products, null);
+    }
+
+    private void addReceiptLine(
+            List<ReceiptLineInput> lines,
+            VBox lineRows,
+            List<InventoryWorkflowDAO.ProductOption> products,
+            InventoryWorkflowDAO.ReceiptLine initialLine) {
         ComboBox<InventoryWorkflowDAO.ProductOption> product =
                 new ComboBox<>(FXCollections.observableArrayList(products));
         product.setPromptText(Localization.text("Sản phẩm"));
@@ -2261,7 +2568,14 @@ public class PageRenderer {
                 featureServices.inventoryWorkflowService().findLocations();
         ComboBox<InventoryWorkflowDAO.LocationOption> location =
                 new ComboBox<>(FXCollections.observableArrayList(locations));
-        location.getSelectionModel().selectFirst();
+        if (initialLine == null) {
+            location.getSelectionModel().selectFirst();
+        } else {
+            location.getItems().stream()
+                    .filter(option -> option.id() == initialLine.locationId())
+                    .findFirst()
+                    .ifPresent(location.getSelectionModel()::select);
+        }
         Node locationSelector = searchableInventorySelector(location, "Tìm kệ / vị trí...", 150);
         TextField batchCode = new TextField();
         batchCode.setPromptText(Localization.text("Mã lô"));
@@ -2275,6 +2589,16 @@ public class PageRenderer {
         TextField unitCost = new TextField();
         unitCost.setPromptText(Localization.text("Giá nhập"));
         unitCost.setPrefWidth(100);
+        if (initialLine != null) {
+            product.getItems().stream()
+                    .filter(option -> option.id() == initialLine.productId())
+                    .findFirst()
+                    .ifPresent(product.getSelectionModel()::select);
+            batchCode.setText(initialLine.batchCode());
+            expiryDate.setValue(initialLine.expiryDate());
+            quantity.setText(initialLine.quantity().stripTrailingZeros().toPlainString());
+            unitCost.setText(initialLine.unitCost().stripTrailingZeros().toPlainString());
+        }
         Button remove = new Button(Localization.text("Bỏ"));
         HBox row = new HBox(
                 8, productSelector, batchCode, expiryDate, locationSelector, quantity, unitCost, remove);
@@ -2340,6 +2664,11 @@ public class PageRenderer {
     }
 
     private java.util.Optional<InventoryWorkflowDAO.StocktakeRequest> createStocktakeDialog() {
+        return createStocktakeDialog(null);
+    }
+
+    private java.util.Optional<InventoryWorkflowDAO.StocktakeRequest> createStocktakeDialog(
+            InventoryWorkflowDAO.StocktakeDraft initialDraft) {
         InventoryWorkflowService service = featureServices.inventoryWorkflowService();
         List<InventoryWorkflowDAO.LocationOption> locations = service.findLocations();
         if (locations.isEmpty()) {
@@ -2349,8 +2678,9 @@ public class PageRenderer {
         }
 
         Dialog<InventoryWorkflowDAO.StocktakeRequest> dialog = new Dialog<>();
-        dialog.setTitle(Localization.text("Tạo phiên kiểm kê"));
-        dialog.setHeaderText(Localization.text("Ghi nhận tồn thực tế theo từng lô"));
+        dialog.setTitle(Localization.text(initialDraft == null ? "Tạo phiên kiểm kê" : "Sửa phiên kiểm kê"));
+        dialog.setHeaderText(Localization.text(initialDraft == null
+                ? "Ghi nhận tồn thực tế theo từng lô" : "Chỉnh sửa phiên chưa xác nhận"));
         dialog.initModality(Modality.APPLICATION_MODAL);
         dialog.getDialogPane().getButtonTypes().addAll(ButtonType.CANCEL, ButtonType.OK);
         dialog.getDialogPane().getStyleClass().add("form-dialog");
@@ -2358,12 +2688,23 @@ public class PageRenderer {
 
         ComboBox<InventoryWorkflowDAO.LocationOption> location = new ComboBox<>(
                 FXCollections.observableArrayList(locations));
-        location.getSelectionModel().selectFirst();
-        DatePicker stocktakeDate = new DatePicker(LocalDate.now());
+        if (initialDraft == null) {
+            location.getSelectionModel().selectFirst();
+        } else {
+            location.getItems().stream()
+                    .filter(option -> option.id() == initialDraft.locationId())
+                    .findFirst()
+                    .ifPresent(location.getSelectionModel()::select);
+        }
+        DatePicker stocktakeDate = new DatePicker(
+                initialDraft == null ? LocalDate.now() : initialDraft.stocktakeDate());
         TextArea note = new TextArea();
         note.setPromptText(Localization.text("Ghi chú kiểm kê"));
         note.setPrefRowCount(2);
         note.setWrapText(true);
+        if (initialDraft != null && initialDraft.note() != null) {
+            note.setText(initialDraft.note());
+        }
         GridPane header = new GridPane();
         header.setHgap(16);
         header.setVgap(10);
@@ -2373,6 +2714,11 @@ public class PageRenderer {
 
         VBox batchRows = new VBox(6);
         Map<Long, TextField> countedQuantities = new java.util.LinkedHashMap<>();
+        Map<Long, BigDecimal> savedCounts = initialDraft == null
+                ? Map.of()
+                : initialDraft.counts().stream().collect(java.util.stream.Collectors.toMap(
+                        InventoryWorkflowDAO.StocktakeCount::batchId,
+                        InventoryWorkflowDAO.StocktakeCount::countedQuantity));
         Label batchStatus = new Label();
         Runnable reloadBatches = () -> {
             batchRows.getChildren().clear();
@@ -2385,7 +2731,11 @@ public class PageRenderer {
             List<InventoryWorkflowDAO.BatchOption> batches = location.getValue() == null
                     ? List.of() : service.findBatches(location.getValue().id());
             for (InventoryWorkflowDAO.BatchOption batch : batches) {
-                TextField counted = new TextField(batch.quantityOnHand().stripTrailingZeros().toPlainString());
+                BigDecimal savedCount = initialDraft != null
+                        && location.getValue().id() == initialDraft.locationId()
+                        ? savedCounts.get(batch.id()) : null;
+                TextField counted = new TextField((savedCount == null
+                        ? batch.quantityOnHand() : savedCount).stripTrailingZeros().toPlainString());
                 counted.setPromptText(Localization.text("Số lượng thực tế"));
                 counted.setPrefWidth(120);
                 countedQuantities.put(batch.id(), counted);
@@ -2398,7 +2748,8 @@ public class PageRenderer {
             }
             batchStatus.setText(batches.isEmpty()
                     ? Localization.text("Vị trí này chưa có lô tồn kho để kiểm kê.")
-                    : Localization.text("Phiên sẽ chốt tồn và ghi biến động cho các chênh lệch."));
+                    : Localization.text(
+                            "Phiên chưa xác nhận sẽ chưa thay đổi tồn kho; xác nhận để áp dụng chênh lệch."));
         };
         location.valueProperty().addListener((observable, oldValue, newValue) -> reloadBatches.run());
         reloadBatches.run();
@@ -2406,7 +2757,10 @@ public class PageRenderer {
         ScrollPane batchScroll = new ScrollPane(batchRows);
         batchScroll.setFitToWidth(true);
         batchScroll.setPrefViewportHeight(340);
-        VBox content = new VBox(10, header, batchStatus, batchScroll);
+        VBox content = new VBox(10, header,
+                new Label(Localization.text(
+                        "Phiên mới ở trạng thái chưa xác nhận; tồn kho chỉ đổi sau khi xác nhận.")),
+                batchStatus, batchScroll);
         content.setPadding(new Insets(10, 0, 0, 0));
         dialog.getDialogPane().setContent(content);
 
@@ -2500,7 +2854,7 @@ public class PageRenderer {
         TextField quantity = new TextField();
         quantity.setPromptText(Localization.text("Số lượng cần trừ"));
         TextArea note = new TextArea();
-        note.setPromptText(Localization.text("Lý do / ghi chú"));
+        note.setPromptText(Localization.text("Lý do / ghi chú (không bắt buộc)"));
         note.setPrefRowCount(3);
         note.setWrapText(true);
 
@@ -3461,16 +3815,24 @@ public class PageRenderer {
         Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
         boolean promotion = "UC-18".equals(module.id());
         boolean customer = "UC-16".equals(module.id());
-        boolean location = "UC-13".equals(module.id());
         alert.setTitle(Localization.text(promotion ? "Xác nhận vô hiệu hóa"
                 : customer ? "Xác nhận lưu trữ"
-                : location ? "Xác nhận ngừng sử dụng" : "Xác nhận xóa"));
+                : "Xác nhận xóa"));
         alert.setHeaderText(module.title());
         alert.setContentText(Localization.text(promotion
                 ? "Bạn có chắc muốn vô hiệu hóa chương trình đang chọn?"
                 : customer ? "Hồ sơ được lưu trữ, lịch sử mua hàng và điểm vẫn được giữ."
-                        : location ? "Vị trí sẽ ngừng sử dụng nhưng dữ liệu lô hàng và kiểm kê vẫn được giữ."
                         : "Bạn có chắc muốn xóa dòng dữ liệu đang chọn?"));
+        alert.getButtonTypes().setAll(ButtonType.CANCEL, ButtonType.OK);
+        return alert.showAndWait().filter(ButtonType.OK::equals).isPresent();
+    }
+
+    private boolean confirmDeleteLocation(ModuleRow location) {
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+        alert.setTitle(Localization.text("Xác nhận xóa vị trí"));
+        alert.setHeaderText(location.values().get(0) + " · " + location.values().get(1));
+        alert.setContentText(Localization.text(
+                "Chỉ xóa được vị trí không còn hàng tồn và không có dữ liệu lô hàng, phiếu nhập hoặc kiểm kê tham chiếu."));
         alert.getButtonTypes().setAll(ButtonType.CANCEL, ButtonType.OK);
         return alert.showAndWait().filter(ButtonType.OK::equals).isPresent();
     }
@@ -3519,7 +3881,12 @@ public class PageRenderer {
     static boolean canWriteModule(String moduleId, UserRole role) {
         return role != null && isWritableModule(moduleId)
                 && (role == UserRole.ADMIN
-                || role == UserRole.STAFF && !List.of("UC-07", "UC-08", "UC-09", "UC-18").contains(moduleId));
+                || role == UserRole.STAFF
+                && !List.of("UC-07", "UC-08", "UC-09", "UC-13", "UC-18").contains(moduleId));
+    }
+
+    static boolean canConfirmInventoryWorkflow(String moduleId, UserRole role) {
+        return role == UserRole.ADMIN && List.of("UC-12", "UC-14").contains(moduleId);
     }
 
     static boolean canDeleteModule(String moduleId, UserRole role) {
