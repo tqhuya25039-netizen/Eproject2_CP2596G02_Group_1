@@ -63,6 +63,15 @@ class PageRendererTest {
     }
 
     @Test
+    void displaysIsoDatesAndTimestampsInVietnameseOrder() {
+        assertEquals("23/11/2026", PageRenderer.formatDisplayDate("2026-11-23"));
+        assertEquals("23/11/2026 09:00", PageRenderer.formatDisplayDate("2026-11-23 09:00"));
+        assertEquals("23/11/2026 09:00:15",
+                PageRenderer.formatDisplayDate("2026-11-23 09:00:15"));
+        assertEquals("11/2026", PageRenderer.formatDisplayDate("11/2026"));
+    }
+
+    @Test
     void customerSuggestionsNarrowAsPhoneDigitsAreTyped() {
         ModuleRow customer = new ModuleRow(
                 UUID.randomUUID(),
@@ -113,6 +122,14 @@ class PageRendererTest {
             assertFalse(PageRenderer.canConfirmInventoryWorkflow(moduleId, UserRole.STAFF));
         }
         assertFalse(PageRenderer.canConfirmInventoryWorkflow("UC-13", UserRole.ADMIN));
+    }
+
+    @Test
+    void onlyAdministratorsCanManageTheStoreSchedule() {
+        assertTrue(PageRenderer.canWriteModule("UC-03", UserRole.ADMIN));
+        assertTrue(PageRenderer.canDeleteModule("UC-03", UserRole.ADMIN));
+        assertFalse(PageRenderer.canWriteModule("UC-03", UserRole.STAFF));
+        assertFalse(PageRenderer.canDeleteModule("UC-03", UserRole.STAFF));
     }
 
     @Test
