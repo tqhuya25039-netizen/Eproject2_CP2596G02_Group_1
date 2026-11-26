@@ -63,6 +63,9 @@ import vn.ninhkieupharma.pharmacy.common.service.ModuleCatalog;
 import vn.ninhkieupharma.pharmacy.common.auth.UserRole;
 import vn.ninhkieupharma.pharmacy.common.dao.InventoryWorkflowDAO;
 import vn.ninhkieupharma.pharmacy.domain.inventory.InventoryWorkflowService;
+import vn.ninhkieupharma.pharmacy.domain.hr.AvailabilityService;
+import vn.ninhkieupharma.pharmacy.domain.hr.AvailabilitySlot;
+import vn.ninhkieupharma.pharmacy.domain.hr.AttendanceService;
 import vn.ninhkieupharma.pharmacy.domain.sales.PromotionsLoyaltyService;
 import vn.ninhkieupharma.pharmacy.domain.sales.CustomerLoyaltyService;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleAllergyWarning;
@@ -85,8 +88,15 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.text.NumberFormat;
+import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeFormatterBuilder;
+import java.time.format.DateTimeParseException;
+import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -99,6 +109,20 @@ import java.util.stream.IntStream;
 import javafx.util.StringConverter;
 
 public class PageRenderer {
+    private static final DateTimeFormatter VIETNAMESE_DATE_FORMAT =
+            DateTimeFormatter.ofPattern("dd/MM/yyyy");
+    private static final DateTimeFormatter VIETNAMESE_DATE_TIME_FORMAT =
+            DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
+    private static final DateTimeFormatter TIME_INPUT_FORMAT =
+            DateTimeFormatter.ofPattern("H:mm");
+    private static final DateTimeFormatter ISO_DATE_TIME_WITH_SPACE =
+            new DateTimeFormatterBuilder()
+                    .appendPattern("yyyy-MM-dd HH:mm")
+                    .optionalStart()
+                    .appendPattern(":ss")
+                    .optionalEnd()
+                    .toFormatter();
+
     private record RenderedTable(
             TableView<ModuleRow> table,
             ObservableList<ModuleRow> source,
@@ -367,16 +391,32 @@ public class PageRenderer {
         } else if (canWriteModule(module.id(), userRole)) {
             Button addButton = new Button(module.actionLabel());
             addButton.getStyleClass().add("button-primary");
-            if ("UC-16".equals(module.id())) {
+            if ("UC-02".equals(module.id())) {
+                AvailabilityService availabilityService = (AvailabilityService) featureService;
+                addButton.setOnAction(event -> createWeeklyAvailabilityDialog(
+                        module, availabilityService, featureService, renderedTable));
+                Button singleDayButton = new Button(Localization.text("Đăng ký một ngày"));
+                singleDayButton.getStyleClass().add("button-secondary");
+                singleDayButton.setOnAction(event -> editRow(module, featureService, null)
+                        .ifPresent(values -> runMutation(
+                                () -> featureService.create(module, values),
+                                () -> refreshRows(renderedTable, featureService, module))));
+                actions.getChildren().addAll(addButton, singleDayButton);
+            } else if ("UC-16".equals(module.id())) {
                 addButton.setOnAction(event -> editCustomerRow(
                         module, featureService, renderedTable, null));
+                actions.getChildren().add(addButton);
+            } else if ("UC-04".equals(module.id()) && userRole == UserRole.STAFF) {
+                addButton.setOnAction(event -> createStaffAttendanceDialog(
+                        module, featureService, renderedTable));
+                actions.getChildren().add(addButton);
             } else {
                 addButton.setOnAction(event -> editRow(module, featureService, null)
                         .ifPresent(values -> runMutation(() -> featureService.create(module, values),
                                 () -> refreshRows(renderedTable, featureService, module))));
+                actions.getChildren().add(addButton);
             }
 
-            actions.getChildren().add(addButton);
             if (!"UC-01".equals(module.id())) {
                 Button editButton = new Button(Localization.text("Chỉnh sửa"));
                 editButton.getStyleClass().add("button-secondary");
@@ -513,8 +553,7 @@ public class PageRenderer {
 
         if (module.report()) {
             page.getChildren().addAll(title, description,
-                    createReportSummary(module, featureService), filters,
-                    actions, createReportCharts(module, featureService), renderedTable.table());
+                    filters, actions, createReportCharts(module, featureService), renderedTable.table());
         } else {
             String note = salesCustomerEntry != null
                     ? "Nhân viên lưu đơn Pending để có thể sửa/hủy; tồn kho và điểm chỉ cập nhật khi hoàn tất."
@@ -539,6 +578,155 @@ public class PageRenderer {
             }
         }
         return page;
+    }
+
+    private void createWeeklyAvailabilityDialog(
+            ModuleDefinition module,
+            AvailabilityService availabilityService,
+            FeatureModuleService featureService,
+            RenderedTable renderedTable) {
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.setTitle(Localization.text(module.actionLabel()));
+        dialog.setHeaderText(Localization.text(module.title()));
+        dialog.initModality(Modality.APPLICATION_MODAL);
+        dialog.getDialogPane().getButtonTypes().addAll(ButtonType.CANCEL, ButtonType.OK);
+        dialog.getDialogPane().getStyleClass().add("form-dialog");
+
+        ComboBox<String> employee = new ComboBox<>();
+        employee.getItems().setAll(availabilityService.findActiveEmployeeNames());
+        employee.setPromptText(Localization.text("Chọn nhân viên"));
+        employee.setMaxWidth(Double.MAX_VALUE);
+
+        LocalDate currentMonday = LocalDate.now().with(
+                TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+        DatePicker weekDate = new DatePicker(currentMonday);
+        weekDate.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(LocalDate date) {
+                return date == null ? "" : date.format(VIETNAMESE_DATE_FORMAT);
+            }
+
+            @Override
+            public LocalDate fromString(String value) {
+                return value == null || value.isBlank()
+                        ? null : LocalDate.parse(value, VIETNAMESE_DATE_FORMAT);
+            }
+        });
+        Label weekRange = new Label();
+        weekRange.getStyleClass().add("helper-text");
+        Runnable updateWeekRange = () -> {
+            LocalDate selectedDate = weekDate.getValue();
+            if (selectedDate == null) {
+                weekRange.setText(Localization.text("Vui lòng chọn một ngày trong tuần."));
+                return;
+            }
+            LocalDate start = selectedDate.with(
+                    TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+            LocalDate end = start.plusDays(6);
+            weekRange.setText(Localization.text("Tuần được chọn: ")
+                    + start.format(VIETNAMESE_DATE_FORMAT) + " – "
+                    + end.format(VIETNAMESE_DATE_FORMAT));
+        };
+        weekDate.valueProperty().addListener((observable, oldValue, newValue) -> updateWeekRange.run());
+        updateWeekRange.run();
+
+        String[] dayNames = {
+                "Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy", "Chủ Nhật"
+        };
+        List<CheckBox> availableDays = new ArrayList<>();
+        List<TextField> startTimes = new ArrayList<>();
+        List<TextField> endTimes = new ArrayList<>();
+        GridPane availabilityGrid = new GridPane();
+        availabilityGrid.setHgap(12);
+        availabilityGrid.setVgap(8);
+        Label startHeading = new Label(Localization.text("Giờ bắt đầu"));
+        Label endHeading = new Label(Localization.text("Giờ kết thúc"));
+        availabilityGrid.add(startHeading, 1, 0);
+        availabilityGrid.add(endHeading, 2, 0);
+        for (int day = 0; day < dayNames.length; day++) {
+            CheckBox available = new CheckBox(Localization.text(dayNames[day]));
+            TextField start = new TextField("08:00");
+            TextField end = new TextField("17:00");
+            start.setPrefColumnCount(6);
+            end.setPrefColumnCount(6);
+            availableDays.add(available);
+            startTimes.add(start);
+            endTimes.add(end);
+            availabilityGrid.add(available, 0, day + 1);
+            availabilityGrid.add(start, 1, day + 1);
+            availabilityGrid.add(end, 2, day + 1);
+        }
+        TextField note = new TextField();
+        note.setPromptText(Localization.text("Ghi chú chung cho các ngày"));
+        Label guidance = new Label(Localization.text(
+                "Chọn ngày khả dụng, nhập giờ bắt đầu và giờ kết thúc. Chỉ lưu thời gian nhân viên có thể làm, không tạo ca phân công cửa hàng."));
+        guidance.setWrapText(true);
+        guidance.getStyleClass().add("helper-text");
+        GridPane fields = new GridPane();
+        fields.setHgap(16);
+        fields.setVgap(12);
+        fields.setPadding(new Insets(12, 0, 8, 0));
+        fields.add(new Label(Localization.text("Nhân viên")), 0, 0);
+        fields.add(employee, 1, 0);
+        fields.add(new Label(Localization.text("Tuần bắt đầu")), 0, 1);
+        fields.add(weekDate, 1, 1);
+        fields.add(weekRange, 1, 2);
+        fields.add(availabilityGrid, 0, 3, 2, 1);
+        fields.add(note, 0, 4, 2, 1);
+        GridPane.setHgrow(employee, Priority.ALWAYS);
+        GridPane.setHgrow(weekDate, Priority.ALWAYS);
+        VBox content = new VBox(12, fields, guidance);
+        dialog.getDialogPane().setContent(content);
+        dialog.getDialogPane().setPrefWidth(640);
+        dialog.setResultConverter(button -> button == ButtonType.OK ? ButtonType.OK : null);
+
+        if (dialog.showAndWait().filter(ButtonType.OK::equals).isEmpty()) {
+            return;
+        }
+        LocalDate selectedDate = weekDate.getValue();
+        if (selectedDate == null) {
+            showInformation(
+                    Localization.text("Không thể đăng ký khả dụng"),
+                    Localization.text("Vui lòng chọn một ngày trong tuần."));
+            return;
+        }
+        if (employee.getValue() == null || employee.getValue().isBlank()) {
+            showInformation(
+                    Localization.text("Không thể đăng ký khả dụng"),
+                    Localization.text("Vui lòng chọn nhân viên."));
+            return;
+        }
+        LocalDate weekStart = selectedDate.with(
+                TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+        List<AvailabilitySlot> slots = new ArrayList<>();
+        for (int day = 0; day < availableDays.size(); day++) {
+            if (!availableDays.get(day).isSelected()) {
+                continue;
+            }
+            try {
+                slots.add(new AvailabilitySlot(
+                        weekStart.plusDays(day),
+                        LocalTime.parse(startTimes.get(day).getText().trim(), TIME_INPUT_FORMAT),
+                        LocalTime.parse(endTimes.get(day).getText().trim(), TIME_INPUT_FORMAT),
+                        note.getText().trim()));
+            } catch (DateTimeParseException | IllegalArgumentException exception) {
+                showInformation(
+                        Localization.text("Không thể đăng ký khả dụng"),
+                        Localization.text("Giờ phải theo định dạng H:mm; giờ bắt đầu phải sớm hơn giờ kết thúc."));
+                return;
+            }
+        }
+        int[] createdCount = new int[1];
+        runMutation(
+                () -> createdCount[0] = availabilityService.createWeeklyAvailability(
+                        employee.getValue(), selectedDate, slots),
+                () -> {
+                    refreshRows(renderedTable, featureService, module);
+                    showInformation(
+                            Localization.text("Đăng ký khả dụng thành công"),
+                            Localization.text("Đã đăng ký khả dụng cho ")
+                                    + createdCount[0] + Localization.text(" ngày."));
+                });
     }
 
     private void configureSalesReport(VBox page, ModuleDefinition module) {
@@ -745,7 +933,7 @@ public class PageRenderer {
         }
     }
 
-    private HBox createFilters(
+   private FlowPane createFilters(
             ModuleDefinition module,
             List<Node> filterInputs,
             FilteredList<ModuleRow> rows,
@@ -757,7 +945,6 @@ public class PageRenderer {
             TextField filter = new TextField();
             filter.setPromptText(module.formFields().get(index));
             filter.getStyleClass().add("filter-input");
-            HBox.setHgrow(filter, Priority.ALWAYS);
             filterInputs.add(filter);
             filters.getChildren().add(filter);
         }
@@ -1229,6 +1416,7 @@ public class PageRenderer {
                 if ("UC-19".equals(module.id()) && columnIndex >= 2) {
                     value = formatSaleMoney(new BigDecimal(value));
                 }
+                value = formatDisplayDate(value);
                 return new javafx.beans.property.ReadOnlyStringWrapper(Localization.text(value));
             });
             table.getColumns().add(column);
@@ -1275,34 +1463,41 @@ public class PageRenderer {
         return result;
     }
 
-    private Node createReportSummary(ModuleDefinition module, FeatureModuleService featureService) {
-        FlowPane summary = new FlowPane(12, 8);
-        summary.getStyleClass().add("demo-summary");
-        summary.getChildren().add(summaryCard(Localization.text("BẢN GHI"),
-                featureService.findAll(module).size() + Localization.text(" dòng")));
-        summary.getChildren().add(summaryCard(Localization.text("PHẠM VI"), module.id()));
-        summary.getChildren().add(summaryCard(Localization.text("TRẠNG THÁI"),
-                Localization.text("Đọc từ MySQL")));
-        return summary;
-    }
-
     private Node createReportCharts(ModuleDefinition module, FeatureModuleService featureService) {
         FlowPane charts = new FlowPane(16, 16);
         charts.getStyleClass().add("report-chart-row");
         switch (module.id()) {
-            case "UC-05" -> {
+           case "UC-05" -> {
                 List<ModuleRow> employees = featureService.findAll(module);
-                List<String> names = employees.stream().map(row -> row.values().get(0)).toList();
-                List<Number> hours = employees.stream()
-                        .map(row -> (Number) parseDecimal(row.values().get(3).replace(" giờ", "")))
-                        .toList();
-                List<Number> shifts = employees.stream()
-                        .map(row -> (Number) Integer.parseInt(row.values().get(2)))
-                        .toList();
-                charts.getChildren().add(chartCard("Giờ làm theo nhân viên", barChart(
-                        "Nhân viên", "Số giờ", names, seriesFromList("Thực tế", hours))));
-                charts.getChildren().add(chartCard("Phân bổ số ca", pieChart(
-                        "Ca làm", seriesPairs(names, shifts))));
+                if (employees != null && !employees.isEmpty()) {
+                    List<String> names = new ArrayList<>();
+                    List<Number> hours = new ArrayList<>();
+                    List<Number> shifts = new ArrayList<>();
+
+                    for (ModuleRow row : employees) {
+                        List<String> vals = row.values();
+                        if (vals == null || vals.size() < 4) {
+                            continue;
+                        }
+                        names.add(vals.get(0) != null ? vals.get(0) : "N/A");
+
+                        // Lọc lấy phần số sạch cho Giờ thực tế (tránh lỗi khi có chữ "giờ", "hrs" hoặc null)
+                        String rawHour = vals.get(3) == null ? "0" : vals.get(3).replaceAll("[^0-9.]", "");
+                        hours.add(rawHour.isEmpty() ? 0.0 : parseDecimal(rawHour));
+
+                        // Lọc lấy phần số sạch cho Số ca (tránh lỗi Integer.parseInt khi có ".0" hoặc chữ)
+                        String rawShift = vals.get(2) == null ? "0" : vals.get(2).replaceAll("[^0-9.]", "");
+                        int shiftCount = rawShift.isEmpty() ? 0 : (int) Math.round(parseDecimal(rawShift));
+                        shifts.add(shiftCount);
+                    }
+
+                    if (!names.isEmpty()) {
+                        charts.getChildren().add(chartCard("Giờ làm theo nhân viên", barChart(
+                                "Nhân viên", "Số giờ", names, seriesFromList("Thực tế", hours))));
+                        charts.getChildren().add(chartCard("Phân bổ số ca", pieChart(
+                                "Ca làm", seriesPairs(names, shifts))));
+                    }
+                }
             }
             case "UC-06" -> {
                 List<ModuleRow> attendance = featureService.findAll(module);
@@ -2205,6 +2400,14 @@ public class PageRenderer {
             ModuleDefinition module,
             FeatureModuleService featureService,
             ModuleRow existingRow) {
+        return editRow(module, featureService, existingRow, null);
+    }
+
+    private java.util.Optional<List<String>> editRow(
+            ModuleDefinition module,
+            FeatureModuleService featureService,
+            ModuleRow existingRow,
+            String currentEmployeeName) {
         if ("UC-01".equals(module.id())) {
             return createEmployeeAccountDialog(module);
         }
@@ -2228,26 +2431,46 @@ public class PageRenderer {
         fields.setHgap(16);
         fields.setVgap(12);
         fields.setPadding(new Insets(12, 0, 8, 0));
-        List<TextField> inputs = new ArrayList<>();
+        List<java.util.function.Supplier<String>> valueReaders = new ArrayList<>();
         List<String> fieldLabels = "UC-04".equals(module.id())
                 ? module.formFields() : module.columns();
         for (int index = 0; index < fieldLabels.size(); index++) {
+            Label label = new Label(fieldLabels.get(index));
+            label.getStyleClass().add("field-label");
+            if ("UC-03".equals(module.id()) && index == 3) {
+                ComboBox<String> statusInput = new ComboBox<>();
+                statusInput.getItems().setAll("PLANNED", "COMPLETED", "CANCELLED");
+                statusInput.setValue(existingRow == null ? "PLANNED" : existingRow.values().get(index));
+                statusInput.getStyleClass().add("text-input");
+                statusInput.setMaxWidth(Double.MAX_VALUE);
+                fields.add(label, 0, index);
+                fields.add(statusInput, 1, index);
+                GridPane.setHgrow(statusInput, Priority.ALWAYS);
+                valueReaders.add(statusInput::getValue);
+                continue;
+            }
             TextField input = new TextField();
             input.setPromptText(fieldLabels.get(index));
             input.getStyleClass().add("text-input");
             if (existingRow != null) {
-                input.setText(Localization.text(existingRow.values().get(index)));
+                String value = Localization.text(existingRow.values().get(index));
+                if ("UC-04".equals(module.id()) && index >= 2) {
+                    value = formatDisplayDate(value);
+                }
+                input.setText(value);
             }
-            if (("UC-03".equals(module.id()) && index == 3)
-                    || ("UC-04".equals(module.id()) && existingRow != null && index < 2)) {
+            if ("UC-04".equals(module.id()) && userRole == UserRole.STAFF
+                    && existingRow == null && index == 0) {
+                input.setText(currentEmployeeName);
                 input.setDisable(true);
             }
-            Label label = new Label(fieldLabels.get(index));
-            label.getStyleClass().add("field-label");
+            if ("UC-04".equals(module.id()) && existingRow != null && index < 2) {
+                input.setDisable(true);
+            }
             fields.add(label, 0, index);
             fields.add(input, 1, index);
             GridPane.setHgrow(input, Priority.ALWAYS);
-            inputs.add(input);
+            valueReaders.add(input::getText);
         }
         Label note = new Label(Localization.text(
                 "Dữ liệu nghiệp vụ được lưu trong MySQL; kết quả báo cáo được tính lại khi mở."));
@@ -2259,8 +2482,29 @@ public class PageRenderer {
         dialog.setResultConverter(button -> button == ButtonType.OK ? ButtonType.OK : null);
         return dialog.showAndWait()
                 .filter(ButtonType.OK::equals)
-                .map(ignored -> inputs.stream().map(input -> input.getText().trim()).toList())
+                .map(ignored -> valueReaders.stream().map(reader -> reader.get().trim()).toList())
                 .map(values -> preserveUnchangedValues(existingRow, values));
+    }
+
+    private void createStaffAttendanceDialog(
+            ModuleDefinition module,
+            FeatureModuleService featureService,
+            RenderedTable renderedTable) {
+        try {
+            String employeeName = ((AttendanceService) featureService).findCurrentEmployeeName();
+            editRow(module, featureService, null, employeeName)
+                    .ifPresent(values -> runMutation(
+                            () -> featureService.create(module, values),
+                            () -> refreshRows(renderedTable, featureService, module)));
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException
+                 | java.util.NoSuchElementException
+                 | vn.ninhkieupharma.pharmacy.common.dao.DataAccessException exception) {
+            showInformation(Localization.text("Không thể cập nhật dữ liệu"),
+                    Localization.text(exception.getMessage()));
+        } catch (UnsupportedOperationException exception) {
+            showInformation(Localization.text("Thao tác chưa hỗ trợ"),
+                    Localization.text(exception.getMessage()));
+        }
     }
 
     private java.util.Optional<List<String>> createCustomerDialog(ModuleRow existingRow) {
@@ -2851,6 +3095,31 @@ public class PageRenderer {
         return List.copyOf(values);
     }
 
+    static String formatDisplayDate(String value) {
+        if (value == null || value.isBlank()) {
+            return value;
+        }
+        try {
+            LocalDateTime dateTime;
+            try {
+                dateTime = LocalDateTime.parse(value, DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+            } catch (DateTimeParseException ignored) {
+                dateTime = LocalDateTime.parse(value, ISO_DATE_TIME_WITH_SPACE);
+            }
+            DateTimeFormatter outputFormat = value.length() > 16
+                    ? DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss")
+                    : VIETNAMESE_DATE_TIME_FORMAT;
+            return dateTime.format(outputFormat);
+        } catch (DateTimeParseException ignored) {
+            try {
+                return LocalDate.parse(value, DateTimeFormatter.ISO_LOCAL_DATE)
+                        .format(VIETNAMESE_DATE_FORMAT);
+            } catch (DateTimeParseException notAnIsoDate) {
+                return value;
+            }
+        }
+    }
+
     private boolean confirmDelete(ModuleDefinition module) {
         Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
         boolean promotion = "UC-18".equals(module.id());
@@ -2913,7 +3182,8 @@ public class PageRenderer {
     static boolean canWriteModule(String moduleId, UserRole role) {
         return role != null && isWritableModule(moduleId)
                 && (role == UserRole.ADMIN
-                || role == UserRole.STAFF && !List.of("UC-07", "UC-08", "UC-09", "UC-18").contains(moduleId));
+                || role == UserRole.STAFF
+                && !List.of("UC-03", "UC-07", "UC-08", "UC-09", "UC-18").contains(moduleId));
     }
 
     static boolean canDeleteModule(String moduleId, UserRole role) {

@@ -218,6 +218,23 @@ class FeatureServicesTest {
     }
 
     @Test
+    void workHourReportAcceptsVietnameseAttendanceTimestamps() {
+        FeatureServices services = new FeatureServices();
+        ModuleDefinition attendanceModule = module("UC-04");
+        ModuleDefinition payrollReport = module("UC-05");
+
+        ModuleRow attendance = services.forModule(attendanceModule).create(attendanceModule,
+                List.of("Vietnamese Date Employee", "Morning shift",
+                        "25/11/2026 09:00", "25/11/2026 17:00", ""));
+
+        assertEquals("2026-11-25 09:00", attendance.values().get(2));
+        assertEquals("2026-11-25 17:00", attendance.values().get(3));
+        assertTrue(services.forModule(payrollReport).findAll(payrollReport).stream()
+                .anyMatch(row -> row.values().get(0).equals("Vietnamese Date Employee")
+                        && row.values().get(3).startsWith("8,0")));
+    }
+
+    @Test
     void revenueReportIsProjectedFromSessionInvoices() {
         FeatureServices services = new FeatureServices();
         ModuleDefinition salesModule = module("UC-17");

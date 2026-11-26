@@ -1,6 +1,8 @@
 package vn.ninhkieupharma.pharmacy.common.dao;
 
 import org.junit.jupiter.api.Test;
+import vn.ninhkieupharma.pharmacy.common.auth.User;
+import vn.ninhkieupharma.pharmacy.common.auth.UserRole;
 import vn.ninhkieupharma.pharmacy.common.service.ModuleCatalog;
 import vn.ninhkieupharma.pharmacy.common.dao.InventoryWorkflowDAO;
 
@@ -10,6 +12,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -39,6 +42,29 @@ class RelationalFeatureModuleDAOTest {
                     () -> dao.create(moduleId, List.of()));
             assertTrue(error.getMessage().contains(moduleId));
         }
+    }
+
+    @Test
+    void attendanceRequiresAnAuthenticatedActor() {
+        assertThrows(SecurityException.class, () -> dao.findAll("UC-04"));
+        assertThrows(SecurityException.class, dao::findCurrentEmployeeName);
+        assertThrows(SecurityException.class, () -> dao.create("UC-04",
+                List.of("Employee", "Shift", "2026-11-26 08:00", "", "")));
+    }
+
+    @Test
+    void storeScheduleWritesAreAdministratorOnlyAndValidateStatus() {
+        RelationalFeatureModuleDAO staffDAO = new RelationalFeatureModuleDAO(
+                new User(2, "staff_demo", "", UserRole.STAFF, true));
+        RelationalFeatureModuleDAO administratorDAO = new RelationalFeatureModuleDAO(
+                new User(1, "admin_demo", "", UserRole.ADMIN, true));
+
+        assertThrows(SecurityException.class, () -> staffDAO.create("UC-03", List.of()));
+        assertThrows(SecurityException.class, () -> staffDAO.update("UC-03", UUID.randomUUID(), List.of()));
+        assertThrows(SecurityException.class, () -> staffDAO.delete("UC-03", UUID.randomUUID()));
+        assertThrows(SecurityException.class, () -> staffDAO.replaceAll("UC-03", List.of()));
+        assertThrows(IllegalArgumentException.class, () -> administratorDAO.create("UC-03",
+                List.of("2026-11-03", "Ca sang", "Nguyen Thi An", "INVALID", "")));
     }
 
     @Test
@@ -121,6 +147,39 @@ class RelationalFeatureModuleDAOTest {
     void employeeAccountCreationValidatesPasswordBeforeConnectingToMysql() {
         assertThrows(IllegalArgumentException.class, () -> dao.create("UC-01",
                 List.of("NV-TEST", "Test Employee", "", "", "test_staff", "STAFF", "x".repeat(73))));
+    }
+
+    @Test
+    void employeeAccountCreationAndUpdateRejectInvalidCodesNamesEmailsAndUsernames() {
+        RelationalFeatureModuleDAO administratorDAO = new RelationalFeatureModuleDAO(
+                new User(1, "admin_demo", "", UserRole.ADMIN, true));
+        UUID employeeId = new UUID(0x4e4b504841524d41L, 1L);
+        List<List<String>> invalidValues = List.of(
+                List.of("NV TEST", "Nguyễn Thị An", "0901234567", "an@example.com",
+                        "nguyenthian", "STAFF", "Test@12345"),
+                List.of("NV-TEST", "Nguyễn Thị An2", "0901234567", "an@example.com",
+                        "nguyenthian", "STAFF", "Test@12345"),
+                List.of("NV-TEST", "Nguyễn @ An", "0901234567", "an@example.com",
+                        "nguyenthian", "STAFF", "Test@12345"),
+                List.of("NV-TEST", "Nguyễn Thị An", "0901234567", "",
+                        "nguyenthian", "STAFF", "Test@12345"),
+                List.of("NV-TEST", "Nguyễn Thị An", "0901234567", "not-an-email",
+                        "nguyenthian", "STAFF", "Test@12345"),
+                List.of("NV-TEST", "Nguyễn Thị An", "0901234567", "an@example.com",
+                        "nguyen thi an", "STAFF", "Test@12345"));
+
+        for (List<String> values : invalidValues) {
+            assertThrows(IllegalArgumentException.class, () -> dao.create("UC-01", values));
+            assertThrows(IllegalArgumentException.class,
+                    () -> administratorDAO.update("UC-01", employeeId, values));
+        }
+    }
+
+    @Test
+    void employeeAccountValidationAcceptsVietnameseNamesAndValidEmail() {
+        assertDoesNotThrow(() -> RelationalFeatureModuleDAO.validateEmployeeAccountFields(
+                List.of("NV-TEST-01", "Nguyễn Thị Ánh", "0901234567", "anh.nguyen@example.com",
+                        "nguyenthianh", "STAFF", "Test@12345")));
     }
 
     @Test

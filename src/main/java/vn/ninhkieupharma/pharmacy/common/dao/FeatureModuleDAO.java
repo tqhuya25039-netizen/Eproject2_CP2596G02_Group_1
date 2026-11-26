@@ -10,6 +10,7 @@ import vn.ninhkieupharma.pharmacy.domain.sales.SalePendingOrder;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleQuote;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleReceipt;
 import vn.ninhkieupharma.pharmacy.domain.sales.SalesReport;
+import vn.ninhkieupharma.pharmacy.domain.hr.AvailabilitySlot;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -119,6 +120,23 @@ public interface FeatureModuleDAO {
 
     default boolean supportsNativeReports() {
         return false;
+    }
+
+    default List<String> findActiveEmployeeNames() {
+        return findAll("UC-01").stream()
+                .filter(row -> row.values().size() > 1)
+                .map(row -> row.values().get(1))
+                .toList();
+    }
+
+    default String findCurrentEmployeeName() {
+        throw new UnsupportedOperationException("Current employee lookup is not available.");
+    }
+
+    default int createWeeklyAvailability(
+            String employeeName, LocalDate weekStart, List<AvailabilitySlot> slots) {
+        throw new UnsupportedOperationException(
+                "Đăng ký lịch khả dụng theo tuần cần kết nối MySQL.");
     }
 
     /** Returns completed sales totals by day. Omit both bounds to include all dates. */
