@@ -4,6 +4,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import vn.ninhkieupharma.pharmacy.common.auth.User;
 import vn.ninhkieupharma.pharmacy.common.auth.UserRole;
+import vn.ninhkieupharma.pharmacy.common.service.FeatureServices;
+import vn.ninhkieupharma.pharmacy.common.service.ModuleCatalog;
 import vn.ninhkieupharma.pharmacy.config.DatabaseConnection;
 
 import java.sql.Connection;
@@ -12,6 +14,7 @@ import java.sql.ResultSet;
 import java.util.List;
 import java.util.UUID;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -48,10 +51,17 @@ class WarehouseLocationDeletionMySqlIntegrationTest {
             assertThrows(IllegalStateException.class,
                     () -> dao.delete("UC-13", occupiedRow.id()));
 
+            var locationModule = ModuleCatalog.MODULES.stream()
+                    .filter(module -> module.id().equals("UC-13")).findFirst().orElseThrow();
+            var locations = new FeatureServices(dao).forModule(locationModule);
             String code = "DEL-" + UUID.randomUUID().toString().substring(0, 8);
-            var unusedLocation = dao.create("UC-13",
+            var unusedLocation = locations.create(locationModule,
                     List.of(code, "Integration Empty Location", "", "ACTIVE"));
-            dao.delete("UC-13", unusedLocation.id());
+            locations.update(locationModule, unusedLocation.id(),
+                    List.of(code, "Integration Empty Location", "", "INACTIVE"));
+            assertEquals("INACTIVE", locations.findAll(locationModule).stream()
+                    .filter(row -> row.id().equals(unusedLocation.id())).findFirst().orElseThrow().values().get(3));
+            locations.delete(locationModule, unusedLocation.id());
             assertFalse(dao.findAll("UC-13").stream()
                     .anyMatch(row -> row.id().equals(unusedLocation.id())));
         }

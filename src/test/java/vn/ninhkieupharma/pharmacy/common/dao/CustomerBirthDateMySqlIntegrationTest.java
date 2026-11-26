@@ -5,6 +5,8 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import vn.ninhkieupharma.pharmacy.common.auth.User;
 import vn.ninhkieupharma.pharmacy.common.auth.UserRole;
 import vn.ninhkieupharma.pharmacy.common.model.ModuleRow;
+import vn.ninhkieupharma.pharmacy.common.service.FeatureServices;
+import vn.ninhkieupharma.pharmacy.common.service.ModuleCatalog;
 
 import java.util.List;
 import java.util.UUID;
@@ -44,9 +46,20 @@ class CustomerBirthDateMySqlIntegrationTest {
             assertEquals("1990-03-25", profile.values().get(8));
             assertDates(admin, staff, created.id(), "1990-03-25");
 
-            admin.update("UC-16", created.id(),
+            var customerModule = ModuleCatalog.MODULES.stream()
+                    .filter(module -> module.id().equals("UC-16")).findFirst().orElseThrow();
+            var customers = new FeatureServices(admin).forModule(customerModule);
+            customers.update(customerModule, created.id(),
                     List.of(customerCode, "Customer", "0935555555", "", "", "0", "ACTIVE", "", ""));
             assertDates(admin, staff, created.id(), "");
+
+            var customer = customers.create(customerModule,
+                    List.of("", "Profile customer", "0935555556", "", "", "0", "ACTIVE", "", "1991"));
+            assertDates(admin, staff, customer.id(), "1991");
+            customers.update(customerModule, customer.id(),
+                    List.of(customer.values().getFirst(), "Profile customer", "0935555556", "", "",
+                            "0", "BLOCKED", "Integration restriction", "1991"));
+            assertEquals("BLOCKED", rowFor(customers.findAll(customerModule), customer.id()).values().get(6));
         }
 
         private static void assertDates(RelationalFeatureModuleDAO admin, RelationalFeatureModuleDAO staff,

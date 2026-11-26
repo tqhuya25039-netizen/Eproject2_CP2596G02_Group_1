@@ -76,7 +76,10 @@ class MySqlSchemaIntegrationTest {
             assertFalse(repository.findAll("UC-01").stream()
                     .anyMatch(row -> row.id().getLeastSignificantBits() == admin.id()));
 
-            var employee = repository.create("UC-01",
+            var employeeModule = ModuleCatalog.MODULES.stream()
+                    .filter(module -> module.id().equals("UC-01")).findFirst().orElseThrow();
+            var employees = new FeatureServices(repository).forModule(employeeModule);
+            var employee = employees.create(employeeModule,
                     List.of("NV-NEW", "New employee", "", "", "new_staff", "STAFF", password));
             User staff = authentication.authenticate("new_staff", password).orElseThrow();
             assertEquals(UserRole.STAFF, staff.role());

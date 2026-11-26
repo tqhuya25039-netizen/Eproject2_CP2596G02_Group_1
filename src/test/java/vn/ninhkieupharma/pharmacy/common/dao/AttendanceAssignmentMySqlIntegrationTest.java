@@ -18,6 +18,12 @@ class AttendanceAssignmentMySqlIntegrationTest {
     @Test
     void storesAttendanceInTheAssignmentAndClearsItWithoutDeletingTheShift() throws Exception {
         try (MySqlTestSchema schema = MySqlTestSchema.withCurrentSchema()) {
+            schema.executeScript("""
+                    INSERT INTO work_schedules (schedule_id, week_start_date, status, created_by)
+                    VALUES (91001, '2026-12-07', 'PUBLISHED', 2);
+                    INSERT INTO schedule_assignments (assignment_id, schedule_id, employee_id, shift_id, work_date)
+                    VALUES (91001, 91001, 1, 1, '2026-12-07');
+                    """);
             schema.runInChild(AttendanceScenario.class);
         }
     }
@@ -38,8 +44,11 @@ class AttendanceAssignmentMySqlIntegrationTest {
 
             assertTrue(dao.findAll("UC-04").stream().anyMatch(row -> row.id().getLeastSignificantBits() == 1013
                     && row.values().get(2).isEmpty() && !row.values().get(4).isEmpty()));
+            var unassignedDate = List.of(employee, shiftName, "2026-11-29 08:00", "", "");
+            assertThrows(IllegalArgumentException.class, () -> dao.create("UC-04", unassignedDate));
             var checkIn = List.of(employee, shiftName, "2026-11-28 08:00", "", "Check-in note");
             assertEquals(shift.id(), dao.create("UC-04", checkIn).id());
+            assertFalse(dao.findAll("UC-04").stream().anyMatch(row -> row.id().getLeastSignificantBits() == 91001));
             assertThrows(IllegalArgumentException.class, () -> dao.create("UC-04", checkIn));
             assertThrows(IllegalArgumentException.class, () -> dao.delete("UC-03", shift.id()));
 

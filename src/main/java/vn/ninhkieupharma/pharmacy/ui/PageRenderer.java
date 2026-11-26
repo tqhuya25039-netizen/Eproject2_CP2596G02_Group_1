@@ -2205,7 +2205,7 @@ public class PageRenderer {
                         .map(row -> (Number) parseDecimal(row.values().get(3).replace(" giờ", "")))
                         .toList();
                 List<Number> shifts = employees.stream()
-                        .map(row -> (Number) Integer.parseInt(row.values().get(2)))
+                        .map(row -> (Number) completedShiftCount(row.values().get(2)))
                         .toList();
                 charts.getChildren().add(chartCard("Giờ làm theo nhân viên", barChart(
                         "Nhân viên", "Số giờ", names, seriesFromList("Thực tế", hours))));
@@ -2287,7 +2287,7 @@ public class PageRenderer {
             }
             String period = row.values().get(periodIndex);
             String dimension = row.values().get(dimensionIndex);
-            int count = parseReportProductCount(row.values().get(2));
+            int count = parseReportCount(row.values().get(2));
             countsByPeriod.computeIfAbsent(period, ignored -> new LinkedHashMap<>())
                     .merge(dimension, count, Integer::sum);
         }
@@ -2314,7 +2314,12 @@ public class PageRenderer {
                 periods, Collections.unmodifiableMap(series), dimensions, List.copyOf(latestPeriodTotals));
     }
 
-    private static int parseReportProductCount(String value) {
+    static int completedShiftCount(String value) {
+        int separator = value.indexOf('/');
+        return parseReportCount(separator < 0 ? value : value.substring(0, separator));
+    }
+
+    private static int parseReportCount(String value) {
         String count = value.trim().split("\\s+", 2)[0];
         try {
             return Integer.parseInt(count);
@@ -4154,11 +4159,12 @@ public class PageRenderer {
             inputs.add(input);
         }
 
+        String passwordLabelText = module.formFields().getLast();
         PasswordField password = new PasswordField();
-        password.setPromptText(module.formFields().get(5));
+        password.setPromptText(passwordLabelText);
         password.getStyleClass().add("text-input");
         TextField visiblePassword = new TextField();
-        visiblePassword.setPromptText(module.formFields().get(5));
+        visiblePassword.setPromptText(passwordLabelText);
         visiblePassword.getStyleClass().add("text-input");
         visiblePassword.textProperty().bindBidirectional(password.textProperty());
         visiblePassword.setVisible(false);
@@ -4175,7 +4181,7 @@ public class PageRenderer {
             passwordVisibilityButton.setText(Localization.text(showPassword ? "Ẩn" : "Hiện"));
             (showPassword ? visiblePassword : password).requestFocus();
         });
-        Label passwordLabel = new Label(module.formFields().get(5));
+        Label passwordLabel = new Label(passwordLabelText);
         passwordLabel.getStyleClass().add("field-label");
         HBox passwordEntry = new HBox(8, passwordFields, passwordVisibilityButton);
         HBox.setHgrow(passwordFields, Priority.ALWAYS);

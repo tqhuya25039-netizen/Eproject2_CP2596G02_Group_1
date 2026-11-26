@@ -28,6 +28,8 @@ import java.sql.Timestamp;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -2178,8 +2180,14 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
         if (checkIn.isEmpty()) {
             throw new IllegalArgumentException("Giờ vào (YYYY-MM-DD HH:mm) là bắt buộc.");
         }
+        LocalDate workDate;
+        try {
+            workDate = LocalDateTime.parse(checkIn.replace(' ', 'T')).toLocalDate();
+        } catch (DateTimeParseException exception) {
+            throw new IllegalArgumentException("Giờ vào phải đúng định dạng YYYY-MM-DD HH:mm.", exception);
+        }
         long assignmentId = transaction(connection -> {
-            long id = resolveLatestAssignmentId(connection, employeeName, shiftName);
+            long id = resolveAttendanceAssignmentId(connection, employeeName, shiftName, workDate);
             saveAttendance(connection, id, false, checkIn, checkOut, note);
             return id;
         });
@@ -2222,22 +2230,29 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
         }
     }
 
-    private long resolveLatestAssignmentId(Connection connection, String employeeName, String shiftName) throws SQLException {
+    private long resolveAttendanceAssignmentId(Connection connection, String employeeName, String shiftName,
+            LocalDate workDate) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement("""
                      SELECT sa.assignment_id
                      FROM schedule_assignments sa
                      JOIN employees e ON e.employee_id = sa.employee_id
                      JOIN shifts s ON s.shift_id = sa.shift_id
-                     WHERE e.full_name = ? AND s.shift_name = ? AND sa.status <> 'CANCELLED'
-                     ORDER BY sa.work_date DESC, sa.assignment_id DESC LIMIT 1 FOR UPDATE
+                     WHERE e.full_name = ? AND s.shift_name = ? AND sa.work_date = ? AND sa.status <> 'CANCELLED'
+                     LIMIT 2 FOR UPDATE
                      """)) {
             ps.setString(1, employeeName);
             ps.setString(2, shiftName);
+            ps.setObject(3, workDate);
             try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) {
-                    throw new IllegalArgumentException("Không tìm thấy ca được phân phù hợp cho nhân viên " + employeeName + ".");
+                    throw new IllegalArgumentException("Không tìm thấy ca được phân phù hợp cho nhân viên "
+                            + employeeName + " vào ngày " + workDate + ".");
                 }
-                return rs.getLong(1);
+                long assignmentId = rs.getLong(1);
+                if (rs.next()) {
+                    throw new IllegalArgumentException("Có nhiều ca được phân trùng nhân viên, tên ca và ngày làm.");
+                }
+                return assignmentId;
             }
         }
     }

@@ -23,6 +23,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PageRendererTest {
     @Test
+    void countsCompletedShiftsFromTheWorkHoursReport() {
+        assertEquals(3, PageRenderer.completedShiftCount("3/5 ca (Phủ 60.0%)"));
+        assertEquals(0, PageRenderer.completedShiftCount("0/0 ca (Phủ 0.0%)"));
+        assertEquals(7, PageRenderer.completedShiftCount("7"));
+    }
+
+    @Test
     void formatsSalesMoneyInUsdOrVndWithoutChangingTheOriginalAmount() {
         BigDecimal amountVnd = new BigDecimal("50500.25");
         SalesMoney vietnamese = new SalesMoney(false, null);
