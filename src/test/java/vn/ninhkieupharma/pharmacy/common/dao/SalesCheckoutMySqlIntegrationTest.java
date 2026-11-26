@@ -8,6 +8,11 @@ import vn.ninhkieupharma.pharmacy.common.auth.User;
 import vn.ninhkieupharma.pharmacy.common.auth.UserRole;
 import vn.ninhkieupharma.pharmacy.common.model.ModuleRow;
 import vn.ninhkieupharma.pharmacy.common.service.Localization;
+import vn.ninhkieupharma.pharmacy.domain.sales.DoseInstructions;
+import vn.ninhkieupharma.pharmacy.domain.sales.DoseSession;
+import vn.ninhkieupharma.pharmacy.domain.sales.DoseTiming;
+import vn.ninhkieupharma.pharmacy.domain.sales.DoseUnit;
+import vn.ninhkieupharma.pharmacy.domain.sales.SaleLineKind;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleLineRequest;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleOrderRequest;
 import vn.ninhkieupharma.pharmacy.domain.sales.SalePendingOrder;
@@ -21,6 +26,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
@@ -28,6 +34,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -112,6 +119,130 @@ class SalesCheckoutMySqlIntegrationTest {
     }
 
     @Test
+    void validatesBalanceAndBothInvoiceCapsBeforeSavingAnExplicitRedemption() throws SQLException {
+        long existingSales = scalar("SELECT COUNT(*) FROM sales WHERE customer_id = ?",
+                CUSTOMER.getLeastSignificantBits());
+        String maximum = Localization.text("Số điểm tối đa có thể đổi cho đơn này: ");
+
+        var exceedsHalf = assertThrows(IllegalArgumentException.class,
+                () -> checkout.createPendingSale(FIRST_STAFF, order(3, line(1, 1))));
+        assertEquals(maximum + "2", exceedsHalf.getMessage());
+        assertEquals(existingSales, scalar("SELECT COUNT(*) FROM sales WHERE customer_id = ?",
+                CUSTOMER.getLeastSignificantBits()));
+
+        SaleOrderRequest request = order(2, line(1, 1));
+        SalePendingOrder draft = checkout.createPendingSale(FIRST_STAFF, request);
+        SalePendingOrder saved = checkout.findPendingSale(draft.id());
+        schema.execute("UPDATE promotions SET discount_percent = 80 WHERE promotion_id = 2");
+        var exceedsAfterPromotion = assertThrows(IllegalArgumentException.class,
+                () -> checkout.updatePendingSale(FIRST_STAFF, draft.id(), draft.revision(), request));
+        assertEquals(maximum + "1", exceedsAfterPromotion.getMessage());
+        assertEquals(saved, checkout.findPendingSale(draft.id()));
+
+        schema.execute("UPDATE promotions SET discount_percent = 10 WHERE promotion_id = 2");
+        schema.execute("UPDATE customers SET loyalty_points = 1 WHERE customer_id = 1");
+        var exceedsBalance = assertThrows(IllegalArgumentException.class,
+                () -> checkout.updatePendingSale(FIRST_STAFF, draft.id(), draft.revision(), request));
+        assertEquals(maximum + "1", exceedsBalance.getMessage());
+        assertEquals(saved, checkout.findPendingSale(draft.id()));
+        assertEquals(1, points());
+        assertEquals(0, movementCount(draft));
+    }
+
+    @Test
+    void usesBaseRedemptionBeforeThePromotionWindowAndRevalidatesTheQuoteAtPayment() throws SQLException {
+        schema.execute("""
+                UPDATE promotions SET points_redemption_starts_at = DATE_ADD(starts_at, INTERVAL 2 DAY)
+                WHERE promotion_id = 2
+                """);
+        schema.execute("UPDATE loyalty_programs SET currency_per_point = 500 WHERE is_active = 1");
+        SaleOrderRequest request = order(5, line(1, 1));
+        SalePendingOrder draft = checkout.createPendingSale(FIRST_STAFF, request);
+        SaleQuote initialQuote = quote(draft, request);
+        assertEquals(5, initialQuote.amounts().pointsRedeemed());
+        assertEquals(new BigDecimal("2500.00"), initialQuote.amounts().pointsDiscount());
+
+        schema.execute("UPDATE promotions SET points_redemption_starts_at = starts_at WHERE promotion_id = 2");
+        var exceedsCurrentLimit = assertThrows(IllegalArgumentException.class,
+                () -> checkout.completePendingSale(FIRST_STAFF, draft.id(), draft.revision(), request, initialQuote));
+        assertEquals(Localization.text("Số điểm tối đa có thể đổi cho đơn này: ") + "2",
+                exceedsCurrentLimit.getMessage());
+        assertEquals("PENDING", status(draft));
+        assertEquals(0, movementCount(draft));
+        assertUnchangedStockAndPoints();
+    }
+
+    @Test
+    void savesReopensEditsAndCompletesAnOrderWithBothLineKinds() throws SQLException {
+        schema.execute("UPDATE products SET requires_prescription = 1 WHERE product_id = 1");
+        var dose = new DoseInstructions(new BigDecimal("0.5"), DoseUnit.TABLET, DoseTiming.AFTER_MEAL,
+                Set.of(DoseSession.EVENING, DoseSession.MORNING));
+        var prescribed = new SaleLineRequest(PRODUCT, BigDecimal.ONE, "Fixture note", 3,
+                SaleLineKind.PRESCRIBED, dose);
+        var additional = new SaleLineRequest(new UUID(ROW_ID_PREFIX, 2), BigDecimal.ONE,
+                "Gift item", 1, SaleLineKind.ADD_ON, DoseInstructions.EMPTY);
+        SaleOrderRequest request = prescriptionOrder(prescribed, additional);
+        SalePendingOrder draft = checkout.createPendingSale(FIRST_STAFF, request);
+        var opened = checkout.findPendingSale(draft.id()).request().lines();
+        assertEquals(dose, opened.getFirst().dose());
+        assertEquals(SaleLineKind.PRESCRIBED, opened.getFirst().kind());
+        assertEquals("Fixture note", opened.getFirst().dosageInstructions());
+        assertEquals(DoseInstructions.EMPTY, opened.getLast().dose());
+        assertEquals(SaleLineKind.ADD_ON, opened.getLast().kind());
+
+        var editedDose = new DoseInstructions(BigDecimal.ONE, DoseUnit.TABLET, DoseTiming.BEFORE_MEAL,
+                Set.of(DoseSession.NOON, DoseSession.AFTERNOON));
+        var editedLine = new SaleLineRequest(PRODUCT, BigDecimal.valueOf(2), "Edited note", 3,
+                SaleLineKind.PRESCRIBED, editedDose);
+        SaleOrderRequest edited = prescriptionOrder(editedLine, additional);
+        SalePendingOrder revised = checkout.updatePendingSale(FIRST_STAFF, draft.id(), draft.revision(), edited);
+        assertEquals(editedDose, checkout.findPendingSale(revised.id()).request().lines().getFirst().dose());
+        checkout.completePendingSale(FIRST_STAFF, revised.id(), revised.revision(), edited, quote(revised, edited));
+
+        List<ModuleRow> details = checkout.findSaleDetails(revised.id());
+        assertEquals("COMPLETED", status(revised));
+        String directions = "1 " + Localization.text("Viên") + " · " + Localization.text("Trước ăn")
+                + " · " + Localization.text("Trưa") + ", " + Localization.text("Chiều") + " · Edited note";
+        assertEquals(List.of(directions, "3", Localization.text("Thuốc kê đơn")),
+                details.getFirst().values().subList(6, 9));
+        assertEquals(List.of("Gift item", "1", Localization.text("Khách mua thêm")),
+                details.getLast().values().subList(6, 9));
+    }
+
+    @Test
+    void enforcesPrescriptionMetadataAndPreventsAnRxProductBeingSoldAsAnAddOn() throws SQLException {
+        var prescribed = new SaleLineRequest(PRODUCT, BigDecimal.ONE, "", 1,
+                SaleLineKind.PRESCRIBED, DoseInstructions.EMPTY);
+        var required = assertThrows(IllegalArgumentException.class,
+                () -> checkout.createPendingSale(FIRST_STAFF, order(0, prescribed)));
+        assertEquals(Localization.text("Thuốc kê đơn yêu cầu mã toa, ngày kê hợp lệ và tên bác sĩ kê đơn."),
+                required.getMessage());
+
+        schema.execute("UPDATE products SET requires_prescription = 1 WHERE product_id = 1");
+        var additional = new SaleLineRequest(PRODUCT, BigDecimal.ONE, "", 1,
+                SaleLineKind.ADD_ON, DoseInstructions.EMPTY);
+        var invalidKind = assertThrows(IllegalArgumentException.class,
+                () -> checkout.createPendingSale(FIRST_STAFF, prescriptionOrder(additional)));
+        assertEquals(Localization.text("Thuốc bắt buộc kê đơn phải được đánh dấu là thuốc kê đơn."),
+                invalidKind.getMessage());
+
+        SalePendingOrder legacy = checkout.createPendingSale(FIRST_STAFF, prescriptionOrder(line(1, 1)));
+        assertNull(checkout.findPendingSale(legacy.id()).request().lines().getFirst().kind());
+    }
+
+    @Test
+    void readsPendingLineWithFreeTextDirectionsAndNoStructuredDose() throws SQLException {
+        schema.execute("UPDATE sale_items SET dosage_instructions = 'Take with water' WHERE sale_id = 1011");
+        UUID sale = new UUID(ROW_ID_PREFIX, 1011);
+        SaleLineRequest line = checkout.findPendingSale(sale).request().lines().getFirst();
+        assertEquals("Take with water", line.dosageInstructions());
+        assertNull(line.kind());
+        assertEquals(DoseInstructions.EMPTY, line.dose());
+        assertEquals("Take with water", checkout.findSaleDetails(sale).getFirst().values().get(6));
+        assertEquals("—", checkout.findSaleDetails(sale).getFirst().values().get(8));
+    }
+
+    @Test
     void previewsFefoAfterAccountingForOtherLinesAndWritesNothing() throws SQLException {
         long movementCountBefore = scalar("SELECT COUNT(*) FROM inventory_movements WHERE movement_id >= ?", 1);
         assertTrue(checkout.previewSaleStock(List.of(line(3, 1), line(10, 10))).isEmpty());
@@ -127,6 +258,87 @@ class SalesCheckoutMySqlIntegrationTest {
         assertEquals(1, scalar("SELECT COUNT(*) FROM sales WHERE customer_id = ?", CUSTOMER.getLeastSignificantBits()));
         assertEquals(movementCountBefore, scalar("SELECT COUNT(*) FROM inventory_movements WHERE movement_id >= ?", 1));
         assertUnchangedStockAndPoints();
+    }
+
+    @Test
+    void picksFromActiveLocationsAndRecordsTheQuotedBatchesOnCompletion() throws SQLException {
+        LocalDate earlyExpiry = LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh")).plusDays(2);
+        schema.executeScript("""
+                UPDATE inventory_batches SET location_id = 2 WHERE batch_id = 3;
+                INSERT INTO warehouse_locations (location_id, location_code, location_name, is_active)
+                VALUES (3, 'INACTIVE-SHELF', 'Inactive shelf fixture', 0);
+                INSERT INTO inventory_batches (batch_id, product_id, location_id, batch_code, expiry_date,
+                    quantity_on_hand)
+                VALUES (5, 1, 3, 'INACTIVE-LOT', '%s', 50);
+                """.formatted(earlyExpiry.minusDays(1)));
+        var product = checkout.findSaleProducts().stream().filter(item -> item.id().equals(PRODUCT))
+                .findFirst().orElseThrow();
+        assertEquals(13, product.stockOnHand().longValueExact());
+
+        SaleOrderRequest request = order(0, line(5, 1));
+        var preview = checkout.previewSalePicking(request.lines());
+        assertTrue(preview.shortages().isEmpty());
+        assertEquals(2, preview.picks().size());
+        var early = preview.picks().getFirst();
+        assertEquals(EARLY_BATCH, early.batchId());
+        assertEquals(product.name(), early.productName());
+        assertEquals(product.unit(), early.unit());
+        assertEquals("LOT-PARA-001", early.batchCode());
+        assertEquals("KE-A1", early.locationCode());
+        assertEquals("Ke A tang 1", early.locationName());
+        assertEquals(earlyExpiry, early.expiryDate());
+        assertEquals(3, early.quantity().longValueExact());
+        var late = preview.picks().getLast();
+        assertEquals(LATE_BATCH, late.batchId());
+        assertEquals("LATE-LOT", late.batchCode());
+        assertEquals("KE-B1", late.locationCode());
+        assertEquals(2, late.quantity().longValueExact());
+
+        SalePendingOrder pending = checkout.createPendingSale(FIRST_STAFF, request);
+        SaleQuote quote = quote(pending, request);
+        assertEquals(preview.picks(), quote.picks());
+        assertEquals(0, movementCount(pending));
+        assertUnchangedStockAndPoints();
+
+        checkout.completePendingSale(FIRST_STAFF, pending.id(), pending.revision(), request, quote);
+        assertEquals("COMPLETED", status(pending));
+        assertEquals(0, stock(EARLY_BATCH));
+        assertEquals(8, stock(LATE_BATCH));
+        assertEquals(50, stock(5));
+        assertEquals(2, movementCount(pending));
+        assertEquals("1:-3.000,3:-2.000", query("""
+                SELECT GROUP_CONCAT(CONCAT(batch_id, ':', quantity_delta) ORDER BY batch_id)
+                FROM inventory_movements
+                WHERE source_type = 'SALE' AND source_id = ? AND movement_type = 'SALE' AND created_by = 2
+                """, id(pending)));
+    }
+
+    @Test
+    void rejectsAnOutdatedPickingPlanEvenWhenTheAmountIsUnchanged() throws SQLException {
+        schema.execute("INSERT INTO customers (customer_id, customer_code, full_name) "
+                + "VALUES (2, 'OTHER-CHECKOUT', 'Other checkout customer')");
+        SaleOrderRequest request = order(0, line(2, 1));
+        SalePendingOrder pending = checkout.createPendingSale(FIRST_STAFF, request);
+        SaleQuote oldQuote = quote(pending, request);
+        assertEquals(EARLY_BATCH, oldQuote.picks().getFirst().batchId());
+
+        checkout.completeSale(SECOND_STAFF, orderForCustomer(2, 0, line(3, 1)));
+        SaleQuote refreshedQuote = quote(pending, request);
+        assertEquals(oldQuote.amounts(), refreshedQuote.amounts());
+        assertEquals(LATE_BATCH, refreshedQuote.picks().getFirst().batchId());
+
+        assertThrows(IllegalStateException.class,
+                () -> checkout.completePendingSale(FIRST_STAFF, pending.id(), pending.revision(), request, oldQuote));
+        assertEquals("PENDING", status(pending));
+        assertEquals(0, movementCount(pending));
+        assertEquals(0, stock(EARLY_BATCH));
+        assertEquals(10, stock(LATE_BATCH));
+        assertEquals(20, points());
+
+        checkout.completePendingSale(FIRST_STAFF, pending.id(), pending.revision(), request, refreshedQuote);
+        assertEquals("COMPLETED", status(pending));
+        assertEquals(1, movementCount(pending));
+        assertEquals(8, stock(LATE_BATCH));
     }
 
     @Test
@@ -280,6 +492,11 @@ class SalesCheckoutMySqlIntegrationTest {
 
     private static SaleOrderRequest order(long points, SaleLineRequest... lines) {
         return orderForCustomer(CUSTOMER.getLeastSignificantBits(), points, lines);
+    }
+
+    private static SaleOrderRequest prescriptionOrder(SaleLineRequest... lines) {
+        return new SaleOrderRequest(Optional.of(CUSTOMER), List.of(lines), "RX-TEST",
+                LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh")), "Fixture doctor", "", "", "", 0, List.of());
     }
 
     private static SaleOrderRequest orderForCustomer(long customerId, long points, SaleLineRequest... lines) {

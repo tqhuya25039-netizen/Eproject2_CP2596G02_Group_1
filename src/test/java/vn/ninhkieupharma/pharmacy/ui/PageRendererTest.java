@@ -23,6 +23,38 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PageRendererTest {
     @Test
+    void formatsSalesMoneyInUsdOrVndWithoutChangingTheOriginalAmount() {
+        BigDecimal amountVnd = new BigDecimal("50500.25");
+        SalesMoney vietnamese = new SalesMoney(false, null);
+        SalesMoney english = new SalesMoney(true, new BigDecimal("25000"));
+
+        assertEquals("50.500,25 VNĐ", vietnamese.format(amountVnd, 2));
+        assertEquals("2.02 USD", english.format(amountVnd, 2));
+        assertEquals("0.000004 USD", english.format(new BigDecimal("0.1"), 8));
+        assertEquals(amountVnd, vietnamese.displayAmount(amountVnd, 2));
+        assertEquals(new BigDecimal("50500.00"), english.toVnd(new BigDecimal("2.02")));
+        assertFalse(new SalesMoney(true, null).available());
+        assertEquals(Localization.text("Tỷ giá chưa sẵn sàng"), new SalesMoney(true, null).format(amountVnd, 2));
+    }
+
+    @Test
+    void salesReportExportsNumericUsdWithCurrencyHeaders(@TempDir Path tempDir) throws Exception {
+        var money = new SalesMoney(true, new BigDecimal("25000"));
+        var module = ModuleCatalog.MODULES.stream()
+                .filter(candidate -> candidate.id().equals("UC-19")).findFirst().orElseThrow();
+        var rows = List.of(new ModuleRow(UUID.randomUUID(), List.of("2026-11", "2", "125000", "2500", "62500")));
+        Path csv = tempDir.resolve("revenue.csv");
+
+        PageRenderer.writeCsvReport(csv, PageRenderer.salesReportExportDefinition(module, money),
+                PageRenderer.salesReportExportRows(rows, money));
+
+        List<String> lines = Files.readAllLines(csv);
+        assertTrue(lines.get(0).contains("(USD)"));
+        assertEquals("2026-11,2,5.00,0.10,2.50", lines.get(1));
+        assertEquals("125000", rows.getFirst().values().get(2));
+    }
+
+    @Test
     void parsesPositiveCheckoutQuantitiesAtSchemaPrecision() {
         assertEquals(new BigDecimal("1.250"), PageRenderer.parseCheckoutQuantity("1,250"));
         for (String invalid : List.of("0", "-1", "1.2345", "1e2", "1000000000")) {
@@ -51,11 +83,36 @@ class PageRendererTest {
     }
 
     @Test
+    void checkoutPrefillsOnlyUnusedPhoneNumberSearches() {
+        ModuleRow customer = new ModuleRow(UUID.randomUUID(), List.of("Mai", "0912345678"));
+        List<ModuleRow> customers = List.of(customer);
+
+        assertEquals("091 234 5679", PageRenderer.salesCustomerPhonePrefill(" 091 234 5679 ", customers));
+        assertEquals("+84 (912) 345-679", PageRenderer.salesCustomerPhonePrefill("+84 (912) 345-679", customers));
+        assertEquals("0912345", PageRenderer.salesCustomerPhonePrefill("0912345", customers));
+        assertEquals("", PageRenderer.salesCustomerPhonePrefill("091-234-5678", customers));
+        assertEquals("", PageRenderer.salesCustomerPhonePrefill("09123", customers));
+        assertEquals("", PageRenderer.salesCustomerPhonePrefill("mai@example.com", customers));
+        assertEquals("", PageRenderer.salesCustomerPhonePrefill("Mai · 0912345678", customers));
+    }
+
+    @Test
     void catalogMutationsAreAdminOnly() {
         for (String moduleId : List.of("UC-07", "UC-08", "UC-09", "UC-13")) {
             assertTrue(PageRenderer.canWriteModule(moduleId, UserRole.ADMIN));
             assertFalse(PageRenderer.canWriteModule(moduleId, UserRole.STAFF));
         }
+        assertTrue(PageRenderer.canWriteModule("UC-13", UserRole.ADMIN));
+        assertFalse(PageRenderer.canWriteModule("UC-13", UserRole.STAFF));
+    }
+
+    @Test
+    void onlyAdminsCanConfirmInventoryWorkflows() {
+        for (String moduleId : List.of("UC-12", "UC-14")) {
+            assertTrue(PageRenderer.canConfirmInventoryWorkflow(moduleId, UserRole.ADMIN));
+            assertFalse(PageRenderer.canConfirmInventoryWorkflow(moduleId, UserRole.STAFF));
+        }
+        assertFalse(PageRenderer.canConfirmInventoryWorkflow("UC-13", UserRole.ADMIN));
     }
 
     @Test

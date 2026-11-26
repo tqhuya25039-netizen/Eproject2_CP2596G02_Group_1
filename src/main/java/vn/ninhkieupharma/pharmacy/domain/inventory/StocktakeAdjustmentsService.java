@@ -9,13 +9,10 @@ import vn.ninhkieupharma.pharmacy.common.service.Localization;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
-import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class StocktakeAdjustmentsService extends AbstractFeatureModuleService {
-    private static final Pattern QUANTITY =
-            Pattern.compile("[+-]?\\d+(?:[,.]\\d+)?(?:\\s+\\p{L}+(?:\\s+\\p{L}+)*)?");
     private static final Pattern MOVEMENT_QUANTITY = Pattern.compile("[+-]?\\d+(?:[,.]\\d+)?");
     private final FeatureModuleDAO repository;
 
@@ -54,32 +51,6 @@ public final class StocktakeAdjustmentsService extends AbstractFeatureModuleServ
         }
         repository.replaceAll("UC-15", movements);
         return super.findAll(module);
-    }
-
-    @Override
-    public vn.ninhkieupharma.pharmacy.common.model.ModuleRow create(
-            vn.ninhkieupharma.pharmacy.common.model.ModuleDefinition module, List<String> values) {
-        validateVariance(values);
-        return super.create(module, values);
-    }
-
-    @Override
-    public vn.ninhkieupharma.pharmacy.common.model.ModuleRow update(
-            vn.ninhkieupharma.pharmacy.common.model.ModuleDefinition module, UUID rowId, List<String> values) {
-        validateVariance(values);
-        return super.update(module, rowId, values);
-    }
-
-    private void validateVariance(List<String> values) {
-        if (values.size() <= 3 || values.get(3) == null
-                || values.get(3).equals("Khớp tồn")
-                || values.get(3).equals(Localization.text("Khớp tồn"))) {
-            return;
-        }
-        if (!QUANTITY.matcher(values.get(3).trim()).matches()) {
-            throw new IllegalArgumentException(
-                    Localization.text("Expected a numeric quantity: ") + values.get(3));
-        }
     }
 
     private String quantity(String value) {

@@ -2,9 +2,39 @@ package vn.ninhkieupharma.pharmacy.common.service;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.Set;
+import java.util.stream.Stream;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class LocalizationTest {
+    @Test
+    void salesModuleMetadataAndStandardSaleValuesAreAvailableInEnglish() {
+        boolean originalLanguage = Localization.isEnglish();
+        if (!originalLanguage) {
+            Localization.toggleLanguage();
+        }
+        try {
+            ModuleCatalog.MODULES.stream()
+                    .filter(module -> Set.of("UC-16", "UC-17", "UC-18", "UC-19").contains(module.id()))
+                    .map(Localization::localize)
+                    .flatMap(module -> Stream.of(
+                            Stream.of(module.title(), module.group(), module.description(), module.actionLabel()),
+                            module.columns().stream(), module.formFields().stream()).flatMap(stream -> stream))
+                    .forEach(label -> assertTrue(label.matches("\\p{ASCII}*"), () -> "Untranslated label: " + label));
+            assertEquals("Could not save the pending order.", Localization.text("Không thể lưu đơn bán hàng đang chờ."));
+            assertEquals("Pending", Localization.saleStatusText("PENDING"));
+            assertEquals("Voided", Localization.saleStatusText("VOIDED"));
+            assertEquals("Blister Pack", Localization.saleUnitText("vi"));
+            assertEquals("Box", Localization.saleUnitText("hộp"));
+        } finally {
+            if (Localization.isEnglish() != originalLanguage) {
+                Localization.toggleLanguage();
+            }
+        }
+    }
+
     @Test
     void staffWorkspaceMessagesAreAvailableInEnglish() {
         boolean originalLanguage = Localization.isEnglish();

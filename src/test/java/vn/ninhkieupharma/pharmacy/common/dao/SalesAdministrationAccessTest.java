@@ -17,6 +17,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class SalesAdministrationAccessTest {
     private static final UUID PROMOTION_ID = new UUID(0x4e4b504841524d41L, 1);
+    private static final SalesReport.Filter REPORT_FILTER = new SalesReport.Filter(
+            LocalDate.of(2026, 11, 1), LocalDate.of(2026, 11, 30), null, null, null);
 
     @Test
     void staffCannotReadOrChangePromotionsOrReadRevenueThroughDao() {
@@ -31,6 +33,8 @@ class SalesAdministrationAccessTest {
         assertThrows(SecurityException.class, () -> dao.deactivatePromotion(PROMOTION_ID, Optional.of(LocalDate.now())));
         assertThrows(SecurityException.class, () -> dao.findAll("UC-19"));
         assertThrows(SecurityException.class, () -> dao.findCompletedSalesByDay(null, null));
+        assertThrows(SecurityException.class, dao::findSalesReportOptions);
+        assertThrows(SecurityException.class, () -> dao.findSalesReportRows(REPORT_FILTER));
     }
 
     @Test
@@ -41,6 +45,8 @@ class SalesAdministrationAccessTest {
         assertThrows(SecurityException.class, () -> services.salesService().completedSalesTotals());
         assertThrows(SecurityException.class,
                 () -> services.salesService().salesReport(SalesReport.Period.MONTH, 2026, 11));
+        assertThrows(SecurityException.class, services.salesService()::salesReportOptions);
+        assertThrows(SecurityException.class, () -> services.salesService().salesReport(REPORT_FILTER));
         for (String moduleId : List.of("UC-18", "UC-19")) {
             var module = ModuleCatalog.MODULES.stream()
                     .filter(candidate -> candidate.id().equals(moduleId))

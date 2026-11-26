@@ -74,6 +74,7 @@ public class MainController {
     private FeatureServices featureServices;
     private AuthenticationService authenticationService;
     private ExchangeRateService exchangeRateService;
+    private PageRenderer activePageRenderer;
 
     public void setSession(
             String username, UserRole role, FeatureServices featureServices,
@@ -97,7 +98,8 @@ public class MainController {
         applyLanguage();
         buildNavigation();
         showDashboard();
-        updateExchangeRateStatus(exchangeRateService.snapshot());
+        ExchangeRateService.Snapshot initialRate = exchangeRateService.snapshot();
+        updateExchangeRateStatus(initialRate);
         CompletableFuture.supplyAsync(exchangeRateService::refreshOncePerDay)
                 .whenComplete((snapshot, failure) -> Platform.runLater(() -> {
                     if (failure != null) {
@@ -106,6 +108,14 @@ public class MainController {
                                 new javafx.scene.control.Tooltip(failure.getMessage()));
                     } else {
                         updateExchangeRateStatus(snapshot);
+                        if (Localization.isEnglish() && root.getScene() != null
+                                && !Objects.equals(initialRate.usdToVnd(), snapshot.usdToVnd())) {
+                            if (activePageRenderer == null) {
+                                showDashboard();
+                            } else {
+                                activePageRenderer.refreshCurrency();
+                            }
+                        }
                     }
                 }));
     }
@@ -185,13 +195,13 @@ public class MainController {
         setSelected(button);
         ModuleDefinition localizedModule = Localization.localize(module);
         breadcrumbLabel.setText(localizedModule.title());
-        contentHost.getChildren().setAll(scrollable(
-                new PageRenderer(featureServices, exchangeRateService, authenticatedUserId, role)
-                        .render(localizedModule)));
+        activePageRenderer = new PageRenderer(featureServices, exchangeRateService, authenticatedUserId, role);
+        contentHost.getChildren().setAll(scrollable(activePageRenderer.render(localizedModule)));
     }
 
     private void showDashboard() {
         selectedModuleId = null;
+        activePageRenderer = null;
         setSelected(null);
         breadcrumbLabel.setText(Localization.text("Tổng quan"));
         contentHost.getChildren().setAll(scrollable(createDashboard()));
@@ -246,7 +256,7 @@ public class MainController {
                         inventoryMovementQuantity() + Localization.text(" đơn vị"),
                         Localization.text("Tổng biến động đọc từ MySQL")),
                 overviewCard(Localization.text("DOANH THU GHI NHẬN"),
-                        formatCurrency(completedSales.revenue()),
+                        SalesMoney.capture(exchangeRateService).format(completedSales.revenue(), 2),
                         completedSales.orderCount() + Localization.text(" hóa đơn đã ghi nhận")));
 
         VBox workspace = new VBox(14);
@@ -368,8 +378,13 @@ public class MainController {
             final int sourceIndex = sourceColumns[index];
             TableColumn<java.util.List<String>, String> column =
                     new TableColumn<>(Localization.text(columnNames[index]));
-            column.setCellValueFactory(cell ->
-                    new javafx.beans.property.ReadOnlyStringWrapper(cell.getValue().get(sourceIndex)));
+            column.setCellValueFactory(cell -> {
+                String value = cell.getValue().get(sourceIndex);
+                if (sourceIndex == 4) {
+                    value = SalesMoney.capture(exchangeRateService).format(new BigDecimal(value), 2);
+                }
+                return new javafx.beans.property.ReadOnlyStringWrapper(value);
+            });
             table.getColumns().add(column);
         }
         List<List<String>> rows = featureServices.forModule(ModuleCatalog.MODULES.get(16))
@@ -465,13 +480,6 @@ public class MainController {
                 .sum());
     }
 
-    private String formatCurrency(BigDecimal amount) {
-        NumberFormat formatter = NumberFormat.getNumberInstance(
-                Localization.isEnglish() ? Locale.US : Locale.forLanguageTag("vi-VN"));
-        formatter.setMaximumFractionDigits(2);
-        formatter.setMinimumFractionDigits(amount.stripTrailingZeros().scale() > 0 ? 2 : 0);
-        return formatter.format(amount) + " ₫";
-    }
 }
 
 final class SceneFactory {

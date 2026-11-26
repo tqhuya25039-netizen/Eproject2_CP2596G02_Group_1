@@ -7,5 +7,14 @@ public record SaleLineRequest(
         UUID productId,
         BigDecimal quantity,
         String dosageInstructions,
-        int treatmentDays) {
+        int treatmentDays,
+        SaleLineKind kind,
+        DoseInstructions dose) {
+    public SaleLineRequest {
+        dose = dose == null ? DoseInstructions.EMPTY : dose;
+    }
+
+    public SaleLineRequest(UUID productId, BigDecimal quantity, String dosageInstructions, int treatmentDays) {
+        this(productId, quantity, dosageInstructions, treatmentDays, null, DoseInstructions.EMPTY);
+    }
 }

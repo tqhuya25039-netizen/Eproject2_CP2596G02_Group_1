@@ -130,7 +130,26 @@ public final class Localization {
                 "Configure accrual/redemption periods, final-invoice point tiers, and redemption value.",
                 "Thêm chương trình điểm", "Add Points Program",
                 "Báo cáo đơn hàng & doanh thu", "Order & Revenue Reports",
-                "Tổng hợp số lượng đơn hàng và doanh thu theo khoảng thời gian.", "Summarize order volumes and revenue over a selected period.",
+                "Thống kê đơn hoàn tất và doanh thu theo thời gian, nhân viên, thuốc và danh mục.",
+                "Analyze completed orders and revenue by time, employee, product, and category.",
+                "Khoảng ngày", "Date Range", "Tất cả", "All",
+                "Thuốc / Sản phẩm", "Medicines / Products", "Xem theo", "View by",
+                "Theo thời gian", "Time",
+                "Hãy chọn ngày bắt đầu và ngày kết thúc.", "Choose a start date and an end date.",
+                "Ngày kết thúc phải từ ngày bắt đầu trở đi.", "The end date must be on or after the start date.",
+                "Hãy nhập ngày theo định dạng YYYY-MM-DD.", "Enter a date in YYYY-MM-DD format.",
+                "Bộ lọc báo cáo không hợp lệ.", "The report filter is invalid.",
+                "Không thể tải bộ lọc báo cáo doanh thu.", "Could not load the revenue report filters.",
+                "Xu hướng doanh thu", "Revenue Trend",
+                "Doanh thu theo", "Revenue by", "Số đơn theo", "Order Count by",
+                "Biểu đồ hiển thị 8 mục đứng đầu. Bảng bên dưới có đầy đủ các mục.",
+                "The chart shows the top 8. The table lists all results.",
+                "Không có đơn hoàn tất trong phạm vi đã chọn.", "No completed orders match the selected filters.",
+                "Không có doanh thu để tính tỷ trọng.", "There is no revenue to calculate shares.",
+                "Tỷ trọng doanh thu theo danh mục", "Revenue Share by Category",
+                "Các danh mục còn lại", "Other Categories",
+                "Một đơn có thể được tính vào nhiều thuốc hoặc danh mục.",
+                "An order may count toward multiple products or categories.",
                 "Ngày / Tháng", "Date / Month",
                 "Tháng", "Month", "Quý", "Quarter", "Năm", "Year",
                 "Hãy nhập năm từ 1000 đến 9998.", "Enter a year between 1000 and 9998.",
@@ -178,7 +197,7 @@ public final class Localization {
                 "Loại biến động", "Movement Type", "Số lượng", "Quantity",
                 "Diễn giải", "Details", "Mã khách", "Customer ID",
                 "Dị ứng", "Allergies", "Điểm", "Points",
-                "Thông tin dị ứng", "Allergy Information", "Mã hóa đơn", "Invoice ID",
+                "Chất dị ứng", "Allergen", "Mã hóa đơn", "Invoice ID",
                 "Lý do hạn chế", "Restriction Reason", "Hạn chế bán", "Restrict Sales",
                 "Lưu trữ hồ sơ", "Archive Profile", "Lưu trữ", "Archive",
                 "Xóa hồ sơ", "Delete profile",
@@ -188,11 +207,10 @@ public final class Localization {
                 "Lịch sử mua", "Purchase History", "Ngày giao dịch", "Transaction Date",
                 "Tổng tiền", "Total Amount", "Họ và tên", "Full Name",
                 "Hồ sơ khách hàng", "Customer Profile", "Tạo hồ sơ khách hàng", "Create Customer Profile",
-                "Mỗi dòng: tên dị ứng | ghi chú tùy chọn", "One allergy per line: allergy name | optional note",
+                "Mỗi dòng: một chất dị ứng", "One allergen per line",
                 "Bắt buộc nếu hạn chế bán", "Required when sales are restricted",
                 "Điểm hiện có: ", "Current points: ",
-                "Dị ứng do khách hàng khai báo. Mỗi dị ứng nhập trên một dòng; có thể thêm ghi chú sau dấu |.",
-                "Customer-reported allergies. Enter one per line; an optional note can follow the | character.",
+                "Mỗi chất dị ứng nhập trên một dòng.", "Enter one allergen per line.",
                 "Khách hàng cho đơn mới", "Customer for new order",
                 "Khách lẻ · chưa chọn hồ sơ khách hàng", "Retail customer · no customer profile selected",
                 "Khách lẻ · chưa gắn hồ sơ khách hàng", "Retail customer · no profile attached",
@@ -273,8 +291,7 @@ public final class Localization {
                 "Số điện thoại cần có từ 7 đến 15 chữ số.", "Phone number must contain 7 to 15 digits.",
                 "Số điện thoại đã được gắn với một khách hàng khác.",
                 "This phone number is already assigned to another customer.",
-                "Tên dị ứng tối đa 120 ký tự và ghi chú tối đa 255 ký tự.",
-                "Allergy names are limited to 120 characters and notes to 255.",
+                "Tên chất dị ứng tối đa 120 ký tự.", "Allergen names are limited to 120 characters.",
                 "Không nhập trùng dị ứng.", "An allergy cannot be entered more than once.",
                 "Trạng thái khách hàng không hợp lệ.", "Customer status is invalid.",
                 "Hạn chế bán", "Sales restricted", "Đã lưu trữ", "Archived",
@@ -634,6 +651,9 @@ public final class Localization {
                 "Dữ liệu nghiệp vụ được lưu trong MySQL; kết quả báo cáo được tính lại khi mở.", "Business records are stored in MySQL; report results are recalculated when opened.",
                 "Vui lòng nhập ít nhất một giá trị.", "Enter at least one value.",
                 "Không thể cập nhật dữ liệu", "Could Not Update Data",
+                "Không thể xóa danh mục.", "Could not delete the category.",
+                "Không thể xóa danh mục vì còn sản phẩm hoặc dữ liệu khác đang tham chiếu.",
+                "Cannot delete this category because products or other records still reference it.",
                 "Không thể xóa nhà cung cấp vì nhà cung cấp này đang cung cấp sản phẩm.",
                 "Cannot delete this supplier because it supplies products.",
                 "Không thể tạo hóa đơn", "Could Not Create Invoice",
@@ -665,14 +685,15 @@ public final class Localization {
                 "Quản lý mã hàng, giá bán, thành phần, dạng bào chế và thông tin kê đơn.",
                 "Manage product codes, selling prices, ingredients, dosage forms, and prescription information.",
                 "Giá bán", "Selling Price", "Thành phần", "Ingredients",
-                "Ngày sinh", "Date of Birth", "Tuổi: ", "Age: ",
+                "Ngày sinh", "Date of Birth", "Ngày sinh: ", "Date of Birth: ", "Tuổi: ", "Age: ",
                 "Chưa có ngày sinh", "Date of birth not recorded",
                 "Chưa có email", "No email",
                 "Email đã được gắn với một khách hàng khác.", "Email is already linked to another customer.",
                 "Cần nhập số điện thoại hoặc email của khách hàng.",
                 "A customer phone number or email is required.",
-                "Ngày sinh không thể ở tương lai.", "Date of birth cannot be in the future.",
-                "Ngày sinh phải theo định dạng YYYY-MM-DD.", "Date of birth must use YYYY-MM-DD.",
+                "YYYY, YYYY-MM hoặc YYYY-MM-DD", "YYYY, YYYY-MM, or YYYY-MM-DD",
+                "Ngày sinh phải theo định dạng YYYY, YYYY-MM hoặc YYYY-MM-DD.",
+                "Enter the date of birth as YYYY, YYYY-MM, or YYYY-MM-DD.",
                 "3. Sản phẩm trong đơn", "3. Products in the Order",
                 "Chọn sản phẩm đã có giá bán; nhập liều dùng, số lượng và số ngày điều trị để kiểm tra hạn lô.",
                 "Choose a product with a selling price; enter dosage, quantity, and treatment days for expiry checks.",
@@ -680,10 +701,61 @@ public final class Localization {
                 "Chưa đặt giá", "No price set", "Tồn: ", "Stock: ",
                 "Liều dùng / cách dùng", "Dosage / instructions",
                 "Ngày điều trị", "Treatment days",
+                "Danh sách đơn bán", "Sales orders",
+                "Thông tin toa thuốc", "Prescription details",
+                "2. Tìm thuốc", "2. Find products",
+                "Tên thuốc, mã hàng, mã vạch hoặc hoạt chất", "Product name, code, barcode, or ingredient",
+                "Tìm thuốc", "Find products",
+                "Thêm vào giỏ", "Add to cart",
+                "Kết quả tìm thuốc", "Product search results",
+                "Chưa có sản phẩm để bán.", "No products are available for sale.",
+                "Không tìm thấy thuốc phù hợp.", "No matching products.",
+                "Đã thêm vào giỏ: ", "Added to cart: ",
+                "Hết tồn khả dụng", "No sellable stock",
+                "Cần toa thuốc", "Prescription required",
+                "Giỏ hàng", "Cart",
+                "Giỏ hàng chưa có sản phẩm.", "The cart is empty.",
+                "Bỏ sản phẩm", "Remove item",
+                "Hãy bỏ dòng không còn khả dụng và tìm sản phẩm thay thế.",
+                "Remove the unavailable item and add a replacement.",
+                "3. Thanh toán", "3. Checkout",
+                "2. Thông tin toa thuốc", "2. Prescription details",
+                "3. Chọn thuốc", "3. Select medicines",
+                "4. Thanh toán", "4. Checkout",
+                "Loại thuốc", "Item type",
+                "Khách mua thêm", "Customer add-on",
+                "Liều mỗi lần", "Dose per use",
+                "Đơn vị liều", "Dose unit",
+                "Cách dùng", "When to take",
+                "Buổi dùng", "Times of day",
+                "Hướng dẫn thêm", "Additional instructions",
+                "Chưa chọn", "Not specified",
+                "Trước ăn", "Before meals",
+                "Trong bữa ăn", "With meals",
+                "Sau ăn", "After meals",
+                "Trước khi ngủ", "Before bed",
+                "Sáng", "Morning",
+                "Trưa", "Noon",
+                "Chiều", "Afternoon",
+                "Tối", "Evening",
+                "Viên", "Tablet",
+                "Viên nang", "Capsule",
+                "Gói", "Sachet",
+                "Giọt", "Drop",
+                "Liều", "Dose",
+                "Thuốc bắt buộc kê đơn phải được đánh dấu là thuốc kê đơn.",
+                "A prescription-only medicine must be marked as prescribed.",
+                "Hãy nhập liều mỗi lần và chọn đơn vị liều.",
+                "Enter a dose amount and select a dose unit.",
+                "Liều mỗi lần cần có số dương và đơn vị, tối đa 6 chữ số nguyên và 3 chữ số thập phân.",
+                "A dose requires a positive amount with up to 6 whole digits and 3 decimal places, and a unit.",
                 "4. Ưu đãi và hoàn tất đơn", "4. Discounts and Checkout",
                 "4. Ưu đãi và lưu đơn", "4. Discounts and Pending Order",
                 "Điểm muốn đổi", "Points to redeem",
                 "Nhập số điểm khách muốn đổi", "Enter the points the customer wants to redeem",
+                "Chọn khách hàng để xem điểm hiện có.", "Select a customer to see their points balance.",
+                "Số điểm muốn đổi vượt quá điểm hiện có của khách hàng.",
+                "The requested points exceed the customer's balance.",
                 "Đơn cũ dùng tối đa. Nhập 0 để bỏ đổi điểm.", "This order uses the maximum. Enter 0 to skip redemption.",
                 "Tiền giảm từ điểm tối đa bằng 50% tiền hàng ban đầu.",
                 "The points discount is capped at 50% of the original subtotal.",
@@ -697,6 +769,8 @@ public final class Localization {
                 "Kiểm tra tồn theo lô", "Check stock by batch",
                 "Không thể kiểm tra tồn theo lô.", "Could not check stock by batch.",
                 "Đủ tồn ở các lô còn hạn cho số ngày điều trị đã nhập.", "Eligible batches cover the entered treatment duration.",
+                "Vị trí lấy thuốc", "Where to pick items",
+                "Vị trí lấy thuốc dự kiến", "Suggested picking locations",
                 "Cần ", "Required ",
                 "có ", "available ",
                 "Lô cần còn hạn đến ", "Batches must remain valid through ",
@@ -719,6 +793,8 @@ public final class Localization {
                 "Cần xác nhận số tiền đã thu trước khi hoàn tất.", "Confirm the amount received to complete the order.",
                 "Số tiền hoặc điểm của đơn đã thay đổi. Kiểm tra lại số cần thu trước khi hoàn tất.",
                 "The order amount or points have changed. Review the amount due before completing the order.",
+                "Lô hoặc vị trí lấy thuốc đã thay đổi. Hãy kiểm tra lại danh sách lấy thuốc trước khi hoàn tất.",
+                "The batch or picking location has changed. Review the picking list before completing the order.",
                 "Đơn đang chờ đã thay đổi hoặc đã đóng. Hãy làm mới danh sách và mở lại đơn.",
                 "The pending order was changed or closed. Refresh the list and reopen it.",
                 "Khách hàng hoặc sản phẩm trong đơn không còn khả dụng. Hãy chọn lại hoặc hủy đơn.",
@@ -783,6 +859,77 @@ public final class Localization {
                 "Mỗi dòng cần có sản phẩm, số lượng dương và thời gian điều trị từ 1 đến 3650 ngày.",
                 "Each line needs a product, positive quantity, and a treatment duration from 1 to 3650 days.",
                 "Số lượng bán vượt quá phạm vi được hỗ trợ.", "Sale quantity is outside the supported range.");
+        add(
+                "Xem chi tiết", "View details",
+                "Tải đơn chờ đã chọn", "Open selected pending order",
+                "Nhân viên lưu đơn Pending để có thể sửa/hủy; tồn kho và điểm chỉ cập nhật khi hoàn tất.",
+                "Staff can save, edit, and cancel pending orders. Stock and points are updated when an order is completed.",
+                "Quản trị viên chỉ xem hóa đơn và chi tiết; thao tác bán hàng dành cho nhân viên.",
+                "Administrators can view orders and their details. Staff process sales.",
+                "Chỉnh sửa khách hàng", "Edit customer",
+                "Sửa thông tin khách hàng", "Edit customer information",
+                "Thao tác chưa hỗ trợ", "Action unavailable",
+                "Email không hợp lệ.", "Enter a valid email address.",
+                "Mã khách hàng", "Customer code",
+                "Tên khách hàng", "Customer name",
+                "Lý do hạn chế bán", "Sales restriction reason",
+                "Tên dị ứng bị trùng.", "This allergen has already been entered.",
+                "Không tìm thấy hồ sơ khách hàng.", "Customer profile not found.",
+                "Khách hàng không còn đủ điều kiện cập nhật tại quầy.",
+                "This customer's profile can no longer be edited at checkout.",
+                "Không thể xóa vì bản ghi đang được sử dụng (sản phẩm, phiếu nhập, hóa đơn...). ",
+                "This record is in use by a product, receipt, or invoice. ",
+                "Hãy chuyển trạng thái sang INACTIVE thay vì xóa.", "Deactivate the record to keep it for reference.",
+                "Dữ liệu liên quan không tồn tại hoặc đã bị xóa.", "Related data is missing or has been deleted.",
+                "Bắt buộc điền mã toa, ngày kê và bác sĩ nếu có thuốc kê đơn.",
+                "For prescription items, enter the prescription number, date, and prescriber.",
+                "Đã lưu đơn Pending ", "Saved pending order ",
+                "Không thể lưu đơn đang chờ", "Could not save the pending order",
+                "Hãy lưu đơn Pending trước khi hoàn tất.", "Save the pending order before completing it.",
+                "Không thể hủy đơn đang chờ", "Could not cancel the pending order",
+                "Đơn Pending đã được hủy.", "Pending order cancelled.",
+                "Chưa chọn đơn Pending", "No pending order selected",
+                "Hãy chọn một đơn đang chờ trong bảng.", "Select a pending order from the table.",
+                "Đang chỉnh sửa đơn Pending ", "Editing pending order ",
+                "Không thể tải đơn Pending", "Could not open the pending order",
+                "Lưu đơn Pending", "Save pending order",
+                "Hủy đơn Pending", "Cancel pending order",
+                "Hãy chọn hồ sơ khách hàng trước khi lưu đơn.", "Select a customer profile before saving the order.",
+                "Xác nhận hủy đơn", "Confirm order cancellation",
+                "Đơn đang chờ sẽ chuyển sang trạng thái đã hủy và không thể chỉnh sửa.",
+                "Cancelling this pending order will prevent further edits.",
+                "Chi tiết đơn hàng", "Order details",
+                "Đơn giá", "Unit price",
+                "Thành tiền", "Line total",
+                "Hướng dẫn", "Instructions",
+                "Đơn hàng chưa có dòng sản phẩm.", "This order has no items.",
+                "Không thể tải chi tiết đơn hàng", "Could not load order details",
+                "Không thể lưu đơn bán hàng đang chờ.", "Could not save the pending order.",
+                "Không thể cập nhật đơn bán hàng đang chờ.", "Could not update the pending order.",
+                "Không thể tải đơn bán hàng đang chờ.", "Could not load the pending order.",
+                "Không thể hoàn tất đơn bán hàng.", "Could not complete the sale.",
+                "Cần có tài khoản nhân viên đăng nhập để hủy đơn.",
+                "A signed-in staff account is required to cancel an order.",
+                "Không thể hủy đơn bán hàng đang chờ.", "Could not cancel the pending order.",
+                "Không thể tải chi tiết đơn bán hàng.", "Could not load order details.",
+                "Chỉ đơn đang chờ mới có thể được chỉnh sửa.", "Only pending orders can be edited.",
+                "Không tìm thấy đơn đang chờ.", "Pending order not found.",
+                "Chỉ nhân viên đang hoạt động mới được xử lý đơn bán hàng.", "Only active staff can process sales.",
+                "Chỉ đơn đang chờ mới có thể hoàn tất.", "Only pending orders can be completed.",
+                "Cần chọn hồ sơ khách hàng trước khi lưu hoặc hoàn tất đơn.",
+                "Select a customer profile before saving or completing the order.",
+                "Mã toa thuốc", "Prescription number",
+                "Tên bác sĩ", "Prescriber name",
+                "Tên cơ sở khám", "Clinic name",
+                "Ghi chú đơn hàng", "Order notes",
+                "Hướng dẫn sử dụng", "Directions for use",
+                "Giá trị đơn hàng vượt quá phạm vi dữ liệu được hỗ trợ.", "Order amount exceeds the supported range.",
+                "Cấu hình chương trình khuyến mãi, tích điểm và quy đổi điểm.",
+                "Configure promotions and rules for earning and redeeming points.",
+                "Thêm khuyến mãi", "Add promotion",
+                "Xác nhận", "Confirm",
+                "Hủy", "Cancel",
+                "Đóng", "Close");
     }
 
     private Localization() {
@@ -801,7 +948,7 @@ public final class Localization {
     }
 
     public static String text(String vietnamese) {
-        if (!english) {
+        if (vietnamese == null || !english) {
             return vietnamese;
         }
         String translated = ENGLISH.get(vietnamese);
@@ -822,6 +969,34 @@ public final class Localization {
             case "DAMAGED" -> english ? "Damaged" : "Hư hỏng";
             case "EXPIRED" -> english ? "Expired" : "Hết hạn";
             default -> movementType;
+        };
+    }
+
+    public static String saleStatusText(String status) {
+        return text(switch (status) {
+            case "PENDING" -> "Đang chờ";
+            case "COMPLETED" -> "Hoàn tất";
+            case "VOIDED" -> "Đã hủy";
+            default -> status;
+        });
+    }
+
+    public static String saleUnitText(String unit) {
+        if (!english) {
+            return unit;
+        }
+        return switch (unit.trim().toLowerCase(Locale.ROOT)) {
+            case "vi", "vỉ" -> text("Vỉ");
+            case "hop", "hộp" -> "Box";
+            case "chai" -> "Bottle";
+            case "bo", "bộ" -> "Set";
+            case "goi", "gói" -> "Sachet";
+            case "vien", "viên" -> "Tablet";
+            case "ong", "ống" -> "Tube";
+            case "tuyp", "tuýp" -> "Tube";
+            case "cai", "cái" -> "Piece";
+            case "mieng", "miếng" -> "Piece";
+            default -> unit;
         };
     }
 

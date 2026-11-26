@@ -55,23 +55,32 @@ class StocktakeDraftMySqlIntegrationTest {
                     request(location.id(), stocktakeNote, initialCounts));
             assertEquals("Chưa xác nhận", draft.values().get(4));
             assertEquals(initialQuantity, inventoryQuantity(target.id()));
-            assertEquals(initialCounts.size(), staffDao.findStocktakeDraft(draft.id()).counts().size());
-            assertEquals(stocktakeNote, staffDao.findAll("UC-14").stream()
+            var loadedDraft = staffDao.findStocktakeDraft(draft.id());
+            assertEquals(initialCounts.size(), loadedDraft.counts().size());
+            assertEquals(stocktakeNote, loadedDraft.note());
+            assertEquals(5, staffDao.findAll("UC-14").stream()
                     .filter(row -> row.id().equals(draft.id()))
                     .findFirst()
                     .orElseThrow()
                     .values()
-                    .get(5));
+                    .size());
+            var draftDetails = staffDao.findStocktakeDetails(draft.id());
+            assertEquals(stocktakeNote, draftDetails.note());
+            assertEquals(initialCounts.size(), draftDetails.items().size());
 
             List<InventoryWorkflowDAO.StocktakeCount> editedCounts =
                     counts(initialBatches, target.id(), 2);
+            String updatedNote = "Second count after review";
             staffDao.updateStocktakeDraft(staffId, draft.id(),
-                    request(location.id(), stocktakeNote, editedCounts));
+                    request(location.id(), updatedNote, editedCounts));
             assertEquals(initialQuantity, inventoryQuantity(target.id()));
+            assertEquals(updatedNote, staffDao.findStocktakeDraft(draft.id()).note());
+            assertEquals(updatedNote, staffDao.findStocktakeDetails(draft.id()).note());
 
             var confirmed = adminDao.confirmStocktake(adminId, draft.id());
             assertEquals("Đã xác nhận", confirmed.values().get(4));
             assertEquals(initialQuantity.add(new BigDecimal("2")), inventoryQuantity(target.id()));
+            assertEquals(updatedNote, staffDao.findStocktakeDetails(draft.id()).note());
             assertThrows(IllegalArgumentException.class, () -> staffDao.updateStocktakeDraft(
                     staffId, draft.id(), request(location.id(), editedCounts)));
             assertThrows(IllegalArgumentException.class,
@@ -80,12 +89,14 @@ class StocktakeDraftMySqlIntegrationTest {
             List<InventoryWorkflowDAO.BatchOption> currentBatches = staffDao.findInventoryBatches(location.id());
             InventoryWorkflowDAO.BatchOption cancellationTarget = currentBatches.get(0);
             BigDecimal quantityBeforeCancellation = cancellationTarget.quantityOnHand();
+            String cancellationNote = "Count was cancelled";
             var cancellable = staffDao.createStocktakeDraft(staffId,
-                    request(location.id(), counts(currentBatches, cancellationTarget.id(), 1)));
+                    request(location.id(), cancellationNote, counts(currentBatches, cancellationTarget.id(), 1)));
             staffDao.cancelStocktakeDraft(staffId, cancellable.id());
             assertEquals("CANCELLED", stocktakeStatus(cancellable.id()));
             assertTrue(stocktakeItemCount(cancellable.id()) > 0);
             assertEquals(quantityBeforeCancellation, inventoryQuantity(cancellationTarget.id()));
+            assertEquals(cancellationNote, staffDao.findStocktakeDetails(cancellable.id()).note());
             assertEquals("Đã hủy", staffDao.findAll("UC-14").stream()
                     .filter(row -> row.id().equals(cancellable.id()))
                     .findFirst()

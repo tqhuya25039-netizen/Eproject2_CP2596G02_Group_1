@@ -161,8 +161,8 @@ CREATE TABLE products (
     unit_price DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
     unit_name VARCHAR(30) NOT NULL,
     requires_prescription TINYINT(1) NOT NULL DEFAULT 0,
-    selling_price DECIMAL(12, 2) NULL,
     minimum_age_years TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    selling_price DECIMAL(12, 2) NULL,
     is_active TINYINT(1) NOT NULL DEFAULT 1,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (product_id),
@@ -172,8 +172,8 @@ CREATE TABLE products (
     CONSTRAINT fk_products_category
         FOREIGN KEY (category_id) REFERENCES product_categories (category_id),
     CONSTRAINT chk_products_prescription CHECK (requires_prescription IN (0, 1)),
-    CONSTRAINT chk_products_selling_price CHECK (selling_price IS NULL OR selling_price >= 0),
     CONSTRAINT chk_products_minimum_age CHECK (minimum_age_years <= 120),
+    CONSTRAINT chk_products_selling_price CHECK (selling_price IS NULL OR selling_price >= 0),
     CONSTRAINT chk_products_is_active CHECK (is_active IN (0, 1))
 ) ENGINE=InnoDB;
 
@@ -324,6 +324,8 @@ CREATE TABLE customers (
     phone VARCHAR(20) NULL,
     email VARCHAR(120) NULL,
     date_of_birth DATE NULL,
+    date_of_birth_year SMALLINT UNSIGNED NULL,
+    date_of_birth_month TINYINT UNSIGNED NULL,
     loyalty_points INT UNSIGNED NOT NULL DEFAULT 0,
     is_active TINYINT(1) NOT NULL DEFAULT 1,
     is_blocked TINYINT(1) NOT NULL DEFAULT 0,
@@ -334,6 +336,12 @@ CREATE TABLE customers (
     UNIQUE KEY uq_customers_phone (phone),
     CONSTRAINT chk_customers_is_active CHECK (is_active IN (0, 1)),
     CONSTRAINT chk_customers_is_blocked CHECK (is_blocked IN (0, 1)),
+    CONSTRAINT chk_customers_birth_date_precision CHECK (
+        (date_of_birth_year IS NULL AND date_of_birth_month IS NULL)
+        OR (date_of_birth IS NULL AND date_of_birth_year IS NOT NULL
+            AND date_of_birth_year BETWEEN 1000 AND 9999
+            AND (date_of_birth_month IS NULL OR date_of_birth_month BETWEEN 1 AND 12))
+    ),
     CONSTRAINT chk_customers_block_reason CHECK (
         (is_blocked = 0) OR (block_reason IS NOT NULL AND CHAR_LENGTH(TRIM(block_reason)) > 0)
     )
@@ -438,7 +446,11 @@ CREATE TABLE sales (
     CONSTRAINT chk_sales_amounts
         CHECK (subtotal >= 0 AND discount_amount >= 0 AND total_amount >= 0),
     CONSTRAINT chk_sales_total CHECK (total_amount = subtotal - discount_amount),
-    CONSTRAINT chk_sales_status CHECK (status IN ('PENDING', 'COMPLETED', 'VOIDED'))
+    CONSTRAINT chk_sales_status CHECK (status IN ('PENDING', 'COMPLETED', 'VOIDED')),
+    CONSTRAINT chk_sales_redeem_points CHECK (redeem_points IN (0, 1)),
+    CONSTRAINT chk_sales_requested_points CHECK (
+        requested_points IS NULL OR requested_points <= 4294967295
+    )
 ) ENGINE=InnoDB;
 
 CREATE TABLE sale_items (
@@ -451,6 +463,11 @@ CREATE TABLE sale_items (
     line_total DECIMAL(12, 2) NOT NULL,
     dosage_instructions VARCHAR(255) NULL,
     treatment_days SMALLINT UNSIGNED NOT NULL DEFAULT 1,
+    line_kind ENUM('PRESCRIBED', 'ADD_ON') NULL,
+    dose_amount DECIMAL(9, 3) NULL,
+    dose_unit ENUM('TABLET', 'CAPSULE', 'PACKET', 'ML', 'DROP', 'DOSE') NULL,
+    dose_timing ENUM('BEFORE_MEAL', 'WITH_MEAL', 'AFTER_MEAL', 'BEFORE_BED') NULL,
+    dose_sessions TINYINT UNSIGNED NOT NULL DEFAULT 0,
     PRIMARY KEY (sale_item_id),
     KEY ix_sale_items_sale (sale_id),
     KEY ix_sale_items_product (product_id),
@@ -462,7 +479,11 @@ CREATE TABLE sale_items (
         CHECK (quantity > 0 AND unit_price >= 0 AND line_discount >= 0 AND line_total >= 0),
     CONSTRAINT chk_sale_items_total
         CHECK (line_total = ROUND(quantity * unit_price - line_discount, 2)),
-    CONSTRAINT chk_sale_items_treatment_days CHECK (treatment_days BETWEEN 1 AND 3650)
+    CONSTRAINT chk_sale_items_treatment_days CHECK (treatment_days BETWEEN 1 AND 3650),
+    CONSTRAINT chk_sale_items_dose_amount CHECK (
+        (dose_amount IS NULL AND dose_unit IS NULL)
+        OR (dose_amount IS NOT NULL AND dose_amount > 0 AND dose_unit IS NOT NULL)),
+    CONSTRAINT chk_sale_items_dose_sessions CHECK (dose_sessions BETWEEN 0 AND 15)
 ) ENGINE=InnoDB;
 
 CREATE TABLE inventory_movements (

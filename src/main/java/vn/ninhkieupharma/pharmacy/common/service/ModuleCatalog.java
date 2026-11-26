@@ -95,9 +95,9 @@ public final class ModuleCatalog {
                     true, false),
             module("UC-16", "Khách hàng & tích điểm", GROUPS.get(3),
                     "Quản lý hồ sơ khách hàng, dị ứng và lịch sử điểm thành viên.",
-                    "Thêm khách hàng", List.of("Mã khách", "Họ và tên", "Điện thoại", "Email", "Dị ứng",
+                    "Thêm khách hàng", List.of("Mã khách", "Họ và tên", "Điện thoại", "Email", "Chất dị ứng",
                             "Điểm", "Trạng thái", "Lý do hạn chế", "Ngày sinh"),
-                    List.of("Họ và tên", "Số điện thoại", "Email", "Thông tin dị ứng"),
+                    List.of("Họ và tên", "Số điện thoại", "Email", "Chất dị ứng"),
                     false, true),
             module("UC-17", "Bán hàng", GROUPS.get(3),
                     "Tạo hóa đơn, tra cứu sản phẩm và áp dụng ưu đãi thành viên.",
@@ -114,9 +114,10 @@ public final class ModuleCatalog {
                             "Giá trị quy đổi mỗi điểm", "Bậc tích điểm", "Trạng thái"),
                     false, false),
             module("UC-19", "Báo cáo đơn hàng & doanh thu", GROUPS.get(3),
-                    "Tổng hợp số lượng đơn hàng và doanh thu theo khoảng thời gian.",
+                    "Thống kê đơn hoàn tất và doanh thu theo thời gian, nhân viên, thuốc và danh mục.",
                     "Tạo báo cáo", List.of("Ngày / Tháng", "Số đơn", "Doanh thu", "Giảm giá", "Giá trị trung bình"),
-                    List.of("Kỳ báo cáo", "Năm", "Tháng", "Quý"),
+                    List.of("Kỳ báo cáo", "Năm", "Tháng", "Quý", "Từ ngày", "Đến ngày",
+                            "Nhân viên", "Thuốc / Sản phẩm", "Danh mục"),
                     true, false)
     );
 

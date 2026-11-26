@@ -3,6 +3,7 @@ package vn.ninhkieupharma.pharmacy.common.dao;
 import vn.ninhkieupharma.pharmacy.common.model.ModuleRow;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleAllergyWarning;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleLineRequest;
+import vn.ninhkieupharma.pharmacy.domain.sales.SaleStockPreview;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleStockShortage;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleOrderRequest;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleProduct;
@@ -77,6 +78,10 @@ public interface FeatureModuleDAO {
         throw new UnsupportedOperationException("Batch stock checks are not available.");
     }
 
+    default SaleStockPreview previewSalePicking(List<SaleLineRequest> lines) {
+        return new SaleStockPreview(List.of(), previewSaleStock(lines));
+    }
+
     default List<SaleAllergyWarning> findSaleAllergyWarnings(
             Optional<UUID> customerId, List<UUID> productIds) {
         throw new UnsupportedOperationException("Allergy checks for sales are not available.");
@@ -125,6 +130,14 @@ public interface FeatureModuleDAO {
     default List<SalesReport.Row> findCompletedSalesByDay(
             LocalDate fromInclusive, LocalDate toExclusive) {
         throw new UnsupportedOperationException("Sales reporting is not available.");
+    }
+
+    default SalesReport.FilterOptions findSalesReportOptions() {
+        return new SalesReport.FilterOptions(List.of(), List.of(), List.of());
+    }
+
+    default SalesReport.Rows findSalesReportRows(SalesReport.Filter filter) {
+        throw new UnsupportedOperationException("Sales reporting with filters is not available.");
     }
 
     void replaceAll(String moduleId, List<List<String>> values);
