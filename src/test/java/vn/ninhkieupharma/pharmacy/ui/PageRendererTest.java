@@ -71,6 +71,58 @@ class PageRendererTest {
     }
 
     @Test
+    void productFiltersMatchFieldsAndInclusivePriceRange() {
+        ModuleRow product = new ModuleRow(UUID.randomUUID(),
+                List.of("SP0001", "Paracetamol 500mg", "Thuốc giảm đau", "Viên nén", "Vỉ",
+                        "15000.00", "No", "ACTIVE", "Dược phẩm Hậu Giang", "0"));
+        List<String> columnQueries = List.of("", "para", "", "", "", "", "", "", "HẬU", "");
+
+        assertTrue(PageRenderer.matchesProductFilters(
+                product, "", columnQueries, new BigDecimal("15000"), new BigDecimal("15000")));
+        assertFalse(PageRenderer.matchesProductFilters(
+                product, "", columnQueries, new BigDecimal("15000.01"), null));
+        assertFalse(PageRenderer.matchesProductFilters(
+                product, "", List.of("", "para", "", "", "", "", "", "INACTIVE", "", ""),
+                null, null));
+        assertTrue(PageRenderer.matchesProductFilters(
+                product, "", List.of("", "", "", "", "", "", "No", "", "", ""), null, null));
+        assertFalse(PageRenderer.matchesProductFilters(
+                product, "", List.of("", "", "", "", "", "", "Yes", "", "", ""), null, null));
+        assertEquals(new BigDecimal("15000"), PageRenderer.parseProductPriceBound("15.000"));
+        assertEquals(new BigDecimal("20000"), PageRenderer.parseProductPriceBound("20,000"));
+    }
+
+    @Test
+    void reportFiltersMatchEachColumnIndependently() {
+        ModuleRow reportRow = new ModuleRow(UUID.randomUUID(), List.of(
+                "2026-Q2", "Thực phẩm bổ sung", "3 SP (2 dạng / 1 NCC)", "50.0%",
+                "Có thể thay thế cơ bản"));
+
+        assertTrue(PageRenderer.matchesReportFilters(
+                reportRow, "q2", List.of("", "", "3 SP", "", "")));
+        assertTrue(PageRenderer.matchesReportFilters(
+                reportRow, "", List.of("", "", "", "50.0", "")));
+        assertFalse(PageRenderer.matchesReportFilters(
+                reportRow, "", List.of("", "", "50.0", "", "")));
+    }
+
+    @Test
+    void trendChartDataGroupsCountsAndFillsMissingPeriodsWithZero() {
+        List<ModuleRow> rows = List.of(
+                reportRow("2026-Q2", "Ngành A", "2 SP"),
+                reportRow("2026-Q1", "Ngành A", "1 SP"),
+                reportRow("2026-Q1", "Ngành B", "3 SP"));
+
+        PageRenderer.TrendChartData data = PageRenderer.createTrendChartData(rows, 0, 1);
+
+        assertEquals(List.of("2026-Q1", "2026-Q2"), data.periods());
+        assertEquals(List.of("Ngành A", "Ngành B"), data.dimensions());
+        assertEquals(List.of(1, 2), data.series().get("Ngành A"));
+        assertEquals(List.of(3, 0), data.series().get("Ngành B"));
+        assertEquals(List.of(2, 0), data.latestPeriodTotals());
+    }
+
+    @Test
     void staffCanManageCustomersButOnlyAdminsCanArchiveOrConfigureSales() {
         assertTrue(PageRenderer.canWriteModule("UC-16", UserRole.STAFF));
         assertTrue(PageRenderer.canDeleteModule("UC-16", UserRole.ADMIN));
@@ -80,6 +132,11 @@ class PageRendererTest {
         assertTrue(PageRenderer.canWriteModule("UC-18", UserRole.ADMIN));
         assertFalse(PageRenderer.canWriteModule("UC-18", UserRole.STAFF));
         assertFalse(PageRenderer.canWriteModule("UC-19", UserRole.STAFF));
+    }
+
+    private ModuleRow reportRow(String period, String dimension, String count) {
+        return new ModuleRow(UUID.randomUUID(),
+                List.of(period, dimension, count, "50.0%", "Đánh giá"));
     }
 
     @Test

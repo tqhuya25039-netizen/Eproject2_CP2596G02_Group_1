@@ -1,6 +1,7 @@
 package vn.ninhkieupharma.pharmacy.ui;
 
 import javafx.collections.FXCollections;
+import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
 import javafx.collections.transformation.FilteredList;
 import javafx.beans.property.SimpleBooleanProperty;
@@ -26,6 +27,7 @@ import javafx.scene.control.ButtonType;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.CheckMenuItem;
 import javafx.scene.control.ComboBox;
+import javafx.scene.control.Control;
 import javafx.scene.control.DatePicker;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.Hyperlink;
@@ -42,6 +44,7 @@ import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
+import javafx.scene.control.TextFormatter;
 import javafx.scene.control.TextInputControl;
 import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.ColumnConstraints;
@@ -90,12 +93,15 @@ import java.text.NumberFormat;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.stream.IntStream;
 import javafx.util.StringConverter;
@@ -147,6 +153,32 @@ public class PageRenderer {
     }
 
     private record CustomerFilters(VBox container, ComboBox<String> status, Button applyButton) {
+    }
+
+    private record ReportFilters(VBox container, List<Node> fields, Button applyButton) {
+    }
+
+    record TrendChartData(
+            List<String> periods,
+            Map<String, List<Number>> series,
+            List<String> dimensions,
+            List<Number> latestPeriodTotals) {
+    }
+
+    private record ProductFilterOption(String value, String label) {
+        @Override
+        public String toString() {
+            return label;
+        }
+    }
+
+    private record ProductFilters(
+            GridPane container,
+            List<Integer> columnIndexes,
+            List<Node> fields,
+            Map<Integer, ComboBox<ProductFilterOption>> selectors,
+            TextField minimumPrice,
+            TextField maximumPrice) {
     }
 
     private record InventoryFilters(
@@ -233,6 +265,8 @@ public class PageRenderer {
         PromotionFilters promotionFilters = null;
         CustomerFilters customerFilters = null;
         InventoryFilters inventoryFilters = null;
+        ReportFilters reportFilters = null;
+        ProductFilters productFilters = null;
         Node filters = null;
         if (module.report()) {
             if ("UC-15".equals(module.id())) {
@@ -240,6 +274,12 @@ public class PageRenderer {
                 filters = inventoryFilters.container();
                 InventoryFilters capturedFilters = inventoryFilters;
                 capturedFilters.applyButton().setOnAction(event -> applyInventoryFilters(
+                        renderedTable.filteredRows(), search, capturedFilters));
+            } else if ("UC-10".equals(module.id()) || "UC-11".equals(module.id())) {
+                reportFilters = createReportFilters(module);
+                filters = reportFilters.container();
+                ReportFilters capturedFilters = reportFilters;
+                capturedFilters.applyButton().setOnAction(event -> applyReportFilters(
                         renderedTable.filteredRows(), search, capturedFilters));
             } else {
                 filters = createFilters(module, filterInputs, renderedTable.filteredRows(), search);
@@ -256,15 +296,46 @@ public class PageRenderer {
             CustomerFilters capturedFilters = customerFilters;
             capturedFilters.applyButton().setOnAction(event -> applyCustomerFilters(
                     renderedTable.filteredRows(), search, capturedFilters));
+        } else if ("UC-08".equals(module.id())) {
+            productFilters = createProductFilters(module, renderedTable.source());
+            filters = productFilters.container();
+            ProductFilters capturedFilters = productFilters;
+            capturedFilters.fields().forEach(field -> {
+                if (field instanceof TextInputControl textInput) {
+                    textInput.textProperty().addListener(
+                            (observable, oldValue, newValue) -> applyProductFilters(
+                                    renderedTable.filteredRows(), search, capturedFilters));
+                } else if (field instanceof ComboBox<?> comboBox) {
+                    comboBox.valueProperty().addListener(
+                            (observable, oldValue, newValue) -> applyProductFilters(
+                                    renderedTable.filteredRows(), search, capturedFilters));
+                }
+            });
+            capturedFilters.minimumPrice().textProperty().addListener(
+                    (observable, oldValue, newValue) -> applyProductFilters(
+                            renderedTable.filteredRows(), search, capturedFilters));
+            capturedFilters.maximumPrice().textProperty().addListener(
+                    (observable, oldValue, newValue) -> applyProductFilters(
+                            renderedTable.filteredRows(), search, capturedFilters));
+            renderedTable.source().addListener((ListChangeListener<ModuleRow>) change ->
+                    refreshProductFilterOptions(capturedFilters, renderedTable.source()));
         }
         if (renderedTable != null) {
             PromotionFilters capturedFilters = promotionFilters;
             CustomerFilters capturedCustomerFilters = customerFilters;
             InventoryFilters capturedInventoryFilters = inventoryFilters;
+            ReportFilters capturedReportFilters = reportFilters;
+            ProductFilters capturedProductFilters = productFilters;
             search.textProperty().addListener((observable, oldValue, newValue) -> {
                 if (capturedInventoryFilters != null) {
                     applyInventoryFilters(
                             renderedTable.filteredRows(), search, capturedInventoryFilters);
+                } else if (capturedReportFilters != null) {
+                    applyReportFilters(
+                            renderedTable.filteredRows(), search, capturedReportFilters);
+                } else if (capturedProductFilters != null) {
+                    applyProductFilters(
+                            renderedTable.filteredRows(), search, capturedProductFilters);
                 } else if (capturedFilters == null) {
                     if (capturedCustomerFilters == null) {
                         applyFilters(renderedTable.filteredRows(), search, filterInputs);
@@ -514,9 +585,12 @@ public class PageRenderer {
         }
 
         if (module.report()) {
-            page.getChildren().addAll(title, description,
-                    createReportSummary(module, featureService), filters,
-                    actions, createReportCharts(module, featureService), renderedTable.table());
+            page.getChildren().addAll(title, description);
+            if (!"UC-10".equals(module.id()) && !"UC-11".equals(module.id())) {
+                page.getChildren().add(createReportSummary(module, featureService));
+            }
+            page.getChildren().addAll(
+                    filters, actions, createReportCharts(module, featureService), renderedTable.table());
         } else {
             String note = salesCustomerEntry != null
                     ? "Nhân viên lưu đơn Pending để có thể sửa/hủy; tồn kho và điểm chỉ cập nhật khi hoàn tất."
@@ -536,6 +610,9 @@ public class PageRenderer {
             } else if (salesCustomerEntry != null) {
                 page.getChildren().addAll(
                         title, description, supportNote, salesCustomerEntry.node(), actions, renderedTable.table());
+            } else if (productFilters != null) {
+                page.getChildren().addAll(title, description, supportNote,
+                        actions, filters, renderedTable.table());
             } else {
                 page.getChildren().addAll(title, description, supportNote, actions, renderedTable.table());
             }
@@ -756,16 +833,8 @@ public class PageRenderer {
         filters.setAlignment(Pos.CENTER_LEFT);
         filters.getStyleClass().add("filter-bar");
         for (int index = 0; index < Math.min(module.formFields().size(), 2); index++) {
-            Node filter;
-            if ("UC-10".equals(module.id()) && index == 1) {
-                filter = createCatalogFilter("UC-07", 0, module.formFields().get(index));
-            } else if ("UC-11".equals(module.id()) && index == 1) {
-                filter = createCatalogFilter("UC-09", 1, module.formFields().get(index));
-            } else {
-                TextField textFilter = new TextField();
-                textFilter.setPromptText(module.formFields().get(index));
-                filter = textFilter;
-            }
+            TextField filter = new TextField();
+            filter.setPromptText(module.formFields().get(index));
             filter.getStyleClass().add("filter-input");
             filterInputs.add(filter);
             filters.getChildren().add(filter);
@@ -775,6 +844,257 @@ public class PageRenderer {
         applyButton.setOnAction(event -> applyFilters(rows, search, filterInputs));
         filters.getChildren().add(applyButton);
         return filters;
+    }
+
+    private ReportFilters createReportFilters(ModuleDefinition module) {
+        GridPane fieldsGrid = new GridPane();
+        fieldsGrid.setHgap(12);
+        fieldsGrid.setVgap(10);
+        for (int index = 0; index < 3; index++) {
+            ColumnConstraints column = new ColumnConstraints();
+            column.setPercentWidth(100.0 / 3);
+            column.setHgrow(Priority.ALWAYS);
+            column.setFillWidth(true);
+            fieldsGrid.getColumnConstraints().add(column);
+        }
+
+        List<Node> fields = new ArrayList<>();
+        for (int index = 0; index < module.columns().size(); index++) {
+            Control field;
+            if (index == 1 && "UC-10".equals(module.id())) {
+                field = createCatalogFilter("UC-07", 0, module.columns().get(index));
+            } else if (index == 1 && "UC-11".equals(module.id())) {
+                field = createCatalogFilter("UC-09", 1, module.columns().get(index));
+            } else {
+                TextField textField = new TextField();
+                textField.setMinWidth(90);
+                textField.setPrefWidth(160);
+                field = textField;
+            }
+            field.setMaxWidth(Double.MAX_VALUE);
+            fields.add(field);
+
+            Label label = new Label(Localization.text(module.columns().get(index)));
+            label.setWrapText(true);
+            label.getStyleClass().add("overview-label");
+            VBox fieldGroup = new VBox(5, label, field);
+            GridPane.setHgrow(fieldGroup, Priority.ALWAYS);
+            fieldsGrid.add(fieldGroup, index % 3, index / 3);
+        }
+
+        Button applyButton = new Button(Localization.text("Áp dụng"));
+        applyButton.getStyleClass().add("button-secondary");
+        HBox actions = new HBox(applyButton);
+        actions.setAlignment(Pos.CENTER_RIGHT);
+
+        VBox container = new VBox(10, fieldsGrid, actions);
+        container.setMaxWidth(Double.MAX_VALUE);
+        container.getStyleClass().add("filter-bar");
+        return new ReportFilters(container, List.copyOf(fields), applyButton);
+    }
+
+    private ProductFilters createProductFilters(ModuleDefinition module, List<ModuleRow> products) {
+        GridPane container = new GridPane();
+        container.setHgap(10);
+        container.setVgap(8);
+        container.setMaxWidth(Double.MAX_VALUE);
+        container.getStyleClass().add("filter-bar");
+        for (int index = 0; index < 5; index++) {
+            ColumnConstraints column = new ColumnConstraints();
+            column.setPercentWidth(20);
+            column.setHgrow(Priority.ALWAYS);
+            column.setFillWidth(true);
+            container.getColumnConstraints().add(column);
+        }
+
+        List<Integer> columnIndexes = new ArrayList<>();
+        List<Node> fields = new ArrayList<>();
+        Map<Integer, ComboBox<ProductFilterOption>> selectors = new LinkedHashMap<>();
+        TextField minimumPrice = null;
+        TextField maximumPrice = null;
+        for (int index = 0; index < module.columns().size(); index++) {
+            if (index == 5) {
+                minimumPrice = createPriceFilterField("Giá bán từ (VNĐ)");
+                maximumPrice = createPriceFilterField("Giá bán đến (VNĐ)");
+                HBox priceRange = new HBox(8,
+                        minimumPrice, new Label("–"), maximumPrice);
+                priceRange.setAlignment(Pos.CENTER_LEFT);
+                container.add(priceRange, 0, 1);
+                continue;
+            }
+            if (index == 9) {
+                continue;
+            }
+            Node field;
+            if (List.of(2, 3, 4, 6, 7, 8).contains(index)) {
+                ComboBox<ProductFilterOption> selector = createProductChoiceFilter(index, products);
+                selectors.put(index, selector);
+                field = selector;
+            } else {
+                field = createProductFilterField(module.columns().get(index));
+            }
+            fields.add(field);
+            columnIndexes.add(index);
+            int row = index < 5 ? 0 : 1;
+            int column = index < 5 ? index : index - 5;
+            container.add(field, column, row);
+            GridPane.setHgrow(field, Priority.ALWAYS);
+        }
+
+        return new ProductFilters(container, List.copyOf(columnIndexes), List.copyOf(fields), Map.copyOf(selectors),
+                minimumPrice, maximumPrice);
+    }
+
+    private ComboBox<ProductFilterOption> createProductChoiceFilter(
+            int columnIndex, List<ModuleRow> products) {
+        ComboBox<ProductFilterOption> filter = new ComboBox<>();
+        filter.getItems().setAll(productFilterOptions(columnIndex, products));
+        filter.setPromptText(productFilterFieldLabel(columnIndex));
+        filter.setMinWidth(90);
+        filter.setPrefWidth(140);
+        filter.setMaxWidth(Double.MAX_VALUE);
+        filter.getStyleClass().add("filter-input");
+        filter.getSelectionModel().selectFirst();
+        return filter;
+    }
+
+    private String productFilterFieldLabel(int columnIndex) {
+        return Localization.text(switch (columnIndex) {
+            case 2 -> "Danh mục";
+            case 3 -> "Dạng bào chế";
+            case 4 -> "Đơn vị";
+            case 6 -> "Kê đơn";
+            case 7 -> "Trạng thái";
+            case 8 -> "Nhà cung cấp";
+            default -> throw new IllegalArgumentException("Unsupported product filter column: " + columnIndex);
+        });
+    }
+
+    private List<ProductFilterOption> productFilterOptions(int columnIndex, List<ModuleRow> products) {
+        List<String> values = switch (columnIndex) {
+            case 6 -> List.of("Yes", "No");
+            case 7 -> List.of("ACTIVE", "INACTIVE");
+            default -> products.stream()
+                    .filter(row -> row.values().size() > columnIndex)
+                    .map(row -> row.values().get(columnIndex))
+                    .filter(value -> !value.isBlank())
+                    .distinct()
+                    .sorted(String.CASE_INSENSITIVE_ORDER)
+                    .toList();
+        };
+        List<ProductFilterOption> options = new ArrayList<>();
+        options.add(new ProductFilterOption("", productFilterFieldLabel(columnIndex)));
+        values.stream()
+                .map(value -> new ProductFilterOption(value, Localization.productText(value)))
+                .forEach(options::add);
+        return List.copyOf(options);
+    }
+
+    private void refreshProductFilterOptions(ProductFilters filters, List<ModuleRow> products) {
+        filters.selectors().forEach((columnIndex, selector) -> {
+            ProductFilterOption current = selector.getValue();
+            selector.getItems().setAll(productFilterOptions(columnIndex, products));
+            ProductFilterOption matching = selector.getItems().stream()
+                    .filter(option -> current != null && option.value().equals(current.value()))
+                    .findFirst()
+                    .orElse(selector.getItems().get(0));
+            selector.getSelectionModel().select(matching);
+        });
+    }
+
+    private TextField createProductFilterField(String prompt) {
+        TextField field = new TextField();
+        field.setPromptText(Localization.text(prompt));
+        field.setMinWidth(90);
+        field.setPrefWidth(140);
+        field.getStyleClass().add("filter-input");
+        return field;
+    }
+
+    private TextField createPriceFilterField(String prompt) {
+        TextField field = new TextField();
+        field.setPromptText(Localization.text(prompt));
+        field.setMinWidth(40);
+        field.setPrefWidth(100);
+        field.getStyleClass().add("filter-input");
+        field.setTextFormatter(new TextFormatter<String>(change ->
+                change.getControlNewText().matches("[\\d.,]{0,20}") ? change : null));
+        return field;
+    }
+
+    private void applyProductFilters(
+            FilteredList<ModuleRow> rows,
+            TextField search,
+            ProductFilters filters) {
+        BigDecimal minimumPrice = parseProductPriceBound(filters.minimumPrice().getText());
+        BigDecimal maximumPrice = parseProductPriceBound(filters.maximumPrice().getText());
+
+        List<String> columnQueries = new ArrayList<>(Collections.nCopies(10, ""));
+        for (int index = 0; index < filters.fields().size(); index++) {
+            int columnIndex = filters.columnIndexes().get(index);
+            String value = productFilterValue(filters.fields().get(index));
+            columnQueries.set(columnIndex, value);
+        }
+        BigDecimal capturedMinimumPrice = minimumPrice;
+        BigDecimal capturedMaximumPrice = maximumPrice;
+        rows.setPredicate(row -> matchesProductFilters(
+                row, search.getText(), columnQueries, capturedMinimumPrice, capturedMaximumPrice));
+    }
+
+    private String productFilterValue(Node field) {
+        if (field instanceof ComboBox<?> comboBox && comboBox.getValue() instanceof ProductFilterOption option) {
+            return option.value();
+        }
+        return inputValue(field);
+    }
+
+    static BigDecimal parseProductPriceBound(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        String normalized = value.replaceAll("\\s+", "");
+        if (normalized.matches("\\d+(?:[.,]\\d{0,2})?")) {
+            normalized = normalized.replace(',', '.');
+        } else if (normalized.matches("\\d{1,3}(?:\\.\\d{3})+(?:,\\d{1,2})?")) {
+            normalized = normalized.replace(".", "").replace(',', '.');
+        } else if (normalized.matches("\\d{1,3}(?:,\\d{3})+(?:\\.\\d{1,2})?")) {
+            normalized = normalized.replace(",", "");
+        } else {
+            return null;
+        }
+        return new BigDecimal(normalized);
+    }
+
+    static boolean matchesProductFilters(
+            ModuleRow row,
+            String searchQuery,
+            List<String> columnQueries,
+            BigDecimal minimumPrice,
+            BigDecimal maximumPrice) {
+        List<String> values = row.values();
+        if (values.size() != 10 || columnQueries.size() != 10) {
+            throw new IllegalArgumentException("Product filters require 10 product columns.");
+        }
+
+        String searchableRow = values.stream()
+                .map(value -> value + " " + Localization.text(value))
+                .reduce("", (left, right) -> left + " " + right)
+                .toLowerCase(Locale.ROOT);
+        if (!normalize(searchQuery).isBlank() && !searchableRow.contains(normalize(searchQuery))) {
+            return false;
+        }
+        for (int index = 0; index < columnQueries.size(); index++) {
+            String query = normalize(columnQueries.get(index));
+            String cellValue = normalize(values.get(index) + " " + Localization.text(values.get(index))
+                    + " " + Localization.productText(values.get(index)));
+            if (!query.isBlank() && !cellValue.contains(query)) {
+                return false;
+            }
+        }
+
+        BigDecimal price = new BigDecimal(values.get(5));
+        return (minimumPrice == null || price.compareTo(minimumPrice) >= 0)
+                && (maximumPrice == null || price.compareTo(maximumPrice) <= 0);
     }
 
     private ComboBox<String> createCatalogFilter(String moduleId, int valueIndex, String prompt) {
@@ -1228,6 +1548,11 @@ public class PageRenderer {
         for (int index = 0; index < module.columns().size(); index++) {
             final int columnIndex = index;
             TableColumn<ModuleRow, String> column = new TableColumn<>(module.columns().get(index));
+            double columnWidth = reportColumnWidth(module.id(), index);
+            if (columnWidth > 0) {
+                column.setMinWidth(columnWidth);
+                column.setPrefWidth(columnWidth);
+            }
             column.setCellValueFactory(cell -> {
                 String value = cell.getValue().values().get(columnIndex);
                 if ("UC-18".equals(module.id())) {
@@ -1299,6 +1624,15 @@ public class PageRenderer {
         return result;
     }
 
+    private double reportColumnWidth(String moduleId, int columnIndex) {
+        double[] widths = switch (moduleId) {
+            case "UC-10" -> new double[] {100, 160, 220, 100, 210};
+            case "UC-11" -> new double[] {105, 180, 125, 100, 200};
+            default -> new double[0];
+        };
+        return columnIndex < widths.length ? widths[columnIndex] : 0;
+    }
+
     private Node createReportSummary(ModuleDefinition module, FeatureModuleService featureService) {
         FlowPane summary = new FlowPane(12, 8);
         summary.getStyleClass().add("demo-summary");
@@ -1344,32 +1678,27 @@ public class PageRenderer {
                         "Trạng thái", "Đúng giờ", attendance.size() - lateCount,
                         "Đi trễ", lateCount)));
             }
-           case "UC-10" -> {
-                List<ModuleRow> categoryRows = featureService.findAll(module);
-                List<String> categories = categoryRows.stream()
-                        .map(row -> row.values().get(0) + " · " + Localization.text(row.values().get(1)))
-                        .toList();
-                List<Number> counts = categoryRows.stream()
-                        .map(row -> (Number) Integer.parseInt(row.values().get(2).split("\\s+")[0]))
-                        .toList();
-                charts.getChildren().add(chartCard("Số sản phẩm theo quý & danh mục", barChart(
-                        "Quý · Danh mục", "Số sản phẩm", categories, seriesFromList("Sản phẩm", counts))));
-                charts.getChildren().add(chartCard("Tỷ trọng ngành hàng",
-                        pieChart("Danh mục", seriesPairs(categories, counts))));
+            case "UC-10" -> {
+                TrendChartData data = createTrendChartData(featureService.findAll(module), 0, 1);
+                charts.getChildren().add(chartCard("Biểu đồ cột: Số mặt hàng theo quý và ngành hàng",
+                        barChart("Quý", "Số mặt hàng", data.periods(), data.series())));
+                charts.getChildren().add(chartCard("Biểu đồ đường: Xu hướng ngành hàng theo quý",
+                        lineChart("Quý", "Số mặt hàng", data.periods(), data.series())));
+                charts.getChildren().add(chartCard("Biểu đồ miền: Ngành hàng theo quý",
+                        areaChart("Quý", "Số mặt hàng", data.periods(), data.series())));
+                charts.getChildren().add(chartCard("Biểu đồ hình bánh: Tỷ trọng ngành hàng",
+                        pieChart("Danh mục", seriesPairs(data.dimensions(), data.latestPeriodTotals()))));
             }
             case "UC-11" -> {
-                List<ModuleRow> supplierRows = featureService.findAll(module);
-                List<String> suppliers = supplierRows.stream()
-                        .map(row -> row.values().get(0) + " · " + Localization.text(row.values().get(1)))
-                        .toList();
-                List<Number> itemCounts = supplierRows.stream()
-                        .map(row -> (Number) Integer.parseInt(row.values().get(2)))
-                        .toList();
-                charts.getChildren().add(chartCard("Mặt hàng cung ứng theo tháng & NCC", barChart(
-                        "Tháng · Nhà cung cấp", "Số mặt hàng", suppliers,
-                        seriesFromList("Mặt hàng", itemCounts))));
-                charts.getChildren().add(chartCard("Tỷ trọng độ phủ nhà cung cấp",
-                        pieChart("Nhà cung cấp", seriesPairs(suppliers, itemCounts))));
+                TrendChartData data = createTrendChartData(featureService.findAll(module), 0, 1);
+                charts.getChildren().add(chartCard("Biểu đồ cột: Số mặt hàng theo tháng và nhà cung cấp",
+                        barChart("Tháng", "Số mặt hàng", data.periods(), data.series())));
+                charts.getChildren().add(chartCard("Biểu đồ đường: Xu hướng độ phủ nhà cung cấp",
+                        lineChart("Tháng", "Số mặt hàng", data.periods(), data.series())));
+                charts.getChildren().add(chartCard("Biểu đồ miền: Cung ứng theo tháng",
+                        areaChart("Tháng", "Số mặt hàng", data.periods(), data.series())));
+                charts.getChildren().add(chartCard("Biểu đồ hình bánh: Tỷ trọng nhà cung cấp",
+                        pieChart("Nhà cung cấp", seriesPairs(data.dimensions(), data.latestPeriodTotals()))));
             }
             case "UC-15" -> {
                 List<ModuleRow> movementRows = featureService.findAll(module);
@@ -1399,6 +1728,51 @@ public class PageRenderer {
         return charts;
     }
 
+    static TrendChartData createTrendChartData(
+            List<ModuleRow> rows, int periodIndex, int dimensionIndex) {
+        Map<String, Map<String, Integer>> countsByPeriod = new TreeMap<>();
+        for (ModuleRow row : rows) {
+            if (row.values().size() < 3) {
+                throw new IllegalArgumentException("Trend report rows require period, dimension, and count values.");
+            }
+            String period = row.values().get(periodIndex);
+            String dimension = row.values().get(dimensionIndex);
+            int count = parseReportProductCount(row.values().get(2));
+            countsByPeriod.computeIfAbsent(period, ignored -> new LinkedHashMap<>())
+                    .merge(dimension, count, Integer::sum);
+        }
+
+        List<String> periods = List.copyOf(countsByPeriod.keySet());
+        List<String> dimensions = countsByPeriod.values().stream()
+                .flatMap(counts -> counts.keySet().stream())
+                .distinct()
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .toList();
+        Map<String, List<Number>> series = new LinkedHashMap<>();
+        List<Number> latestPeriodTotals = new ArrayList<>();
+        for (String dimension : dimensions) {
+            List<Number> values = periods.stream()
+                    .map(period -> (Number) countsByPeriod.get(period).getOrDefault(dimension, 0))
+                    .toList();
+            series.put(dimension, values);
+            int latestCount = periods.isEmpty()
+                    ? 0
+                    : countsByPeriod.get(periods.get(periods.size() - 1)).getOrDefault(dimension, 0);
+            latestPeriodTotals.add(latestCount);
+        }
+        return new TrendChartData(
+                periods, Collections.unmodifiableMap(series), dimensions, List.copyOf(latestPeriodTotals));
+    }
+
+    private static int parseReportProductCount(String value) {
+        String count = value.trim().split("\\s+", 2)[0];
+        try {
+            return Integer.parseInt(count);
+        } catch (NumberFormatException exception) {
+            throw new IllegalArgumentException("Expected a numeric report count: " + value, exception);
+        }
+    }
+
     private VBox chartCard(String title, Chart chart) {
         VBox card = new VBox(10);
         card.getStyleClass().add("chart-card");
@@ -1422,6 +1796,7 @@ public class PageRenderer {
             Map<String, List<Number>> values) {
         CategoryAxis xAxis = new CategoryAxis();
         xAxis.setLabel(Localization.text(categoryLabel));
+        xAxis.setTickLabelRotation(categories.size() > 5 ? 35 : 0);
         NumberAxis yAxis = new NumberAxis();
         yAxis.setLabel(Localization.text(valueLabel));
         BarChart<String, Number> chart = new BarChart<>(xAxis, yAxis);
@@ -1436,6 +1811,7 @@ public class PageRenderer {
             Map<String, List<Number>> values) {
         CategoryAxis xAxis = new CategoryAxis();
         xAxis.setLabel(Localization.text(categoryLabel));
+        xAxis.setTickLabelRotation(categories.size() > 5 ? 35 : 0);
         NumberAxis yAxis = new NumberAxis();
         yAxis.setLabel(Localization.text(valueLabel));
         LineChart<String, Number> chart = new LineChart<>(xAxis, yAxis);
@@ -1448,6 +1824,7 @@ public class PageRenderer {
             Map<String, List<Number>> values) {
         CategoryAxis xAxis = new CategoryAxis();
         xAxis.setLabel(Localization.text(categoryLabel));
+        xAxis.setTickLabelRotation(categories.size() > 5 ? 35 : 0);
         NumberAxis yAxis = new NumberAxis();
         yAxis.setLabel(Localization.text(valueLabel));
         AreaChart<String, Number> chart = new AreaChart<>(xAxis, yAxis);
@@ -1569,6 +1946,38 @@ public class PageRenderer {
             return (query.isBlank() || searchableRow.contains(query))
                     && criteria.stream().allMatch(searchableRow::contains);
         });
+    }
+
+    private void applyReportFilters(
+            FilteredList<ModuleRow> rows, TextField search, ReportFilters filters) {
+        List<String> columnQueries = filters.fields().stream()
+                .map(this::inputValue)
+                .toList();
+        rows.setPredicate(row -> matchesReportFilters(row, search.getText(), columnQueries));
+    }
+
+    static boolean matchesReportFilters(
+            ModuleRow row, String searchQuery, List<String> columnQueries) {
+        List<String> values = row.values();
+        if (values.size() != columnQueries.size()) {
+            throw new IllegalArgumentException("Report filters must match the report column count.");
+        }
+
+        String searchableRow = values.stream()
+                .map(value -> value + " " + Localization.text(value))
+                .reduce("", (left, right) -> left + " " + right)
+                .toLowerCase(Locale.ROOT);
+        if (!normalize(searchQuery).isBlank() && !searchableRow.contains(normalize(searchQuery))) {
+            return false;
+        }
+        for (int index = 0; index < columnQueries.size(); index++) {
+            String query = normalize(columnQueries.get(index));
+            String value = normalize(values.get(index) + " " + Localization.text(values.get(index)));
+            if (!query.isBlank() && !value.contains(query)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private String inputValue(Node node) {
@@ -2260,8 +2669,7 @@ public class PageRenderer {
         fields.setVgap(12);
         fields.setPadding(new Insets(12, 0, 8, 0));
         List<Node> inputs = new ArrayList<>();
-        List<String> fieldLabels = "UC-04".equals(module.id())
-                ? module.formFields() : module.columns();
+        List<String> fieldLabels = module.formFields();
         for (int index = 0; index < fieldLabels.size(); index++) {
             Node input;
             if ("UC-09".equals(module.id()) && index == 5) {

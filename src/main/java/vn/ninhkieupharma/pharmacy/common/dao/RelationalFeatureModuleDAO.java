@@ -200,9 +200,10 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
                     ORDER BY p.product_code
                     """);
             case "UC-09" -> query(moduleId, """
-                    SELECT supplier_id, supplier_code, supplier_name, COALESCE(phone, ''),
-                           COALESCE(email, ''), COALESCE(address, ''), IF(is_active, 'ACTIVE', 'INACTIVE')
-                    FROM suppliers ORDER BY supplier_id
+                    SELECT s.supplier_id, s.supplier_code, s.supplier_name, COALESCE(s.phone, ''),
+                           COALESCE(s.email, ''), COALESCE(s.address, ''), IF(s.is_active, 'ACTIVE', 'INACTIVE'),
+                           (SELECT COUNT(*) FROM supplier_products sp WHERE sp.supplier_id = s.supplier_id)
+                    FROM suppliers s ORDER BY s.supplier_id
                     """);
             case "UC-10" -> query(moduleId, """
                     WITH quarters AS (
@@ -1127,8 +1128,16 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
         }
         if ("UC-09".equals(moduleId)) {
             transaction(connection -> {
-                execute(connection, "DELETE FROM supplier_products WHERE supplier_id = ?",
-                        statement -> statement.setLong(1, id));
+                try (PreparedStatement statement = connection.prepareStatement(
+                        "SELECT EXISTS (SELECT 1 FROM supplier_products WHERE supplier_id = ?)")) {
+                    statement.setLong(1, id);
+                    try (ResultSet resultSet = statement.executeQuery()) {
+                        if (resultSet.next() && resultSet.getBoolean(1)) {
+                            throw new IllegalArgumentException(
+                                    "Không thể xóa nhà cung cấp vì nhà cung cấp này đang cung cấp sản phẩm.");
+                        }
+                    }
+                }
                 execute(connection, "DELETE FROM suppliers WHERE supplier_id = ?",
                         statement -> statement.setLong(1, id));
                 return null;

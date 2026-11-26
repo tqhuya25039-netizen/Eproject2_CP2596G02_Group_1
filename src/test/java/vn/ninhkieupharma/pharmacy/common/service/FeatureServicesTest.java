@@ -43,6 +43,32 @@ class FeatureServicesTest {
     }
 
     @Test
+    void supplierRowsIncludeProductCountsWithoutAddingAFormField() {
+        FeatureServices services = new FeatureServices();
+        ModuleDefinition suppliersModule = module("UC-09");
+
+        assertEquals(7, suppliersModule.columns().size());
+        assertEquals(6, suppliersModule.formFields().size());
+        Map<String, String> productCounts = services.forModule(suppliersModule).findAll(suppliersModule).stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        row -> row.values().get(1), row -> row.values().get(6)));
+
+        assertEquals("3", productCounts.get("Dược phẩm Hậu Giang"));
+        assertEquals("2", productCounts.get("Thiết bị y tế Mekong"));
+        assertEquals("1", productCounts.get("Phân phối An Khang"));
+        assertEquals("0", productCounts.get("Dược liệu Tây Đô"));
+
+        services.forModule(suppliersModule).create(suppliersModule,
+                List.of("NCC999", "Nhà cung cấp mới", "", "", "", "ACTIVE"));
+        var newSupplier = services.forModule(suppliersModule).findAll(suppliersModule).stream()
+                .filter(row -> row.values().get(0).equals("NCC999"))
+                .findFirst()
+                .orElseThrow();
+        assertEquals(7, newSupplier.values().size());
+        assertEquals("0", newSupplier.values().get(6));
+    }
+
+    @Test
     void readOnlyReportsShareTheirOwningDomainService() {
         FeatureServices services = new FeatureServices();
         REPORT_OWNERS.forEach((reportId, ownerId) ->
