@@ -42,7 +42,7 @@ class PromotionMySqlIntegrationTest {
                 throw new IllegalStateException("The promotion scenario requires a disposable test database.");
             }
             RelationalFeatureModuleDAO repository =
-                    new RelationalFeatureModuleDAO(new User(1, "admin_demo", "", UserRole.ADMIN, true));
+                    new RelationalFeatureModuleDAO(new User(2, "admin_demo", "", UserRole.ADMIN, true));
             SalesCheckoutDAO sales = new SalesCheckoutDAO();
             LocalDate today = LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh"));
             LocalDate yesterday = today.minusDays(1);
@@ -72,9 +72,9 @@ class PromotionMySqlIntegrationTest {
             var request = new SaleOrderRequest(Optional.of(customer.id()),
                     List.of(new SaleLineRequest(product.id(), BigDecimal.ONE, "", 1)),
                     "", null, "", "", "", "", 1, List.of());
-            var pending = sales.createPendingSale(2, request);
+            var pending = sales.createPendingSale(1, request);
             java.util.function.Supplier<SaleReceipt> quote = () ->
-                    sales.quotePendingSale(2, pending.id(), pending.revision(), request).amounts();
+                    sales.quotePendingSale(1, pending.id(), pending.revision(), request).amounts();
 
             assertQuote(quote.get(), "CURRENT-FIRST", "2400.00", "1000.00", 8);
             var module = ModuleCatalog.MODULES.stream().filter(row -> row.id().equals("UC-18"))

@@ -59,7 +59,7 @@ class CategoryDeletionMySqlIntegrationTest {
                     .filter(module -> module.id().equals("UC-07"))
                     .findFirst().orElseThrow();
             var services = new FeatureServices(new RelationalFeatureModuleDAO(
-                    new User(1, "admin_demo", "", UserRole.ADMIN, true)));
+                    new User(2, "admin_demo", "", UserRole.ADMIN, true)));
             var service = services.forModule(categories);
             var rows = service.findAll(categories);
             for (long categoryId : List.of(91001L, 91002L)) {

@@ -648,10 +648,9 @@ public final class SalesCheckoutDAO {
         try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT e.employee_id
                 FROM employees e
-                JOIN users u ON u.user_id = e.user_id
-                JOIN roles r ON r.role_id = u.role_id
-                WHERE u.user_id = ? AND u.is_active = 1 AND r.role_code = 'STAFF'
-                  AND e.employment_status = 'ACTIVE'
+                JOIN roles r ON r.role_id = e.role_id
+                WHERE e.employee_id = ? AND e.is_active = 1 AND r.role_code = 'STAFF'
+                  AND e.employee_code IS NOT NULL AND e.employment_status = 'ACTIVE'
                 """)) {
             statement.setLong(1, userId);
             try (ResultSet resultSet = statement.executeQuery()) {

@@ -40,7 +40,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @EnabledIfEnvironmentVariable(named = MySqlTestSchema.ENABLED_ENV, matches = "true")
 class SalesCheckoutMySqlIntegrationTest {
-    private static final long FIRST_STAFF = 2;
+    private static final long FIRST_STAFF = 1;
     private static final long SECOND_STAFF = 3;
     private static final long ROW_ID_PREFIX = 0x4e4b504841524d41L;
     private static final UUID CUSTOMER = new UUID(ROW_ID_PREFIX, 1);
@@ -59,10 +59,10 @@ class SalesCheckoutMySqlIntegrationTest {
         checkout = new SalesCheckoutDAO(schema::connect);
         LocalDate today = LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh"));
         schema.executeScript("""
-                INSERT INTO users (user_id, role_id, username, password_hash, is_active)
-                VALUES (3, 2, 'second_staff_fixture', 'test-fixture', 1);
-                INSERT INTO employees (employee_id, user_id, employee_code, full_name, hire_date)
-                VALUES (2, 3, 'NV0002', 'Second checkout staff', '%1$s');
+                INSERT INTO employees (employee_id, role_id, username, password_hash, is_active, account_created_at,
+                    employee_code, full_name, hire_date)
+                VALUES (3, 2, 'second_staff_fixture', 'test-fixture', 1, CURRENT_TIMESTAMP,
+                    'NV0002', 'Second checkout staff', '%1$s');
                 UPDATE customers SET loyalty_points = 20 WHERE customer_id = 1;
                 UPDATE products SET selling_price = 5000 WHERE product_id = 1;
                 UPDATE inventory_batches SET expiry_date = '%2$s', quantity_on_hand = 3 WHERE batch_id = 1;
@@ -309,7 +309,7 @@ class SalesCheckoutMySqlIntegrationTest {
         assertEquals("1:-3.000,3:-2.000", query("""
                 SELECT GROUP_CONCAT(CONCAT(batch_id, ':', quantity_delta) ORDER BY batch_id)
                 FROM inventory_movements
-                WHERE source_type = 'SALE' AND source_id = ? AND movement_type = 'SALE' AND created_by = 2
+                WHERE source_type = 'SALE' AND source_id = ? AND movement_type = 'SALE' AND created_by = 1
                 """, id(pending)));
     }
 
@@ -575,7 +575,7 @@ class SalesCheckoutMySqlIntegrationTest {
                 throw new IllegalStateException("Customer deletion tests require an isolated schema.");
             }
             var staff = new RelationalFeatureModuleDAO(new User(FIRST_STAFF, "staff_demo", "", UserRole.STAFF, true));
-            var admin = new RelationalFeatureModuleDAO(new User(1, "admin_demo", "", UserRole.ADMIN, true));
+            var admin = new RelationalFeatureModuleDAO(new User(2, "admin_demo", "", UserRole.ADMIN, true));
             UUID unused = new UUID(ROW_ID_PREFIX, 2);
             assertThrows(SecurityException.class, () -> staff.deleteCustomerWithoutSales(unused));
             admin.deleteCustomerWithoutSales(unused);

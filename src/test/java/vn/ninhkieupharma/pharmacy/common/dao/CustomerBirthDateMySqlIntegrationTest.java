@@ -22,8 +22,8 @@ class CustomerBirthDateMySqlIntegrationTest {
 
     public static class BirthDateScenario {
         public static void main(String[] args) {
-            var staff = new RelationalFeatureModuleDAO(new User(2, "staff_demo", "", UserRole.STAFF, true));
-            var admin = new RelationalFeatureModuleDAO(new User(1, "admin_demo", "", UserRole.ADMIN, true));
+            var staff = new RelationalFeatureModuleDAO(new User(1, "staff_demo", "", UserRole.STAFF, true));
+            var admin = new RelationalFeatureModuleDAO(new User(2, "admin_demo", "", UserRole.ADMIN, true));
             var existing = staff.findCustomersAvailableForSale().stream()
                     .filter(row -> row.values().get(1).equals("0910000001"))
                     .findFirst().orElseThrow();

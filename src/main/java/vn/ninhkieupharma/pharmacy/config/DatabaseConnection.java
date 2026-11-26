@@ -8,13 +8,13 @@ import java.util.Properties;
 public final class DatabaseConnection {
     private static final String SCHEMA_MISMATCH_PREFIX = "Database schema is missing required";
     private static final String SCHEMA_SETUP_HINT = "Initialize a new database with "
-            + "environment/01_schema_quan_ly_cua_hang.sql and set PHARMACY_DB_NAME to its name.";
+            + "environment/01_schema_nkp_db.sql and set PHARMACY_DB_NAME to its name.";
     private static final String DEFAULT_HOST = "127.0.0.1";
     private static final int DEFAULT_PORT = 3306;
-    private static final String DEFAULT_DATABASE = "quan_ly_cua_hang";
+    private static final String DEFAULT_DATABASE = "nkp_db";
     private static final java.util.Set<String> REQUIRED_TABLES = java.util.Set.of(
-            "roles", "users", "employees", "shifts", "employee_availabilities",
-            "work_schedules", "schedule_assignments", "attendance_records",
+            "roles", "employees", "shifts", "employee_availabilities",
+            "work_schedules", "schedule_assignments",
             "product_categories", "suppliers", "products", "supplier_products",
             "warehouse_locations", "inventory_batches", "goods_receipts",
             "goods_receipt_items", "goods_receipt_draft_items", "stocktakes", "stocktake_items",
@@ -22,6 +22,8 @@ public final class DatabaseConnection {
             "customer_allergies", "loyalty_programs", "promotions", "sales",
             "promotion_point_tiers", "sale_items", "inventory_movements", "product_ingredients");
     private static final java.util.Map<String, java.util.Set<String>> REQUIRED_COLUMNS = java.util.Map.of(
+            "employees", java.util.Set.of("role_id", "username", "password_hash", "is_active", "account_created_at"),
+            "schedule_assignments", java.util.Set.of("has_attendance", "check_in_at", "check_out_at", "attendance_note"),
             "customers", java.util.Set.of("is_blocked", "block_reason", "date_of_birth",
                     "date_of_birth_year", "date_of_birth_month"),
             "products", java.util.Set.of("selling_price", "minimum_age_years"),

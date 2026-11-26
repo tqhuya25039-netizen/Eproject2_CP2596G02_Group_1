@@ -54,7 +54,7 @@ class SalesReportMySqlIntegrationTest {
 
     public static final class ReportChecks {
         public static void main(String[] args) {
-            User admin = new User(1, "report_fixture", "", UserRole.ADMIN, true);
+            User admin = new User(2, "report_fixture", "", UserRole.ADMIN, true);
             SalesService service = new SalesService(new RelationalFeatureModuleDAO(admin));
 
             SalesReport.FilterOptions options = service.salesReportOptions();

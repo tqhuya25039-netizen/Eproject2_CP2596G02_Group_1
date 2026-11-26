@@ -22,17 +22,17 @@ public final class UserDAOImpl implements UserDAO {
     }
 
     private void prepareSampleAccount() {
-        String updateSql = "UPDATE users SET password_hash = ? "
+        String updateSql = "UPDATE employees SET password_hash = ? "
                 + "WHERE username = ? AND password_hash = ?";
         try (Connection connection = DatabaseConnection.getConnection()) {
             String currentHash;
             try (PreparedStatement statement = connection.prepareStatement(
-                    "SELECT password_hash FROM users WHERE username = ?")) {
+                    "SELECT password_hash FROM employees WHERE username = ?")) {
                 statement.setString(1, SAMPLE_USERNAME);
                 try (ResultSet resultSet = statement.executeQuery()) {
                     if (!resultSet.next()) {
-                        throw new IllegalStateException("The `admin_demo` account is missing from `users`. "
-                                + "Run environment/01_schema_quan_ly_cua_hang.sql before launching the application.");
+                        throw new IllegalStateException("The `admin_demo` account is missing from `employees`. "
+                                + "Run environment/01_schema_nkp_db.sql before launching the application.");
                     }
                     currentHash = resultSet.getString("password_hash");
                 }
@@ -51,11 +51,11 @@ public final class UserDAOImpl implements UserDAO {
                 }
             }
             if (findByUsername(SAMPLE_USERNAME).isEmpty()) {
-                throw new IllegalStateException("The `admin_demo` account is missing from `users`. "
-                        + "Run environment/01_schema_quan_ly_cua_hang.sql before launching the application.");
+                throw new IllegalStateException("The `admin_demo` account is missing from `employees`. "
+                        + "Run environment/01_schema_nkp_db.sql before launching the application.");
             }
         } catch (SQLException exception) {
-            throw new DataAccessException("Could not prepare the sample account in the existing `users` table.",
+            throw new DataAccessException("Could not prepare the sample account in the `employees` table.",
                     exception);
         }
     }
@@ -67,10 +67,10 @@ public final class UserDAOImpl implements UserDAO {
     @Override
     public Optional<User> findByUsername(String username) {
         String sql = """
-                SELECT u.user_id, u.username, u.password_hash, u.is_active, r.role_code
-                FROM users u
-                JOIN roles r ON r.role_id = u.role_id
-                WHERE u.username = ?
+                SELECT e.employee_id, e.username, e.password_hash, e.is_active, r.role_code
+                FROM employees e
+                JOIN roles r ON r.role_id = e.role_id
+                WHERE e.username = ?
                 """;
         try (Connection connection = DatabaseConnection.getConnection();
              PreparedStatement statement = connection.prepareStatement(sql)) {
@@ -80,7 +80,7 @@ public final class UserDAOImpl implements UserDAO {
                     return Optional.empty();
                 }
                 return Optional.of(new User(
-                        resultSet.getLong("user_id"),
+                        resultSet.getLong("employee_id"),
                         resultSet.getString("username"),
                         resultSet.getString("password_hash"),
                         UserRole.valueOf(resultSet.getString("role_code").toUpperCase(java.util.Locale.ROOT)),

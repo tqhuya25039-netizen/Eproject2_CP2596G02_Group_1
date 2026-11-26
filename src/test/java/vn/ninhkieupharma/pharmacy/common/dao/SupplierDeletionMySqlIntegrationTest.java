@@ -31,7 +31,7 @@ class SupplierDeletionMySqlIntegrationTest {
             }
 
             var dao = new RelationalFeatureModuleDAO(
-                    new User(1, "admin_demo", "", UserRole.ADMIN, true));
+                    new User(2, "admin_demo", "", UserRole.ADMIN, true));
             var linkedSupplier = dao.findAll("UC-09").stream()
                     .filter(row -> row.id().getLeastSignificantBits() == 1)
                     .findFirst()

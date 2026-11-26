@@ -17,6 +17,7 @@ final class SalesReportDAO {
             SELECT 'EMPLOYEE' AS dimension, employee_id AS option_id, employee_code AS option_code,
                    full_name AS option_name
             FROM employees
+            WHERE employee_code IS NOT NULL
             UNION ALL
             SELECT 'PRODUCT', product_id, product_code, product_name
             FROM products

@@ -16,7 +16,7 @@ import java.util.stream.Collectors;
 
 final class MySqlTestSchema implements AutoCloseable {
     static final String ENABLED_ENV = "PHARMACY_DB_WRITE_INTEGRATION_TEST";
-    static final Path CURRENT_SQL = Path.of("environment", "01_schema_quan_ly_cua_hang.sql");
+    static final Path CURRENT_SQL = Path.of("environment", "01_schema_nkp_db.sql");
     private static final String JDBC_OPTIONS =
             "?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Ho_Chi_Minh";
 
@@ -85,8 +85,8 @@ final class MySqlTestSchema implements AutoCloseable {
             for (String command : commands.split(";\\h*(?:\\R|$)")) {
                 String statementSql = command.strip();
                 if (statementSql.isEmpty()
-                        || statementSql.equalsIgnoreCase("USE quan_ly_cua_hang")
-                        || statementSql.matches("(?i)CREATE DATABASE IF NOT EXISTS quan_ly_cua_hang\\s+"
+                        || statementSql.equalsIgnoreCase("USE nkp_db")
+                        || statementSql.matches("(?i)CREATE DATABASE IF NOT EXISTS nkp_db\\s+"
                                 + "CHARACTER SET utf8mb4\\s+COLLATE utf8mb4_unicode_ci")) {
                     continue;
                 }

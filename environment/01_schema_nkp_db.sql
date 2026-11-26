@@ -2,11 +2,11 @@
 -- Yeu cau: MySQL 8.0.16+ (de ap dung day du cac CHECK constraint).
 -- Chay tren mot database moi; khong chay lai tren database da co cac bang nay.
 
-CREATE DATABASE IF NOT EXISTS quan_ly_cua_hang
+CREATE DATABASE IF NOT EXISTS nkp_db
   CHARACTER SET utf8mb4
   COLLATE utf8mb4_unicode_ci;
 
-USE quan_ly_cua_hang;
+USE nkp_db;
 SET NAMES utf8mb4;
 
 CREATE TABLE roles (
@@ -19,37 +19,34 @@ CREATE TABLE roles (
     UNIQUE KEY uq_roles_role_code (role_code)
 ) ENGINE=InnoDB;
 
-CREATE TABLE users (
-    user_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    role_id BIGINT UNSIGNED NOT NULL,
-    username VARCHAR(50) NOT NULL,
-    password_hash VARCHAR(255) NOT NULL,
-    is_active TINYINT(1) NOT NULL DEFAULT 1,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (user_id),
-    UNIQUE KEY uq_users_username (username),
-    CONSTRAINT fk_users_role
-        FOREIGN KEY (role_id) REFERENCES roles (role_id),
-    CONSTRAINT chk_users_is_active CHECK (is_active IN (0, 1))
-) ENGINE=InnoDB;
-
 CREATE TABLE employees (
     employee_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    user_id BIGINT UNSIGNED NULL,
-    employee_code VARCHAR(20) NOT NULL,
-    full_name VARCHAR(120) NOT NULL,
+    employee_code VARCHAR(20) NULL,
+    full_name VARCHAR(120) NULL,
     phone VARCHAR(20) NULL,
     email VARCHAR(120) NULL,
-    hire_date DATE NOT NULL,
+    hire_date DATE NULL,
     employment_status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+    role_id BIGINT UNSIGNED NULL,
+    username VARCHAR(50) NULL,
+    password_hash VARCHAR(255) NULL,
+    is_active TINYINT(1) NOT NULL DEFAULT 0,
+    account_created_at TIMESTAMP NULL DEFAULT NULL,
     PRIMARY KEY (employee_id),
-    UNIQUE KEY uq_employees_user_id (user_id),
     UNIQUE KEY uq_employees_employee_code (employee_code),
     UNIQUE KEY uq_employees_email (email),
-    CONSTRAINT fk_employees_user
-        FOREIGN KEY (user_id) REFERENCES users (user_id),
+    UNIQUE KEY uq_employees_username (username),
+    CONSTRAINT fk_employees_role
+        FOREIGN KEY (role_id) REFERENCES roles (role_id),
     CONSTRAINT chk_employees_status
-        CHECK (employment_status IN ('ACTIVE', 'ON_LEAVE', 'INACTIVE'))
+        CHECK (employment_status IN ('ACTIVE', 'ON_LEAVE', 'INACTIVE')),
+    CONSTRAINT chk_employees_account_active CHECK (is_active IN (0, 1)),
+    CONSTRAINT chk_employees_account CHECK (
+        (username IS NULL AND role_id IS NULL AND password_hash IS NULL AND is_active = 0)
+        OR (username IS NOT NULL AND role_id IS NOT NULL AND password_hash IS NOT NULL)),
+    CONSTRAINT chk_employees_profile CHECK (
+        (employee_code IS NOT NULL AND full_name IS NOT NULL AND hire_date IS NOT NULL)
+        OR (employee_code IS NULL AND full_name IS NULL AND hire_date IS NULL AND username IS NOT NULL))
 ) ENGINE=InnoDB;
 
 CREATE TABLE shifts (
@@ -88,7 +85,7 @@ CREATE TABLE work_schedules (
     PRIMARY KEY (schedule_id),
     UNIQUE KEY uq_work_schedules_week (week_start_date),
     CONSTRAINT fk_work_schedules_creator
-        FOREIGN KEY (created_by) REFERENCES users (user_id),
+        FOREIGN KEY (created_by) REFERENCES employees (employee_id),
     CONSTRAINT chk_work_schedules_status
         CHECK (status IN ('DRAFT', 'PUBLISHED', 'CANCELLED'))
 ) ENGINE=InnoDB;
@@ -101,6 +98,10 @@ CREATE TABLE schedule_assignments (
     work_date DATE NOT NULL,
     status VARCHAR(20) NOT NULL DEFAULT 'PLANNED',
     note VARCHAR(255) NULL,
+    has_attendance BOOLEAN NOT NULL DEFAULT FALSE,
+    check_in_at DATETIME NULL,
+    check_out_at DATETIME NULL,
+    attendance_note VARCHAR(255) NULL,
     PRIMARY KEY (assignment_id),
     UNIQUE KEY uq_assignment_slot (schedule_id, employee_id, work_date, shift_id),
     KEY ix_assignment_employee_date (employee_id, work_date),
@@ -111,19 +112,10 @@ CREATE TABLE schedule_assignments (
     CONSTRAINT fk_assignments_shift
         FOREIGN KEY (shift_id) REFERENCES shifts (shift_id),
     CONSTRAINT chk_assignments_status
-        CHECK (status IN ('PLANNED', 'CANCELLED', 'COMPLETED'))
-) ENGINE=InnoDB;
-
-CREATE TABLE attendance_records (
-    attendance_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    assignment_id BIGINT UNSIGNED NOT NULL,
-    check_in_at DATETIME NULL,
-    check_out_at DATETIME NULL,
-    note VARCHAR(255) NULL,
-    PRIMARY KEY (attendance_id),
-    UNIQUE KEY uq_attendance_assignment (assignment_id),
-    CONSTRAINT fk_attendance_assignment
-        FOREIGN KEY (assignment_id) REFERENCES schedule_assignments (assignment_id),
+        CHECK (status IN ('PLANNED', 'CANCELLED', 'COMPLETED')),
+    CONSTRAINT chk_assignments_attendance CHECK (
+        has_attendance = TRUE OR (has_attendance = FALSE AND check_in_at IS NULL
+            AND check_out_at IS NULL AND attendance_note IS NULL)),
     CONSTRAINT chk_attendance_time
         CHECK (check_out_at IS NULL OR check_in_at IS NOT NULL AND check_out_at >= check_in_at)
 ) ENGINE=InnoDB;
@@ -241,7 +233,7 @@ CREATE TABLE goods_receipts (
     CONSTRAINT fk_receipts_supplier
         FOREIGN KEY (supplier_id) REFERENCES suppliers (supplier_id),
     CONSTRAINT fk_receipts_user
-        FOREIGN KEY (received_by) REFERENCES users (user_id),
+        FOREIGN KEY (received_by) REFERENCES employees (employee_id),
     CONSTRAINT chk_receipts_status CHECK (status IN ('RECEIVED', 'CANCELLED'))
 ) ENGINE=InnoDB;
 
@@ -293,7 +285,7 @@ CREATE TABLE stocktakes (
     CONSTRAINT fk_stocktakes_location
         FOREIGN KEY (location_id) REFERENCES warehouse_locations (location_id),
     CONSTRAINT fk_stocktakes_user
-        FOREIGN KEY (created_by) REFERENCES users (user_id),
+        FOREIGN KEY (created_by) REFERENCES employees (employee_id),
     CONSTRAINT chk_stocktakes_status
         CHECK (status IN ('DRAFT', 'COMPLETED', 'CANCELLED'))
 ) ENGINE=InnoDB;
@@ -502,7 +494,7 @@ CREATE TABLE inventory_movements (
     CONSTRAINT fk_movements_batch
         FOREIGN KEY (batch_id) REFERENCES inventory_batches (batch_id),
     CONSTRAINT fk_movements_user
-        FOREIGN KEY (created_by) REFERENCES users (user_id),
+        FOREIGN KEY (created_by) REFERENCES employees (employee_id),
     CONSTRAINT chk_movements_type
         CHECK (movement_type IN ('RECEIPT', 'SALE', 'ADJUSTMENT', 'DAMAGED', 'EXPIRED')),
     CONSTRAINT chk_movements_quantity CHECK (quantity_delta <> 0),
@@ -521,22 +513,23 @@ INSERT INTO roles (role_id, role_code, role_name, description) VALUES
 
 -- password_hash la gia tri mau, khong phai hash dang nhap hop le.
 -- Hay thay bang bcrypt/Argon2 hash duoc tao boi ung dung truoc khi su dung that.
-INSERT INTO users (user_id, role_id, username, password_hash, is_active) VALUES
-    (1, 1, 'admin_demo', 'REPLACE_WITH_REAL_PASSWORD_HASH', 1),
-    (2, 2, 'staff_demo', 'REPLACE_WITH_REAL_PASSWORD_HASH', 1),
-    (1001, 2, 'staff_khang_demo', 'REPLACE_WITH_REAL_PASSWORD_HASH', 1),
-    (1002, 2, 'staff_vy_demo', 'REPLACE_WITH_REAL_PASSWORD_HASH', 1),
-    (1003, 2, 'staff_nam_demo', 'REPLACE_WITH_REAL_PASSWORD_HASH', 1),
-    (1004, 2, 'staff_hanh_demo', 'REPLACE_WITH_REAL_PASSWORD_HASH', 0);
+INSERT INTO employees (employee_id, role_id, username, password_hash, is_active, account_created_at) VALUES
+    (2, 1, 'admin_demo', 'REPLACE_WITH_REAL_PASSWORD_HASH', 1, CURRENT_TIMESTAMP);
 
 INSERT INTO employees
-    (employee_id, user_id, employee_code, full_name, phone, email, hire_date, employment_status)
+    (employee_id, employee_code, full_name, phone, email, hire_date, employment_status,
+     role_id, username, password_hash, is_active, account_created_at)
 VALUES
-    (1, 2, 'NV0001', 'Nguyen Thi An', '0900000001', 'an.demo@example.com', '2025-01-15', 'ACTIVE'),
-    (1001, 1001, 'NV1001', 'Trần Minh Khang', '0900000101', 'khang.demo@example.com', '2024-08-05', 'ACTIVE'),
-    (1002, 1002, 'NV1002', 'Lê Thảo Vy', '0900000102', 'vy.demo@example.com', '2025-02-10', 'ACTIVE'),
-    (1003, 1003, 'NV1003', 'Phạm Hoài Nam', '0900000103', 'nam.demo@example.com', '2025-05-12', 'ACTIVE'),
-    (1004, 1004, 'NV1004', 'Võ Ngọc Hạnh', '0900000104', 'hanh.demo@example.com', '2025-08-18', 'ON_LEAVE');
+    (1, 'NV0001', 'Nguyen Thi An', '0900000001', 'an.demo@example.com', '2025-01-15', 'ACTIVE',
+     2, 'staff_demo', 'REPLACE_WITH_REAL_PASSWORD_HASH', 1, CURRENT_TIMESTAMP),
+    (1001, 'NV1001', 'Trần Minh Khang', '0900000101', 'khang.demo@example.com', '2024-08-05', 'ACTIVE',
+     2, 'staff_khang_demo', 'REPLACE_WITH_REAL_PASSWORD_HASH', 1, CURRENT_TIMESTAMP),
+    (1002, 'NV1002', 'Lê Thảo Vy', '0900000102', 'vy.demo@example.com', '2025-02-10', 'ACTIVE',
+     2, 'staff_vy_demo', 'REPLACE_WITH_REAL_PASSWORD_HASH', 1, CURRENT_TIMESTAMP),
+    (1003, 'NV1003', 'Phạm Hoài Nam', '0900000103', 'nam.demo@example.com', '2025-05-12', 'ACTIVE',
+     2, 'staff_nam_demo', 'REPLACE_WITH_REAL_PASSWORD_HASH', 1, CURRENT_TIMESTAMP),
+    (1004, 'NV1004', 'Võ Ngọc Hạnh', '0900000104', 'hanh.demo@example.com', '2025-08-18', 'ON_LEAVE',
+     2, 'staff_hanh_demo', 'REPLACE_WITH_REAL_PASSWORD_HASH', 0, CURRENT_TIMESTAMP);
 
 INSERT INTO shifts (shift_id, shift_name, start_time, end_time, break_minutes, is_active) VALUES
     (1, 'Ca sang', '08:00:00', '12:00:00', 0, 1),
@@ -549,39 +542,40 @@ VALUES
     (1, 1, '2026-11-02', '08:00:00', '16:00:00', 'Dang ky ca cho tuan tiep theo');
 
 INSERT INTO work_schedules (schedule_id, week_start_date, status, created_by) VALUES
-    (1, '2026-11-02', 'PUBLISHED', 1),
-    (1001, '2026-11-09', 'PUBLISHED', 1),
-    (1002, '2026-11-16', 'PUBLISHED', 1),
-    (1003, '2026-11-23', 'PUBLISHED', 1),
-    (1004, '2026-11-30', 'DRAFT', 1);
+    (1, '2026-11-02', 'PUBLISHED', 2),
+    (1001, '2026-11-09', 'PUBLISHED', 2),
+    (1002, '2026-11-16', 'PUBLISHED', 2),
+    (1003, '2026-11-23', 'PUBLISHED', 2),
+    (1004, '2026-11-30', 'DRAFT', 2);
 
 INSERT INTO schedule_assignments
-    (assignment_id, schedule_id, employee_id, shift_id, work_date, status, note)
+    (assignment_id, schedule_id, employee_id, shift_id, work_date, status, note,
+     has_attendance, check_in_at, check_out_at, attendance_note)
 VALUES
-    (1, 1, 1, 1, '2026-11-02', 'COMPLETED', NULL),
-    (1001, 1001, 1,    1,    '2026-11-09', 'COMPLETED', NULL),
-    (1002, 1001, 1001, 2,    '2026-11-09', 'COMPLETED', NULL),
-    (1003, 1001, 1003, 1001, '2026-11-10', 'COMPLETED', 'Bàn giao quầy cuối ngày'),
-    (1004, 1001, 1002, 1,    '2026-11-12', 'COMPLETED', NULL),
-    (1005, 1001, 1001, 2,    '2026-11-14', 'COMPLETED', 'Tăng cường cuối tuần'),
-    (1006, 1001, 1003, 1001, '2026-11-14', 'COMPLETED', NULL),
-    (1007, 1002, 1002, 1,    '2026-11-16', 'COMPLETED', NULL),
-    (1008, 1002, 1,    2,    '2026-11-16', 'COMPLETED', NULL),
-    (1009, 1002, 1004, 1001, '2026-11-17', 'COMPLETED', NULL),
-    (1010, 1002, 1003, 1,    '2026-11-18', 'COMPLETED', NULL),
-    (1011, 1002, 1004, 2,    '2026-11-19', 'CANCELLED', 'Đổi ca trước ngày nghỉ phép'),
-    (1012, 1002, 1001, 2,    '2026-11-19', 'COMPLETED', 'Nhận ca thay'),
-    (1013, 1002, 1002, 1,    '2026-11-21', 'PLANNED',   'Vắng mặt có báo trước'),
-    (1014, 1002, 1,    1,    '2026-11-21', 'COMPLETED', 'Bổ sung nhân sự ca sáng'),
-    (1015, 1002, 1003, 1001, '2026-11-21', 'COMPLETED', NULL),
-    (1016, 1003, 1001, 1,    '2026-11-23', 'COMPLETED', NULL),
-    (1017, 1003, 1002, 2,    '2026-11-23', 'COMPLETED', NULL),
-    (1018, 1003, 1003, 1001, '2026-11-23', 'COMPLETED', NULL),
-    (1019, 1003, 1,    1,    '2026-11-24', 'COMPLETED', NULL),
-    (1020, 1003, 1001, 1001, '2026-11-24', 'PLANNED',   NULL),
-    (1021, 1003, 1002, 1,    '2026-11-25', 'PLANNED',   NULL),
-    (1022, 1003, 1003, 2,    '2026-11-26', 'PLANNED',   NULL),
-    (1023, 1003, 1,    1,    '2026-11-28', 'PLANNED',   'Ca cuối tuần');
+    (1, 1, 1, 1, '2026-11-02', 'COMPLETED', NULL, TRUE, '2026-11-02 08:02:00', '2026-11-02 12:05:00', 'Nhan vien den muon 2 phut'),
+    (1001, 1001, 1,    1,    '2026-11-09', 'COMPLETED', NULL, TRUE, '2026-11-09 07:57:00', '2026-11-09 12:02:00', NULL),
+    (1002, 1001, 1001, 2,    '2026-11-09', 'COMPLETED', NULL, TRUE, '2026-11-09 12:59:00', '2026-11-09 17:04:00', NULL),
+    (1003, 1001, 1003, 1001, '2026-11-10', 'COMPLETED', 'Bàn giao quầy cuối ngày', TRUE, '2026-11-10 17:06:00', '2026-11-10 21:04:00', 'Đến muộn 6 phút'),
+    (1004, 1001, 1002, 1,    '2026-11-12', 'COMPLETED', NULL, TRUE, '2026-11-12 07:59:00', '2026-11-12 12:01:00', NULL),
+    (1005, 1001, 1001, 2,    '2026-11-14', 'COMPLETED', 'Tăng cường cuối tuần', TRUE, '2026-11-14 12:55:00', '2026-11-14 17:06:00', NULL),
+    (1006, 1001, 1003, 1001, '2026-11-14', 'COMPLETED', NULL, TRUE, '2026-11-14 16:59:00', '2026-11-14 21:03:00', NULL),
+    (1007, 1002, 1002, 1,    '2026-11-16', 'COMPLETED', NULL, TRUE, '2026-11-16 07:54:00', '2026-11-16 12:04:00', NULL),
+    (1008, 1002, 1,    2,    '2026-11-16', 'COMPLETED', NULL, TRUE, '2026-11-16 13:09:00', '2026-11-16 17:09:00', 'Đến muộn 9 phút'),
+    (1009, 1002, 1004, 1001, '2026-11-17', 'COMPLETED', NULL, TRUE, '2026-11-17 16:55:00', '2026-11-17 21:00:00', NULL),
+    (1010, 1002, 1003, 1,    '2026-11-18', 'COMPLETED', NULL, TRUE, '2026-11-18 07:58:00', '2026-11-18 11:46:00', 'Về sớm đã xin phép'),
+    (1011, 1002, 1004, 2,    '2026-11-19', 'CANCELLED', 'Đổi ca trước ngày nghỉ phép', FALSE, NULL, NULL, NULL),
+    (1012, 1002, 1001, 2,    '2026-11-19', 'COMPLETED', 'Nhận ca thay', TRUE, '2026-11-19 12:57:00', '2026-11-19 17:08:00', 'Bàn giao sau ca'),
+    (1013, 1002, 1002, 1,    '2026-11-21', 'PLANNED',   'Vắng mặt có báo trước', TRUE, NULL, NULL, 'Có báo nghỉ do việc gia đình'),
+    (1014, 1002, 1,    1,    '2026-11-21', 'COMPLETED', 'Bổ sung nhân sự ca sáng', TRUE, '2026-11-21 07:55:00', '2026-11-21 12:05:00', NULL),
+    (1015, 1002, 1003, 1001, '2026-11-21', 'COMPLETED', NULL, TRUE, '2026-11-21 16:57:00', '2026-11-21 21:06:00', NULL),
+    (1016, 1003, 1001, 1,    '2026-11-23', 'COMPLETED', NULL, TRUE, '2026-11-23 07:59:00', '2026-11-23 12:03:00', NULL),
+    (1017, 1003, 1002, 2,    '2026-11-23', 'COMPLETED', NULL, TRUE, '2026-11-23 13:03:00', '2026-11-23 17:05:00', 'Đến muộn 3 phút'),
+    (1018, 1003, 1003, 1001, '2026-11-23', 'COMPLETED', NULL, TRUE, '2026-11-23 16:57:00', '2026-11-23 21:03:00', NULL),
+    (1019, 1003, 1,    1,    '2026-11-24', 'COMPLETED', NULL, TRUE, '2026-11-24 07:58:00', '2026-11-24 12:00:00', NULL),
+    (1020, 1003, 1001, 1001, '2026-11-24', 'PLANNED',   NULL, FALSE, NULL, NULL, NULL),
+    (1021, 1003, 1002, 1,    '2026-11-25', 'PLANNED',   NULL, FALSE, NULL, NULL, NULL),
+    (1022, 1003, 1003, 2,    '2026-11-26', 'PLANNED',   NULL, FALSE, NULL, NULL, NULL),
+    (1023, 1003, 1,    1,    '2026-11-28', 'PLANNED',   'Ca cuối tuần', FALSE, NULL, NULL, NULL);
 
 INSERT INTO employee_availabilities
     (availability_id, employee_id, available_date, start_time, end_time, note)
@@ -596,27 +590,6 @@ VALUES
     (1024, 1001, '2026-11-30', '08:00:00', '12:00:00', 'Chờ xếp tuần mới'),
     (1025, 1002, '2026-11-30', '13:00:00', '17:00:00', 'Chờ xếp tuần mới'),
     (1026, 1003, '2026-12-01', '17:00:00', '21:00:00', 'Chờ xếp tuần mới');
-
-INSERT INTO attendance_records (attendance_id, assignment_id, check_in_at, check_out_at, note) VALUES
-    (1, 1, '2026-11-02 08:02:00', '2026-11-02 12:05:00', 'Nhan vien den muon 2 phut'),
-    (1001, 1001, '2026-11-09 07:57:00', '2026-11-09 12:02:00', NULL),
-    (1002, 1002, '2026-11-09 12:59:00', '2026-11-09 17:04:00', NULL),
-    (1003, 1003, '2026-11-10 17:06:00', '2026-11-10 21:04:00', 'Đến muộn 6 phút'),
-    (1004, 1004, '2026-11-12 07:59:00', '2026-11-12 12:01:00', NULL),
-    (1005, 1005, '2026-11-14 12:55:00', '2026-11-14 17:06:00', NULL),
-    (1006, 1006, '2026-11-14 16:59:00', '2026-11-14 21:03:00', NULL),
-    (1007, 1007, '2026-11-16 07:54:00', '2026-11-16 12:04:00', NULL),
-    (1008, 1008, '2026-11-16 13:09:00', '2026-11-16 17:09:00', 'Đến muộn 9 phút'),
-    (1009, 1009, '2026-11-17 16:55:00', '2026-11-17 21:00:00', NULL),
-    (1010, 1010, '2026-11-18 07:58:00', '2026-11-18 11:46:00', 'Về sớm đã xin phép'),
-    (1012, 1012, '2026-11-19 12:57:00', '2026-11-19 17:08:00', 'Bàn giao sau ca'),
-    (1013, 1013, NULL, NULL, 'Có báo nghỉ do việc gia đình'),
-    (1014, 1014, '2026-11-21 07:55:00', '2026-11-21 12:05:00', NULL),
-    (1015, 1015, '2026-11-21 16:57:00', '2026-11-21 21:06:00', NULL),
-    (1016, 1016, '2026-11-23 07:59:00', '2026-11-23 12:03:00', NULL),
-    (1017, 1017, '2026-11-23 13:03:00', '2026-11-23 17:05:00', 'Đến muộn 3 phút'),
-    (1018, 1018, '2026-11-23 16:57:00', '2026-11-23 21:03:00', NULL),
-    (1019, 1019, '2026-11-24 07:58:00', '2026-11-24 12:00:00', NULL);
 
 INSERT INTO product_categories (category_id, category_name, description, is_active) VALUES
     (1, 'Thuoc khong ke don', 'Nhom san pham khong yeu cau don thuoc', 1),
@@ -722,13 +695,13 @@ VALUES
 INSERT INTO goods_receipts
     (receipt_id, receipt_code, supplier_id, received_by, received_at, status, note)
 VALUES
-    (1, 'PN0001', 1, 2, '2026-10-27 09:00:00', 'RECEIVED', 'Phieu nhap mau');
+    (1, 'PN0001', 1, 1, '2026-10-27 09:00:00', 'RECEIVED', 'Phieu nhap mau');
 
 INSERT INTO goods_receipt_items (receipt_item_id, receipt_id, batch_id, quantity, unit_cost) VALUES
     (1, 1, 1, 100.000, 1000.00);
 
 INSERT INTO stocktakes (stocktake_id, location_id, stocktake_date, status, created_by, note) VALUES
-    (1, 1, '2026-10-27', 'COMPLETED', 1, 'Kiem ke mau cuoi ngay');
+    (1, 1, '2026-10-27', 'COMPLETED', 2, 'Kiem ke mau cuoi ngay');
 
 INSERT INTO stocktake_items
     (stocktake_item_id, stocktake_id, batch_id, expected_quantity, counted_quantity, difference_quantity)
@@ -847,20 +820,20 @@ VALUES
 INSERT INTO inventory_movements
     (movement_id, batch_id, movement_type, quantity_delta, source_type, source_id, moved_at, created_by, note)
 VALUES
-    (1, 1, 'RECEIPT', 100.000, 'GOODS_RECEIPT', 1, '2026-10-27 09:00:00', 2, 'Nhap kho theo PN0001'),
-    (2, 1, 'SALE', -2.000, 'SALE', 1, '2026-10-27 10:00:00', 2, 'Ban hang theo HD0001'),
-    (3, 1, 'ADJUSTMENT', -1.000, 'STOCKTAKE', 1, '2026-10-27 17:00:00', 1, 'Dieu chinh sau kiem ke'),
-    (1001, 1003, 'SALE', -1.000, 'SALE', 1001, '2026-11-02 09:15:00', 2, 'Ban Omega-3 theo HD1001'),
+    (1, 1, 'RECEIPT', 100.000, 'GOODS_RECEIPT', 1, '2026-10-27 09:00:00', 1, 'Nhap kho theo PN0001'),
+    (2, 1, 'SALE', -2.000, 'SALE', 1, '2026-10-27 10:00:00', 1, 'Ban hang theo HD0001'),
+    (3, 1, 'ADJUSTMENT', -1.000, 'STOCKTAKE', 1, '2026-10-27 17:00:00', 2, 'Dieu chinh sau kiem ke'),
+    (1001, 1003, 'SALE', -1.000, 'SALE', 1001, '2026-11-02 09:15:00', 1, 'Ban Omega-3 theo HD1001'),
     (1002, 1002, 'SALE', -1.000, 'SALE', 1002, '2026-11-03 10:40:00', 1001, 'Ban Cetirizine theo HD1002'),
     (1003, 1001, 'SALE', -2.000, 'SALE', 1003, '2026-11-05 14:20:00', 1002, 'Ban Amoxicillin theo HD1003'),
     (1004, 1007, 'SALE', -1.000, 'SALE', 1004, '2026-11-08 16:35:00', 1003, 'Ban khau trang tre em theo HD1004'),
-    (1005, 1008, 'SALE', -1.000, 'SALE', 1005, '2026-11-10 08:50:00', 2, 'Ban nuoc suc mieng theo HD1005'),
+    (1005, 1008, 'SALE', -1.000, 'SALE', 1005, '2026-11-10 08:50:00', 1, 'Ban nuoc suc mieng theo HD1005'),
     (1006, 1006, 'SALE', -1.000, 'SALE', 1006, '2026-11-12 11:05:00', 1001, 'Ban may do huyet ap theo HD1006'),
     (1007, 1001, 'SALE', -1.000, 'SALE', 1007, '2026-11-15 15:30:00', 1002, 'Ban Amoxicillin theo HD1007'),
     (1008, 1003, 'SALE', -1.000, 'SALE', 1008, '2026-11-20 09:45:00', 1003, 'Ban Omega-3 theo HD1008'),
-    (1009, 1004, 'SALE', -1.000, 'SALE', 1009, '2026-11-21 13:25:00', 2, 'Ban siro ho theo HD1009'),
+    (1009, 1004, 'SALE', -1.000, 'SALE', 1009, '2026-11-21 13:25:00', 1, 'Ban siro ho theo HD1009'),
     (1010, 1005, 'SALE', -2.000, 'SALE', 1010, '2026-11-23 17:10:00', 1001, 'Ban gel rua tay theo HD1010'),
-    (1011, 1003, 'SALE', -1.000, 'SALE', 1013, '2026-11-24 14:20:00', 2, 'Ban Omega-3 theo HD1013'),
+    (1011, 1003, 'SALE', -1.000, 'SALE', 1013, '2026-11-24 14:20:00', 1, 'Ban Omega-3 theo HD1013'),
     (1012, 1006, 'SALE', -1.000, 'SALE', 1014, '2026-11-24 18:25:00', 1001, 'Ban may do huyet ap theo HD1014');
 
 -- Bo sung thong tin toa va tach giam gia chuong trinh cho giao dich mau.
@@ -1012,7 +985,7 @@ VALUES
 INSERT INTO inventory_movements
     (batch_id, movement_type, quantity_delta, source_type, source_id, moved_at, created_by, note)
 SELECT batch.batch_id, 'SALE', -item.quantity, 'SALE', sale.sale_id, sale.sold_at,
-       employee.user_id, CONCAT('Xuất hàng theo ', sale.sale_code)
+       employee.employee_id, CONCAT('Xuất hàng theo ', sale.sale_code)
 FROM sales sale
 JOIN sale_items item ON item.sale_id = sale.sale_id
 JOIN inventory_batches batch ON batch.batch_id = item.product_id
@@ -1353,7 +1326,7 @@ WHERE receipt.receipt_id BETWEEN 4001 AND 4025;
 INSERT INTO inventory_movements
     (batch_id, movement_type, quantity_delta, source_type, source_id, moved_at, created_by, note)
 SELECT batch.batch_id, 'SALE', -item.quantity, 'SALE', sale.sale_id,
-       sale.sold_at, employee.user_id, CONCAT('Xuất lô theo ', sale.sale_code)
+       sale.sold_at, employee.employee_id, CONCAT('Xuất lô theo ', sale.sale_code)
 FROM sales sale
 JOIN sale_items item ON item.sale_id = sale.sale_id
 JOIN inventory_batches batch
@@ -1364,9 +1337,9 @@ WHERE sale.sale_id BETWEEN 3001 AND 3100;
 -- Kiem ke da chot co lech ton, phieu cho kiem va phieu da huy.
 INSERT INTO stocktakes (stocktake_id, location_id, stocktake_date, status, created_by, note)
 VALUES
-    (1001, 1, '2026-11-24', 'COMPLETED', 1, 'Kiểm kê cuối ngày ở quầy A'),
+    (1001, 1, '2026-11-24', 'COMPLETED', 2, 'Kiểm kê cuối ngày ở quầy A'),
     (1002, 2, CURRENT_DATE(), 'DRAFT', 1003, 'Chờ đối chiếu số đếm tại kệ B'),
-    (1003, 1003, '2026-11-21', 'CANCELLED', 1, 'Dời lịch kiểm kê thiết bị');
+    (1003, 1003, '2026-11-21', 'CANCELLED', 2, 'Dời lịch kiểm kê thiết bị');
 
 INSERT INTO stocktake_items (stocktake_id, batch_id, expected_quantity, counted_quantity, difference_quantity)
 SELECT 1001, batch_id, SUM(quantity_delta),
@@ -1386,7 +1359,7 @@ GROUP BY batch_id;
 INSERT INTO inventory_movements
     (batch_id, movement_type, quantity_delta, source_type, source_id, moved_at, created_by, note)
 SELECT batch_id, 'ADJUSTMENT', difference_quantity, 'STOCKTAKE', stocktake_id,
-       '2026-11-24 21:10:00', 1, 'Điều chỉnh theo phiếu kiểm kê KK1001'
+       '2026-11-24 21:10:00', 2, 'Điều chỉnh theo phiếu kiểm kê KK1001'
 FROM stocktake_items
 WHERE stocktake_id = 1001 AND difference_quantity <> 0;
 

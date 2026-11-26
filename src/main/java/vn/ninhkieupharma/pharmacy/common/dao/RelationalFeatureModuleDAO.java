@@ -42,7 +42,7 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
- * Maps the feature screens to the normalized tables in 01_schema_quan_ly_cua_hang.sql.
+ * Maps the feature screens to the normalized tables in 01_schema_nkp_db.sql.
  * The application deliberately does not own schema creation or demo business data.
  */
 public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, InventoryWorkflowDAO {
@@ -118,14 +118,14 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
         return switch (moduleId) {
             case "UC-01" -> query(moduleId, """
                     SELECT e.employee_id, e.employee_code, e.full_name, COALESCE(e.phone, ''),
-                           COALESCE(e.email, ''), COALESCE(u.username, 'Chưa có tài khoản'),
+                           COALESCE(e.email, ''), COALESCE(e.username, 'Chưa có tài khoản'),
                            CASE r.role_code WHEN 'ADMIN' THEN 'Quản trị viên'
                                 WHEN 'STAFF' THEN 'Nhân viên' ELSE 'Chưa có tài khoản' END,
-                           CASE WHEN u.user_id IS NULL THEN 'Chưa có tài khoản'
-                                WHEN u.is_active THEN 'Đang hoạt động' ELSE 'Ngừng hoạt động' END
+                           CASE WHEN e.username IS NULL THEN 'Chưa có tài khoản'
+                                WHEN e.is_active THEN 'Đang hoạt động' ELSE 'Ngừng hoạt động' END
                     FROM employees e
-                    LEFT JOIN users u ON u.user_id = e.user_id
-                    LEFT JOIN roles r ON r.role_id = u.role_id
+                    LEFT JOIN roles r ON r.role_id = e.role_id
+                    WHERE e.employee_code IS NOT NULL
                     ORDER BY e.employee_id
                     """);
             case "UC-02" -> query(moduleId, """
@@ -144,15 +144,15 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
                     ORDER BY a.work_date, s.start_time, e.full_name
                     """);
             case "UC-04" -> query(moduleId, """
-                    SELECT ar.attendance_id, e.full_name, s.shift_name,
-                           COALESCE(DATE_FORMAT(ar.check_in_at, '%Y-%m-%d %H:%i'), ''),
-                           COALESCE(DATE_FORMAT(ar.check_out_at, '%Y-%m-%d %H:%i'), ''),
-                           COALESCE(ar.note, '')
-                    FROM attendance_records ar
-                    JOIN schedule_assignments a ON a.assignment_id = ar.assignment_id
+                    SELECT a.assignment_id, e.full_name, s.shift_name,
+                           COALESCE(DATE_FORMAT(a.check_in_at, '%Y-%m-%d %H:%i'), ''),
+                           COALESCE(DATE_FORMAT(a.check_out_at, '%Y-%m-%d %H:%i'), ''),
+                           COALESCE(a.attendance_note, '')
+                    FROM schedule_assignments a
                     JOIN employees e ON e.employee_id = a.employee_id
                     JOIN shifts s ON s.shift_id = a.shift_id
-                    ORDER BY ar.check_in_at DESC, ar.attendance_id DESC
+                    WHERE a.has_attendance = TRUE
+                    ORDER BY a.check_in_at DESC, a.assignment_id DESC
                     """);
             case "UC-05" -> query(moduleId, """
                     SELECT e.employee_id,
@@ -170,15 +170,15 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
                                '%)'
                            ),
                            COALESCE(ROUND(SUM(
-                               CASE WHEN ar.check_in_at IS NOT NULL AND ar.check_out_at IS NOT NULL
-                                    THEN GREATEST(0, TIMESTAMPDIFF(MINUTE, ar.check_in_at, ar.check_out_at) - s.break_minutes) / 60.0
+                               CASE WHEN a.check_in_at IS NOT NULL AND a.check_out_at IS NOT NULL
+                                    THEN GREATEST(0, TIMESTAMPDIFF(MINUTE, a.check_in_at, a.check_out_at) - s.break_minutes) / 60.0
                                     ELSE 0 END), 2), 0),
                            CASE WHEN COUNT(DISTINCT a.assignment_id) = 0 THEN 'Chưa phân ca'
                                 ELSE 'Đã tổng hợp từ chấm công' END
                     FROM employees e
                     LEFT JOIN schedule_assignments a ON a.employee_id = e.employee_id AND a.status <> 'CANCELLED'
                     LEFT JOIN shifts s ON s.shift_id = a.shift_id
-                    LEFT JOIN attendance_records ar ON ar.assignment_id = a.assignment_id
+                    WHERE e.employee_code IS NOT NULL
                     GROUP BY e.employee_id, e.full_name
                     ORDER BY e.full_name
                     """);
@@ -188,22 +188,21 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
                            CONCAT(s.shift_name, ' (', a.work_date, ')'),
                            CONCAT(TIME_FORMAT(s.start_time, '%H:%i'), ' - ', TIME_FORMAT(s.end_time, '%H:%i')),
                            CONCAT(
-                               COALESCE(DATE_FORMAT(ar.check_in_at, '%H:%i'), 'Chưa vào'),
+                               COALESCE(DATE_FORMAT(a.check_in_at, '%H:%i'), 'Chưa vào'),
                                ' - ',
-                               COALESCE(DATE_FORMAT(ar.check_out_at, '%H:%i'), 'Chưa ra')
+                               COALESCE(DATE_FORMAT(a.check_out_at, '%H:%i'), 'Chưa ra')
                            ),
                            CASE
-                               WHEN ar.check_in_at IS NULL THEN 'Vắng mặt / Chưa chấm công'
-                               WHEN TIME(ar.check_in_at) > s.start_time
-                                    THEN CONCAT('Đi muộn ', TIMESTAMPDIFF(MINUTE, s.start_time, TIME(ar.check_in_at)), ' phút')
-                               WHEN ar.check_out_at IS NOT NULL AND TIME(ar.check_out_at) < s.end_time
-                                    THEN CONCAT('Về sớm ', TIMESTAMPDIFF(MINUTE, TIME(ar.check_out_at), s.end_time), ' phút')
+                               WHEN a.check_in_at IS NULL THEN 'Vắng mặt / Chưa chấm công'
+                               WHEN TIME(a.check_in_at) > s.start_time
+                                    THEN CONCAT('Đi muộn ', TIMESTAMPDIFF(MINUTE, s.start_time, TIME(a.check_in_at)), ' phút')
+                               WHEN a.check_out_at IS NOT NULL AND TIME(a.check_out_at) < s.end_time
+                                    THEN CONCAT('Về sớm ', TIMESTAMPDIFF(MINUTE, TIME(a.check_out_at), s.end_time), ' phút')
                                ELSE 'Đúng giờ'
                            END
                     FROM schedule_assignments a
                     JOIN employees e ON e.employee_id = a.employee_id
                     JOIN shifts s ON s.shift_id = a.shift_id
-                    LEFT JOIN attendance_records ar ON ar.assignment_id = a.assignment_id
                     WHERE a.status <> 'CANCELLED'
                     ORDER BY a.work_date DESC, s.start_time ASC, e.full_name ASC
                     """);
@@ -1408,24 +1407,18 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
         String passwordHash = PasswordHasher.hash(values.get(6));
         long employeeId = transaction(connection -> {
             long roleId = resolveId(connection, "SELECT role_id FROM roles WHERE role_code = ?", "STAFF");
-            long userId = insert(connection, """
-                    INSERT INTO users (role_id, username, password_hash, is_active)
-                    VALUES (?, ?, ?, 1)
+            return insert(connection, """
+                    INSERT INTO employees (role_id, username, password_hash, is_active, account_created_at,
+                        employee_code, full_name, phone, email, hire_date, employment_status)
+                    VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP, ?, ?, ?, ?, CURRENT_DATE, 'ACTIVE')
                     """, statement -> {
                 statement.setLong(1, roleId);
                 statement.setString(2, values.get(4).trim());
                 statement.setString(3, passwordHash);
-            });
-            return insert(connection, """
-                    INSERT INTO employees
-                        (user_id, employee_code, full_name, phone, email, hire_date, employment_status)
-                    VALUES (?, ?, ?, ?, ?, CURRENT_DATE, 'ACTIVE')
-                    """, statement -> {
-                statement.setLong(1, userId);
-                statement.setString(2, values.get(0).trim());
-                statement.setString(3, values.get(1).trim());
-                setNullableString(statement, 4, values.get(2));
-                setNullableString(statement, 5, values.get(3));
+                statement.setString(4, values.get(0).trim());
+                statement.setString(5, values.get(1).trim());
+                setNullableString(statement, 6, values.get(2));
+                setNullableString(statement, 7, values.get(3));
             });
         });
         return row(employeeId, List.of(
@@ -1440,48 +1433,30 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
         }
         String roleCode = normalizeRoleCode(values.get(5));
         final String username = values.get(4).trim();
-        final long capturedEmployeeId = employeeId;
         final String employeeCode = values.get(0).trim();
         final String fullName = values.get(1).trim();
         final String phone = values.get(2);
         final String email = values.get(3);
+        String passwordHash = values.get(6).isBlank() ? null : PasswordHasher.hash(values.get(6));
         transaction(connection -> {
-            final long roleId = resolveId(connection, "SELECT role_id FROM roles WHERE role_code = ?", roleCode);
-            Long userId = null;
-            try (PreparedStatement ps = connection.prepareStatement(
-                    "SELECT user_id FROM employees WHERE employee_id = ?")) {
-                ps.setLong(1, capturedEmployeeId);
-                try (ResultSet rs = ps.executeQuery()) {
-                    if (rs.next()) {
-                        long raw = rs.getLong(1);
-                        if (!rs.wasNull()) userId = raw;
-                    }
-                }
-            }
-            final Long linkedUserId = userId;
-            if (linkedUserId != null) {
-                execute(connection, "UPDATE users SET role_id = ?, username = ? WHERE user_id = ?", st -> {
-                    st.setLong(1, roleId);
-                    st.setString(2, username);
-                    st.setLong(3, linkedUserId);
-                });
-                if (!values.get(6).isBlank()) {
-                    final String newHash = PasswordHasher.hash(values.get(6));
-                    execute(connection, "UPDATE users SET password_hash = ? WHERE user_id = ?", st -> {
-                        st.setString(1, newHash);
-                        st.setLong(2, linkedUserId);
-                    });
-                }
-            }
+            long roleId = resolveId(connection, "SELECT role_id FROM roles WHERE role_code = ?", roleCode);
             execute(connection, """
-                    UPDATE employees SET employee_code = ?, full_name = ?, phone = ?, email = ?
-                    WHERE employee_id = ?
+                    UPDATE employees
+                    SET employee_code = ?, full_name = ?, phone = ?, email = ?,
+                        role_id = CASE WHEN username IS NOT NULL THEN ? ELSE role_id END,
+                        password_hash = CASE WHEN username IS NOT NULL THEN COALESCE(?, password_hash)
+                                             ELSE password_hash END,
+                        username = CASE WHEN username IS NOT NULL THEN ? ELSE username END
+                    WHERE employee_id = ? AND employee_code IS NOT NULL
                     """, st -> {
                 st.setString(1, employeeCode);
                 st.setString(2, fullName);
                 setNullableString(st, 3, phone);
                 setNullableString(st, 4, email);
-                st.setLong(5, capturedEmployeeId);
+                st.setLong(5, roleId);
+                st.setString(6, passwordHash);
+                st.setString(7, username);
+                st.setLong(8, employeeId);
             });
             return null;
         });
@@ -1619,12 +1594,19 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
         }
         String sql = switch (moduleId) {
             case "UC-02" -> "DELETE FROM employee_availabilities WHERE availability_id = ?";
-            case "UC-03" -> "DELETE FROM schedule_assignments WHERE assignment_id = ?";
-            case "UC-04" -> "DELETE FROM attendance_records WHERE attendance_id = ?";
+            case "UC-03" -> "DELETE FROM schedule_assignments WHERE assignment_id = ? AND has_attendance = FALSE";
+            case "UC-04" -> """
+                    UPDATE schedule_assignments
+                    SET has_attendance = FALSE, check_in_at = NULL, check_out_at = NULL, attendance_note = NULL
+                    WHERE assignment_id = ? AND has_attendance = TRUE
+                    """;
             case "UC-18" -> "UPDATE promotions SET is_active = 0 WHERE promotion_id = ?";
             default -> throw readOnly(moduleId);
         };
-        executeOne(sql, id);
+        int affected = executeOne(sql, id);
+        if ("UC-03".equals(moduleId) && affected == 0) {
+            throw new IllegalArgumentException("Ca làm không tồn tại hoặc đã có dữ liệu chấm công.");
+        }
     }
 
     private <T> List<T> queryOptions(String sql, RowMapper<T> mapper) {
@@ -2167,9 +2149,13 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
             }
         }
         long creatorId;
-        try (PreparedStatement ps = connection.prepareStatement("SELECT user_id FROM users ORDER BY user_id LIMIT 1");
+        try (PreparedStatement ps = connection.prepareStatement("""
+                SELECT e.employee_id FROM employees e JOIN roles r ON r.role_id = e.role_id
+                WHERE r.role_code = 'ADMIN' AND e.is_active = 1
+                ORDER BY e.employee_id LIMIT 1
+                """);
              ResultSet rs = ps.executeQuery()) {
-            if (!rs.next()) throw new SQLException("Chưa có tài khoản quản trị trong bảng users.");
+            if (!rs.next()) throw new SQLException("Chưa có tài khoản quản trị đang hoạt động.");
             creatorId = rs.getLong(1);
         }
         return insert(connection,
@@ -2192,27 +2178,15 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
         if (checkIn.isEmpty()) {
             throw new IllegalArgumentException("Giờ vào (YYYY-MM-DD HH:mm) là bắt buộc.");
         }
-        long assignmentId = resolveLatestAssignmentId(employeeName, shiftName);
-        long attendanceId = transaction(connection -> {
-            long id = insert(connection, """
-                    INSERT INTO attendance_records (assignment_id, check_in_at, check_out_at, note)
-                    VALUES (?, ?, ?, ?)
-                    """, st -> {
-                st.setLong(1, assignmentId);
-                st.setString(2, checkIn);
-                setNullableString(st, 3, checkOut);
-                setNullableString(st, 4, note);
-            });
-            if (!checkOut.isEmpty()) {
-                execute(connection, "UPDATE schedule_assignments SET status = 'COMPLETED' WHERE assignment_id = ?",
-                        st -> st.setLong(1, assignmentId));
-            }
+        long assignmentId = transaction(connection -> {
+            long id = resolveLatestAssignmentId(connection, employeeName, shiftName);
+            saveAttendance(connection, id, false, checkIn, checkOut, note);
             return id;
         });
-        return row(attendanceId, List.of(employeeName, shiftName, checkIn, checkOut, note));
+        return row(assignmentId, List.of(employeeName, shiftName, checkIn, checkOut, note));
     }
 
-    private ModuleRow updateAttendance(long attendanceId, List<String> values) {
+    private ModuleRow updateAttendance(long assignmentId, List<String> values) {
         requireSize("UC-04", values, 5);
         String employeeName = values.get(0).trim();
         String shiftName = values.get(1).trim();
@@ -2221,37 +2195,41 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
         String note = values.get(4).trim();
 
         transaction(connection -> {
-            execute(connection, """
-                    UPDATE attendance_records SET check_in_at = ?, check_out_at = ?, note = ?
-                    WHERE attendance_id = ?
-                    """, st -> {
-                st.setString(1, checkIn);
-                setNullableString(st, 2, checkOut);
-                setNullableString(st, 3, note);
-                st.setLong(4, attendanceId);
-            });
-            if (!checkOut.isEmpty()) {
-                execute(connection, """
-                        UPDATE schedule_assignments sa
-                        JOIN attendance_records ar ON ar.assignment_id = sa.assignment_id
-                        SET sa.status = 'COMPLETED'
-                        WHERE ar.attendance_id = ?
-                        """, st -> st.setLong(1, attendanceId));
-            }
+            saveAttendance(connection, assignmentId, true, checkIn, checkOut, note);
             return null;
         });
-        return row(attendanceId, List.of(employeeName, shiftName, checkIn, checkOut, note));
+        return row(assignmentId, List.of(employeeName, shiftName, checkIn, checkOut, note));
     }
 
-    private long resolveLatestAssignmentId(String employeeName, String shiftName) {
-        try (Connection connection = DatabaseConnection.getConnection();
-             PreparedStatement ps = connection.prepareStatement("""
+    private void saveAttendance(Connection connection, long assignmentId, boolean existing,
+            String checkIn, String checkOut, String note) throws SQLException {
+        int affected = execute(connection, """
+                UPDATE schedule_assignments
+                SET has_attendance = TRUE, check_in_at = ?, check_out_at = ?, attendance_note = ?,
+                    status = CASE WHEN ? THEN 'COMPLETED' ELSE status END
+                WHERE assignment_id = ? AND has_attendance = ?
+                """, statement -> {
+            statement.setString(1, checkIn);
+            setNullableString(statement, 2, checkOut);
+            setNullableString(statement, 3, note);
+            statement.setBoolean(4, !checkOut.isEmpty());
+            statement.setLong(5, assignmentId);
+            statement.setBoolean(6, existing);
+        });
+        if (affected == 0) {
+            throw new IllegalArgumentException(existing ? "Bản chấm công không tồn tại."
+                    : "Ca làm đã có dữ liệu chấm công.");
+        }
+    }
+
+    private long resolveLatestAssignmentId(Connection connection, String employeeName, String shiftName) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("""
                      SELECT sa.assignment_id
                      FROM schedule_assignments sa
                      JOIN employees e ON e.employee_id = sa.employee_id
                      JOIN shifts s ON s.shift_id = sa.shift_id
                      WHERE e.full_name = ? AND s.shift_name = ? AND sa.status <> 'CANCELLED'
-                     ORDER BY sa.work_date DESC, sa.assignment_id DESC LIMIT 1
+                     ORDER BY sa.work_date DESC, sa.assignment_id DESC LIMIT 1 FOR UPDATE
                      """)) {
             ps.setString(1, employeeName);
             ps.setString(2, shiftName);
@@ -2261,8 +2239,6 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
                 }
                 return rs.getLong(1);
             }
-        } catch (SQLException e) {
-            throw new DataAccessException("Không thể tra cứu ca phân công để chấm công.", e);
         }
     }
 
@@ -3018,22 +2994,22 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
         }
     }
 
-    private void executeOne(String sql, long id) {
-        execute(sql, statement -> statement.setLong(1, id));
+    private int executeOne(String sql, long id) {
+        return execute(sql, statement -> statement.setLong(1, id));
     }
 
-    private void execute(String sql, Binder binder) {
+    private int execute(String sql, Binder binder) {
         try (Connection connection = DatabaseConnection.getConnection()) {
-            execute(connection, sql, binder);
+            return execute(connection, sql, binder);
         } catch (SQLException exception) {
             throw friendly(exception, "Could not update the business record.");
         }
     }
 
-    private void execute(Connection connection, String sql, Binder binder) throws SQLException {
+    private int execute(Connection connection, String sql, Binder binder) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
             binder.bind(statement);
-            statement.executeUpdate();
+            return statement.executeUpdate();
         }
     }
 
