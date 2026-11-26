@@ -3,9 +3,7 @@ package vn.ninhkieupharma.pharmacy.common.dao;
 import vn.ninhkieupharma.pharmacy.common.model.ModuleRow;
 import vn.ninhkieupharma.pharmacy.common.model.ModuleDefinition;
 import vn.ninhkieupharma.pharmacy.common.service.ModuleCatalog;
-import vn.ninhkieupharma.pharmacy.domain.hr.AvailabilitySlot;
 
-import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -44,16 +42,6 @@ public final class RoutingFeatureModuleDAO implements FeatureModuleDAO {
     }
 
     @Override
-    public List<String> findActiveEmployeeNames() {
-        return route("UC-01").findActiveEmployeeNames();
-    }
-
-    @Override
-    public String findCurrentEmployeeName() {
-        return route("UC-04").findCurrentEmployeeName();
-    }
-
-    @Override
     public void replaceAll(String moduleId, List<List<String>> values) {
         route(moduleId).replaceAll(moduleId, values);
     }
@@ -61,12 +49,6 @@ public final class RoutingFeatureModuleDAO implements FeatureModuleDAO {
     @Override
     public ModuleRow create(String moduleId, List<String> values) {
         return route(moduleId).create(moduleId, values);
-    }
-
-    @Override
-    public int createWeeklyAvailability(
-            String employeeName, LocalDate weekStart, List<AvailabilitySlot> slots) {
-        return route("UC-02").createWeeklyAvailability(employeeName, weekStart, slots);
     }
 
     @Override

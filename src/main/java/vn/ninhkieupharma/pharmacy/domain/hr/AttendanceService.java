@@ -20,19 +20,11 @@ import java.util.Set;
 import java.util.UUID;
 
 public final class AttendanceService extends AbstractFeatureModuleService {
-    private static final DateTimeFormatter ISO_DATE_TIME =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
-    private static final DateTimeFormatter VIETNAMESE_DATE_TIME =
-            DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
     private final FeatureModuleDAO repository;
 
     public AttendanceService(FeatureModuleDAO repository) {
         super(repository, Set.of("UC-04", "UC-05"));
         this.repository = repository;
-    }
-
-    public String findCurrentEmployeeName() {
-        return repository.findCurrentEmployeeName();
     }
 
     @Override
@@ -65,35 +57,22 @@ public final class AttendanceService extends AbstractFeatureModuleService {
 
     @Override
     public ModuleRow create(ModuleDefinition module, List<String> values) {
-        return super.create(module, normalizeTimes(module, values));
+        validateTimes(values);
+        return super.create(module, values);
     }
 
     @Override
     public ModuleRow update(ModuleDefinition module, UUID rowId, List<String> values) {
-        return super.update(module, rowId, normalizeTimes(module, values));
+        validateTimes(values);
+        return super.update(module, rowId, values);
     }
 
-    private List<String> normalizeTimes(ModuleDefinition module, List<String> values) {
-        if (!"UC-04".equals(module.id()) || values.size() < 4) {
-            return values;
+    private void validateTimes(List<String> values) {
+        if (values.size() < 4) {
+            return;
         }
-        List<String> normalized = new ArrayList<>(values);
-        normalized.set(2, normalizeTime(values.get(2), false));
-        normalized.set(3, normalizeTime(values.get(3), true));
-        return normalized;
-    }
-
-    private String normalizeTime(String value, boolean allowMissing) {
-        validateTime(value, allowMissing);
-        if (value.isBlank() || value.equals("—")) {
-            return value;
-        }
-        try {
-            LocalTime.parse(value, DateTimeFormatter.ofPattern("H:mm"));
-            return value;
-        } catch (DateTimeParseException ignored) {
-            return parseAttendanceDateTime(value).format(ISO_DATE_TIME);
-        }
+        validateTime(values.get(2), false);
+        validateTime(values.get(3), true);
     }
 
     private void validateTime(String value, boolean allowMissing) {
@@ -107,8 +86,7 @@ public final class AttendanceService extends AbstractFeatureModuleService {
             parseAttendanceTime(value);
         } catch (DateTimeParseException exception) {
             throw new IllegalArgumentException(
-                    Localization.text("Time must use H:mm, dd/MM/yyyy HH:mm, or YYYY-MM-DD HH:mm format: ")
-                            + value,
+                    Localization.text("Time must use H:mm or YYYY-MM-DD HH:mm format: ") + value,
                     exception);
         }
     }
@@ -118,23 +96,11 @@ public final class AttendanceService extends AbstractFeatureModuleService {
             return LocalTime.parse(value, DateTimeFormatter.ofPattern("H:mm"));
         } catch (DateTimeParseException timeException) {
             try {
-                return parseAttendanceDateTime(value).toLocalTime();
+                return LocalDateTime.parse(value, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+                        .toLocalTime();
             } catch (DateTimeParseException dateTimeException) {
                 dateTimeException.addSuppressed(timeException);
                 throw dateTimeException;
-            }
-        }
-    }
-
-    private LocalDateTime parseAttendanceDateTime(String value) {
-        try {
-            return LocalDateTime.parse(value, ISO_DATE_TIME);
-        } catch (DateTimeParseException isoException) {
-            try {
-                return LocalDateTime.parse(value, VIETNAMESE_DATE_TIME);
-            } catch (DateTimeParseException vietnameseException) {
-                vietnameseException.addSuppressed(isoException);
-                throw vietnameseException;
             }
         }
     }
@@ -145,9 +111,10 @@ public final class AttendanceService extends AbstractFeatureModuleService {
             return 0;
         }
         try {
+            DateTimeFormatter dateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
             try {
-                LocalDateTime start = parseAttendanceDateTime(values.get(2));
-                LocalDateTime end = parseAttendanceDateTime(values.get(3));
+                LocalDateTime start = LocalDateTime.parse(values.get(2), dateTimeFormatter);
+                LocalDateTime end = LocalDateTime.parse(values.get(3), dateTimeFormatter);
                 return Duration.between(start, end).toMinutes() / 60.0;
             } catch (DateTimeParseException ignored) {
                 LocalTime start = parseAttendanceTime(values.get(2));
@@ -156,7 +123,7 @@ public final class AttendanceService extends AbstractFeatureModuleService {
             }
         } catch (DateTimeParseException exception) {
             throw new IllegalArgumentException(
-                    Localization.text("Attendance times must use H:mm, dd/MM/yyyy HH:mm, or YYYY-MM-DD HH:mm format: ")
+                    Localization.text("Attendance times must use H:mm or YYYY-MM-DD HH:mm format: ")
                             + values.get(2) + "–" + values.get(3),
                     exception);
         }
