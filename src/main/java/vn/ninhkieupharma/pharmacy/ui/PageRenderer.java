@@ -1,6 +1,7 @@
 package vn.ninhkieupharma.pharmacy.ui;
 
 import javafx.collections.FXCollections;
+import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
 import javafx.collections.transformation.FilteredList;
 import javafx.beans.property.SimpleBooleanProperty;
@@ -24,13 +25,16 @@ import javafx.scene.control.Button;
 import javafx.scene.control.ButtonBar;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.CheckBox;
+import javafx.scene.control.CheckMenuItem;
 import javafx.scene.control.ComboBox;
+import javafx.scene.control.Control;
 import javafx.scene.control.DatePicker;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.Hyperlink;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
+import javafx.scene.control.MenuButton;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.SelectionMode;
 import javafx.scene.control.ScrollPane;
@@ -40,6 +44,7 @@ import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
+import javafx.scene.control.TextFormatter;
 import javafx.scene.control.TextInputControl;
 import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.ColumnConstraints;
@@ -98,12 +103,15 @@ import java.time.format.DateTimeFormatterBuilder;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.stream.IntStream;
 import javafx.util.StringConverter;
@@ -169,6 +177,32 @@ public class PageRenderer {
     }
 
     private record CustomerFilters(VBox container, ComboBox<String> status, Button applyButton) {
+    }
+
+    private record ReportFilters(VBox container, List<Node> fields, Button applyButton) {
+    }
+
+    record TrendChartData(
+            List<String> periods,
+            Map<String, List<Number>> series,
+            List<String> dimensions,
+            List<Number> latestPeriodTotals) {
+    }
+
+    private record ProductFilterOption(String value, String label) {
+        @Override
+        public String toString() {
+            return label;
+        }
+    }
+
+    private record ProductFilters(
+            GridPane container,
+            List<Integer> columnIndexes,
+            List<Node> fields,
+            Map<Integer, ComboBox<ProductFilterOption>> selectors,
+            TextField minimumPrice,
+            TextField maximumPrice) {
     }
 
     private record InventoryFilters(
@@ -255,6 +289,17 @@ public class PageRenderer {
         PromotionFilters promotionFilters = null;
         CustomerFilters customerFilters = null;
         InventoryFilters inventoryFilters = null;
+        ReportFilters reportFilters = null;
+        ProductFilters productFilters = null;
+        ComboBox<String> workflowStatusFilter = null;
+        if ("UC-12".equals(module.id()) || "UC-14".equals(module.id())) {
+            workflowStatusFilter = new ComboBox<>(FXCollections.observableArrayList(
+                    Localization.text("Tất cả trạng thái"),
+                    Localization.text("Chưa xác nhận"),
+                    Localization.text("Đã xác nhận"),
+                    Localization.text("Đã hủy")));
+            workflowStatusFilter.getSelectionModel().selectFirst();
+        }
         Node filters = null;
         if (module.report()) {
             if ("UC-15".equals(module.id())) {
@@ -262,6 +307,12 @@ public class PageRenderer {
                 filters = inventoryFilters.container();
                 InventoryFilters capturedFilters = inventoryFilters;
                 capturedFilters.applyButton().setOnAction(event -> applyInventoryFilters(
+                        renderedTable.filteredRows(), search, capturedFilters));
+            } else if ("UC-10".equals(module.id()) || "UC-11".equals(module.id())) {
+                reportFilters = createReportFilters(module);
+                filters = reportFilters.container();
+                ReportFilters capturedFilters = reportFilters;
+                capturedFilters.applyButton().setOnAction(event -> applyReportFilters(
                         renderedTable.filteredRows(), search, capturedFilters));
             } else {
                 filters = createFilters(module, filterInputs, renderedTable.filteredRows(), search);
@@ -278,15 +329,50 @@ public class PageRenderer {
             CustomerFilters capturedFilters = customerFilters;
             capturedFilters.applyButton().setOnAction(event -> applyCustomerFilters(
                     renderedTable.filteredRows(), search, capturedFilters));
+        } else if ("UC-08".equals(module.id())) {
+            productFilters = createProductFilters(module, renderedTable.source());
+            filters = productFilters.container();
+            ProductFilters capturedFilters = productFilters;
+            capturedFilters.fields().forEach(field -> {
+                if (field instanceof TextInputControl textInput) {
+                    textInput.textProperty().addListener(
+                            (observable, oldValue, newValue) -> applyProductFilters(
+                                    renderedTable.filteredRows(), search, capturedFilters));
+                } else if (field instanceof ComboBox<?> comboBox) {
+                    comboBox.valueProperty().addListener(
+                            (observable, oldValue, newValue) -> applyProductFilters(
+                                    renderedTable.filteredRows(), search, capturedFilters));
+                }
+            });
+            capturedFilters.minimumPrice().textProperty().addListener(
+                    (observable, oldValue, newValue) -> applyProductFilters(
+                            renderedTable.filteredRows(), search, capturedFilters));
+            capturedFilters.maximumPrice().textProperty().addListener(
+                    (observable, oldValue, newValue) -> applyProductFilters(
+                            renderedTable.filteredRows(), search, capturedFilters));
+            renderedTable.source().addListener((ListChangeListener<ModuleRow>) change ->
+                    refreshProductFilterOptions(capturedFilters, renderedTable.source()));
         }
         if (renderedTable != null) {
             PromotionFilters capturedFilters = promotionFilters;
             CustomerFilters capturedCustomerFilters = customerFilters;
             InventoryFilters capturedInventoryFilters = inventoryFilters;
+            ReportFilters capturedReportFilters = reportFilters;
+            ProductFilters capturedProductFilters = productFilters;
+            ComboBox<String> capturedWorkflowStatusFilter = workflowStatusFilter;
             search.textProperty().addListener((observable, oldValue, newValue) -> {
-                if (capturedInventoryFilters != null) {
+                if (capturedWorkflowStatusFilter != null) {
+                    applyStatusFilters(
+                            renderedTable.filteredRows(), search, capturedWorkflowStatusFilter);
+                } else if (capturedInventoryFilters != null) {
                     applyInventoryFilters(
                             renderedTable.filteredRows(), search, capturedInventoryFilters);
+                } else if (capturedReportFilters != null) {
+                    applyReportFilters(
+                            renderedTable.filteredRows(), search, capturedReportFilters);
+                } else if (capturedProductFilters != null) {
+                    applyProductFilters(
+                            renderedTable.filteredRows(), search, capturedProductFilters);
                 } else if (capturedFilters == null) {
                     if (capturedCustomerFilters == null) {
                         applyFilters(renderedTable.filteredRows(), search, filterInputs);
@@ -298,6 +384,11 @@ public class PageRenderer {
                     applyPromotionFilters(renderedTable.filteredRows(), search, capturedFilters);
                 }
             });
+            if (capturedWorkflowStatusFilter != null) {
+                capturedWorkflowStatusFilter.valueProperty().addListener(
+                        (observable, oldValue, newValue) -> applyStatusFilters(
+                                renderedTable.filteredRows(), search, capturedWorkflowStatusFilter));
+            }
         }
 
         FlowPane actions = new FlowPane(12, 8);
@@ -308,6 +399,9 @@ public class PageRenderer {
         search.setPrefWidth(420);
         search.setMaxWidth(Double.MAX_VALUE);
         actions.getChildren().add(search);
+        if (workflowStatusFilter != null) {
+            actions.getChildren().add(workflowStatusFilter);
+        }
         if (module.report()) {
             Button exportButton = new Button(Localization.text("Xuất báo cáo"));
             exportButton.getStyleClass().add("button-secondary");
@@ -317,10 +411,14 @@ public class PageRenderer {
             Button refreshButton = new Button(Localization.text("Làm mới"));
             refreshButton.getStyleClass().add("button-secondary");
             InventoryFilters capturedInventoryFilters = inventoryFilters;
+            ComboBox<String> capturedRefreshStatusFilter = workflowStatusFilter;
             refreshButton.setOnAction(event -> {
                 refreshRows(renderedTable, featureService, module);
                 if (capturedInventoryFilters != null) {
                     applyInventoryFilters(renderedTable.filteredRows(), search, capturedInventoryFilters);
+                } else if (capturedRefreshStatusFilter != null) {
+                    applyStatusFilters(
+                            renderedTable.filteredRows(), search, capturedRefreshStatusFilter);
                 } else {
                     applyFilters(renderedTable.filteredRows(), search, filterInputs);
                 }
@@ -366,8 +464,64 @@ public class PageRenderer {
             receiveButton.setOnAction(event -> createGoodsReceiptDialog()
                     .ifPresent(request -> runMutation(
                             () -> featureServices.inventoryWorkflowService()
-                                    .receiveGoods(authenticatedUserId, request),
+                                    .createGoodsReceiptDraft(authenticatedUserId, request),
                             () -> refreshRows(renderedTable, featureService, module))));
+            Button confirmButton = new Button(Localization.text("Xác nhận phiếu"));
+            confirmButton.getStyleClass().add("button-primary");
+            confirmButton.setVisible(canConfirmInventoryWorkflow(module.id(), userRole));
+            confirmButton.setManaged(canConfirmInventoryWorkflow(module.id(), userRole));
+            Button editButton = new Button(Localization.text("Sửa phiếu"));
+            editButton.getStyleClass().add("button-secondary");
+            Button cancelReceiptButton = new Button(Localization.text("Hủy phiếu"));
+            cancelReceiptButton.getStyleClass().add("button-secondary");
+            javafx.beans.value.ObservableValue<ModuleRow> selectedReceipt =
+                    renderedTable.table().getSelectionModel().selectedItemProperty();
+            Runnable updateReceiptActions = () -> {
+                ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+                boolean draft = isUnconfirmedReceipt(selected);
+                confirmButton.setDisable(!draft || !canConfirmInventoryWorkflow(module.id(), userRole));
+                editButton.setDisable(!draft);
+                cancelReceiptButton.setDisable(!draft);
+            };
+            selectedReceipt.addListener((observable, oldValue, newValue) -> updateReceiptActions.run());
+            updateReceiptActions.run();
+            confirmButton.setOnAction(event -> {
+                ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+                if (canConfirmInventoryWorkflow(module.id(), userRole)
+                        && isUnconfirmedReceipt(selected) && confirmGoodsReceipt(selected)) {
+                    runMutation(
+                            () -> featureServices.inventoryWorkflowService()
+                                    .confirmReceipt(authenticatedUserId, selected.id()),
+                            () -> refreshRows(renderedTable, featureService, module));
+                }
+            });
+            editButton.setOnAction(event -> {
+                ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+                if (!isUnconfirmedReceipt(selected)) {
+                    return;
+                }
+                try {
+                    InventoryWorkflowDAO.ReceiptDraft draft =
+                            featureServices.inventoryWorkflowService().findReceiptDraft(selected.id());
+                    createGoodsReceiptDialog(draft).ifPresent(request -> runMutation(
+                            () -> featureServices.inventoryWorkflowService().updateReceiptDraft(
+                                    authenticatedUserId, selected.id(), request),
+                            () -> refreshRows(renderedTable, featureService, module)));
+                } catch (IllegalArgumentException | IllegalStateException
+                         | vn.ninhkieupharma.pharmacy.common.dao.DataAccessException exception) {
+                    showInformation(Localization.text("Không thể sửa phiếu nhập"),
+                            Localization.text(exception.getMessage()));
+                }
+            });
+            cancelReceiptButton.setOnAction(event -> {
+                ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+                if (isUnconfirmedReceipt(selected) && confirmCancelReceiptDraft(selected)) {
+                    runMutation(
+                            () -> featureServices.inventoryWorkflowService()
+                                    .cancelReceiptDraft(authenticatedUserId, selected.id()),
+                            () -> refreshRows(renderedTable, featureService, module));
+                }
+            });
             Button detailButton = new Button(Localization.text("Xem lô hàng"));
             detailButton.getStyleClass().add("button-secondary");
             detailButton.disableProperty().bind(
@@ -378,16 +532,83 @@ public class PageRenderer {
                     showGoodsReceiptDetails(selected);
                 }
             });
-            actions.getChildren().addAll(receiveButton, detailButton);
+            actions.getChildren().addAll(
+                    receiveButton, confirmButton, editButton, cancelReceiptButton, detailButton);
         } else if ("UC-14".equals(module.id())) {
             Button stocktakeButton = new Button(module.actionLabel());
             stocktakeButton.getStyleClass().add("button-primary");
             stocktakeButton.setOnAction(event -> createStocktakeDialog()
                     .ifPresent(request -> runMutation(
                             () -> featureServices.inventoryWorkflowService()
-                                    .completeStocktake(authenticatedUserId, request),
+                                    .createStocktakeDraft(authenticatedUserId, request),
                             () -> refreshRows(renderedTable, featureService, module))));
-            actions.getChildren().add(stocktakeButton);
+            Button confirmButton = new Button(Localization.text("Xác nhận phiên"));
+            confirmButton.getStyleClass().add("button-primary");
+            confirmButton.setVisible(canConfirmInventoryWorkflow(module.id(), userRole));
+            confirmButton.setManaged(canConfirmInventoryWorkflow(module.id(), userRole));
+            Button editButton = new Button(Localization.text("Sửa phiên"));
+            editButton.getStyleClass().add("button-secondary");
+            Button cancelStocktakeButton = new Button(Localization.text("Hủy phiên"));
+            cancelStocktakeButton.getStyleClass().add("button-secondary");
+            Button detailsButton = new Button(Localization.text("Xem chi tiết"));
+            detailsButton.getStyleClass().add("button-secondary");
+            javafx.beans.value.ObservableValue<ModuleRow> selectedStocktake =
+                    renderedTable.table().getSelectionModel().selectedItemProperty();
+            Runnable updateStocktakeActions = () -> {
+                ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+                boolean draft = isUnconfirmedStocktake(selected);
+                confirmButton.setDisable(!draft || !canConfirmInventoryWorkflow(module.id(), userRole));
+                editButton.setDisable(!draft);
+                cancelStocktakeButton.setDisable(!draft);
+                detailsButton.setDisable(selected == null);
+            };
+            selectedStocktake.addListener((observable, oldValue, newValue) -> updateStocktakeActions.run());
+            updateStocktakeActions.run();
+            confirmButton.setOnAction(event -> {
+                ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+                if (canConfirmInventoryWorkflow(module.id(), userRole)
+                        && isUnconfirmedStocktake(selected) && confirmStocktake(selected)) {
+                    runMutation(
+                            () -> featureServices.inventoryWorkflowService()
+                                    .confirmStocktake(authenticatedUserId, selected.id()),
+                            () -> refreshRows(renderedTable, featureService, module));
+                }
+            });
+            editButton.setOnAction(event -> {
+                ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+                if (!isUnconfirmedStocktake(selected)) {
+                    return;
+                }
+                try {
+                    InventoryWorkflowDAO.StocktakeDraft draft =
+                            featureServices.inventoryWorkflowService().findStocktakeDraft(selected.id());
+                    createStocktakeDialog(draft).ifPresent(request -> runMutation(
+                            () -> featureServices.inventoryWorkflowService().updateStocktakeDraft(
+                                    authenticatedUserId, selected.id(), request),
+                            () -> refreshRows(renderedTable, featureService, module)));
+                } catch (IllegalArgumentException | IllegalStateException
+                         | vn.ninhkieupharma.pharmacy.common.dao.DataAccessException exception) {
+                    showInformation(Localization.text("Không thể sửa phiên kiểm kê"),
+                            Localization.text(exception.getMessage()));
+                }
+            });
+            cancelStocktakeButton.setOnAction(event -> {
+                ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+                if (isUnconfirmedStocktake(selected) && confirmCancelStocktake(selected)) {
+                    runMutation(
+                            () -> featureServices.inventoryWorkflowService()
+                                    .cancelStocktakeDraft(authenticatedUserId, selected.id()),
+                            () -> refreshRows(renderedTable, featureService, module));
+                }
+            });
+            detailsButton.setOnAction(event -> {
+                ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+                if (selected != null) {
+                    showStocktakeDetails(selected);
+                }
+            });
+            actions.getChildren().addAll(
+                    stocktakeButton, confirmButton, editButton, cancelStocktakeButton, detailsButton);
         } else if (canWriteModule(module.id(), userRole)) {
             Button addButton = new Button(module.actionLabel());
             addButton.getStyleClass().add("button-primary");
@@ -484,6 +705,20 @@ public class PageRenderer {
                                 () -> refreshRows(renderedTable, featureService, module));
                     });
                     actions.getChildren().addAll(editButton, statusSelector);
+                    if (canDeleteModule(module.id(), userRole)) {
+                        Button deleteLocationButton = new Button(Localization.text("Xóa vị trí"));
+                        deleteLocationButton.getStyleClass().add("button-secondary");
+                        deleteLocationButton.disableProperty().bind(
+                                renderedTable.table().getSelectionModel().selectedItemProperty().isNull());
+                        deleteLocationButton.setOnAction(event -> {
+                            ModuleRow selected = renderedTable.table().getSelectionModel().getSelectedItem();
+                            if (selected != null && confirmDeleteLocation(selected)) {
+                                runMutation(() -> featureService.delete(module, selected.id()),
+                                        () -> refreshRows(renderedTable, featureService, module));
+                            }
+                        });
+                        actions.getChildren().add(deleteLocationButton);
+                    }
                 } else {
                     actions.getChildren().add(editButton);
                     if (canDeleteModule(module.id(), userRole)) {
@@ -552,7 +787,17 @@ public class PageRenderer {
         }
 
         if (module.report()) {
+<<<<<<< HEAD
             page.getChildren().addAll(title, description,
+=======
+            page.getChildren().addAll(title, description);
+            if (!"UC-10".equals(module.id())
+                    && !"UC-11".equals(module.id())
+                    && !"UC-15".equals(module.id())) {
+                page.getChildren().add(createReportSummary(module, featureService));
+            }
+            page.getChildren().addAll(
+>>>>>>> 54921761a3095ecb8919f62602fd2517fb311178
                     filters, actions, createReportCharts(module, featureService), renderedTable.table());
         } else {
             String note = salesCustomerEntry != null
@@ -573,6 +818,9 @@ public class PageRenderer {
             } else if (salesCustomerEntry != null) {
                 page.getChildren().addAll(
                         title, description, supportNote, salesCustomerEntry.node(), actions, renderedTable.table());
+            } else if (productFilters != null) {
+                page.getChildren().addAll(title, description, supportNote,
+                        actions, filters, renderedTable.table());
             } else {
                 page.getChildren().addAll(title, description, supportNote, actions, renderedTable.table());
             }
@@ -933,7 +1181,11 @@ public class PageRenderer {
         }
     }
 
+<<<<<<< HEAD
    private FlowPane createFilters(
+=======
+    private FlowPane createFilters(
+>>>>>>> 54921761a3095ecb8919f62602fd2517fb311178
             ModuleDefinition module,
             List<Node> filterInputs,
             FilteredList<ModuleRow> rows,
@@ -953,6 +1205,272 @@ public class PageRenderer {
         applyButton.setOnAction(event -> applyFilters(rows, search, filterInputs));
         filters.getChildren().add(applyButton);
         return filters;
+    }
+
+    private ReportFilters createReportFilters(ModuleDefinition module) {
+        GridPane fieldsGrid = new GridPane();
+        fieldsGrid.setHgap(12);
+        fieldsGrid.setVgap(10);
+        for (int index = 0; index < 3; index++) {
+            ColumnConstraints column = new ColumnConstraints();
+            column.setPercentWidth(100.0 / 3);
+            column.setHgrow(Priority.ALWAYS);
+            column.setFillWidth(true);
+            fieldsGrid.getColumnConstraints().add(column);
+        }
+
+        List<Node> fields = new ArrayList<>();
+        for (int index = 0; index < module.columns().size(); index++) {
+            Control field;
+            if (index == 1 && "UC-10".equals(module.id())) {
+                field = createCatalogFilter("UC-07", 0, module.columns().get(index));
+            } else if (index == 1 && "UC-11".equals(module.id())) {
+                field = createCatalogFilter("UC-09", 1, module.columns().get(index));
+            } else {
+                TextField textField = new TextField();
+                textField.setMinWidth(90);
+                textField.setPrefWidth(160);
+                field = textField;
+            }
+            field.setMaxWidth(Double.MAX_VALUE);
+            fields.add(field);
+
+            Label label = new Label(Localization.text(module.columns().get(index)));
+            label.setWrapText(true);
+            label.getStyleClass().add("overview-label");
+            VBox fieldGroup = new VBox(5, label, field);
+            GridPane.setHgrow(fieldGroup, Priority.ALWAYS);
+            fieldsGrid.add(fieldGroup, index % 3, index / 3);
+        }
+
+        Button applyButton = new Button(Localization.text("Áp dụng"));
+        applyButton.getStyleClass().add("button-secondary");
+        HBox actions = new HBox(applyButton);
+        actions.setAlignment(Pos.CENTER_RIGHT);
+
+        VBox container = new VBox(10, fieldsGrid, actions);
+        container.setMaxWidth(Double.MAX_VALUE);
+        container.getStyleClass().add("filter-bar");
+        return new ReportFilters(container, List.copyOf(fields), applyButton);
+    }
+
+    private ProductFilters createProductFilters(ModuleDefinition module, List<ModuleRow> products) {
+        GridPane container = new GridPane();
+        container.setHgap(10);
+        container.setVgap(8);
+        container.setMaxWidth(Double.MAX_VALUE);
+        container.getStyleClass().add("filter-bar");
+        for (int index = 0; index < 5; index++) {
+            ColumnConstraints column = new ColumnConstraints();
+            column.setPercentWidth(20);
+            column.setHgrow(Priority.ALWAYS);
+            column.setFillWidth(true);
+            container.getColumnConstraints().add(column);
+        }
+
+        List<Integer> columnIndexes = new ArrayList<>();
+        List<Node> fields = new ArrayList<>();
+        Map<Integer, ComboBox<ProductFilterOption>> selectors = new LinkedHashMap<>();
+        TextField minimumPrice = null;
+        TextField maximumPrice = null;
+        for (int index = 0; index < module.columns().size(); index++) {
+            if (index == 5) {
+                minimumPrice = createPriceFilterField("Giá bán từ (VNĐ)");
+                maximumPrice = createPriceFilterField("Giá bán đến (VNĐ)");
+                HBox priceRange = new HBox(8,
+                        minimumPrice, new Label("–"), maximumPrice);
+                priceRange.setAlignment(Pos.CENTER_LEFT);
+                container.add(priceRange, 0, 1);
+                continue;
+            }
+            if (index == 9) {
+                continue;
+            }
+            Node field;
+            if (List.of(2, 3, 4, 6, 7, 8).contains(index)) {
+                ComboBox<ProductFilterOption> selector = createProductChoiceFilter(index, products);
+                selectors.put(index, selector);
+                field = selector;
+            } else {
+                field = createProductFilterField(module.columns().get(index));
+            }
+            fields.add(field);
+            columnIndexes.add(index);
+            int row = index < 5 ? 0 : 1;
+            int column = index < 5 ? index : index - 5;
+            container.add(field, column, row);
+            GridPane.setHgrow(field, Priority.ALWAYS);
+        }
+
+        return new ProductFilters(container, List.copyOf(columnIndexes), List.copyOf(fields), Map.copyOf(selectors),
+                minimumPrice, maximumPrice);
+    }
+
+    private ComboBox<ProductFilterOption> createProductChoiceFilter(
+            int columnIndex, List<ModuleRow> products) {
+        ComboBox<ProductFilterOption> filter = new ComboBox<>();
+        filter.getItems().setAll(productFilterOptions(columnIndex, products));
+        filter.setPromptText(productFilterFieldLabel(columnIndex));
+        filter.setMinWidth(90);
+        filter.setPrefWidth(140);
+        filter.setMaxWidth(Double.MAX_VALUE);
+        filter.getStyleClass().add("filter-input");
+        filter.getSelectionModel().selectFirst();
+        return filter;
+    }
+
+    private String productFilterFieldLabel(int columnIndex) {
+        return Localization.text(switch (columnIndex) {
+            case 2 -> "Danh mục";
+            case 3 -> "Dạng bào chế";
+            case 4 -> "Đơn vị";
+            case 6 -> "Kê đơn";
+            case 7 -> "Trạng thái";
+            case 8 -> "Nhà cung cấp";
+            default -> throw new IllegalArgumentException("Unsupported product filter column: " + columnIndex);
+        });
+    }
+
+    private List<ProductFilterOption> productFilterOptions(int columnIndex, List<ModuleRow> products) {
+        List<String> values = switch (columnIndex) {
+            case 6 -> List.of("Yes", "No");
+            case 7 -> List.of("ACTIVE", "INACTIVE");
+            default -> products.stream()
+                    .filter(row -> row.values().size() > columnIndex)
+                    .map(row -> row.values().get(columnIndex))
+                    .filter(value -> !value.isBlank())
+                    .distinct()
+                    .sorted(String.CASE_INSENSITIVE_ORDER)
+                    .toList();
+        };
+        List<ProductFilterOption> options = new ArrayList<>();
+        options.add(new ProductFilterOption("", productFilterFieldLabel(columnIndex)));
+        values.stream()
+                .map(value -> new ProductFilterOption(value, Localization.productText(value)))
+                .forEach(options::add);
+        return List.copyOf(options);
+    }
+
+    private void refreshProductFilterOptions(ProductFilters filters, List<ModuleRow> products) {
+        filters.selectors().forEach((columnIndex, selector) -> {
+            ProductFilterOption current = selector.getValue();
+            selector.getItems().setAll(productFilterOptions(columnIndex, products));
+            ProductFilterOption matching = selector.getItems().stream()
+                    .filter(option -> current != null && option.value().equals(current.value()))
+                    .findFirst()
+                    .orElse(selector.getItems().get(0));
+            selector.getSelectionModel().select(matching);
+        });
+    }
+
+    private TextField createProductFilterField(String prompt) {
+        TextField field = new TextField();
+        field.setPromptText(Localization.text(prompt));
+        field.setMinWidth(90);
+        field.setPrefWidth(140);
+        field.getStyleClass().add("filter-input");
+        return field;
+    }
+
+    private TextField createPriceFilterField(String prompt) {
+        TextField field = new TextField();
+        field.setPromptText(Localization.text(prompt));
+        field.setMinWidth(40);
+        field.setPrefWidth(100);
+        field.getStyleClass().add("filter-input");
+        field.setTextFormatter(new TextFormatter<String>(change ->
+                change.getControlNewText().matches("[\\d.,]{0,20}") ? change : null));
+        return field;
+    }
+
+    private void applyProductFilters(
+            FilteredList<ModuleRow> rows,
+            TextField search,
+            ProductFilters filters) {
+        BigDecimal minimumPrice = parseProductPriceBound(filters.minimumPrice().getText());
+        BigDecimal maximumPrice = parseProductPriceBound(filters.maximumPrice().getText());
+
+        List<String> columnQueries = new ArrayList<>(Collections.nCopies(10, ""));
+        for (int index = 0; index < filters.fields().size(); index++) {
+            int columnIndex = filters.columnIndexes().get(index);
+            String value = productFilterValue(filters.fields().get(index));
+            columnQueries.set(columnIndex, value);
+        }
+        BigDecimal capturedMinimumPrice = minimumPrice;
+        BigDecimal capturedMaximumPrice = maximumPrice;
+        rows.setPredicate(row -> matchesProductFilters(
+                row, search.getText(), columnQueries, capturedMinimumPrice, capturedMaximumPrice));
+    }
+
+    private String productFilterValue(Node field) {
+        if (field instanceof ComboBox<?> comboBox && comboBox.getValue() instanceof ProductFilterOption option) {
+            return option.value();
+        }
+        return inputValue(field);
+    }
+
+    static BigDecimal parseProductPriceBound(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        String normalized = value.replaceAll("\\s+", "");
+        if (normalized.matches("\\d+(?:[.,]\\d{0,2})?")) {
+            normalized = normalized.replace(',', '.');
+        } else if (normalized.matches("\\d{1,3}(?:\\.\\d{3})+(?:,\\d{1,2})?")) {
+            normalized = normalized.replace(".", "").replace(',', '.');
+        } else if (normalized.matches("\\d{1,3}(?:,\\d{3})+(?:\\.\\d{1,2})?")) {
+            normalized = normalized.replace(",", "");
+        } else {
+            return null;
+        }
+        return new BigDecimal(normalized);
+    }
+
+    static boolean matchesProductFilters(
+            ModuleRow row,
+            String searchQuery,
+            List<String> columnQueries,
+            BigDecimal minimumPrice,
+            BigDecimal maximumPrice) {
+        List<String> values = row.values();
+        if (values.size() != 10 || columnQueries.size() != 10) {
+            throw new IllegalArgumentException("Product filters require 10 product columns.");
+        }
+
+        String searchableRow = values.stream()
+                .map(value -> value + " " + Localization.text(value))
+                .reduce("", (left, right) -> left + " " + right)
+                .toLowerCase(Locale.ROOT);
+        if (!normalize(searchQuery).isBlank() && !searchableRow.contains(normalize(searchQuery))) {
+            return false;
+        }
+        for (int index = 0; index < columnQueries.size(); index++) {
+            String query = normalize(columnQueries.get(index));
+            String cellValue = normalize(values.get(index) + " " + Localization.text(values.get(index))
+                    + " " + Localization.productText(values.get(index)));
+            if (!query.isBlank() && !cellValue.contains(query)) {
+                return false;
+            }
+        }
+
+        BigDecimal price = new BigDecimal(values.get(5));
+        return (minimumPrice == null || price.compareTo(minimumPrice) >= 0)
+                && (maximumPrice == null || price.compareTo(maximumPrice) <= 0);
+    }
+
+    private ComboBox<String> createCatalogFilter(String moduleId, int valueIndex, String prompt) {
+        ModuleDefinition sourceModule = moduleDefinition(moduleId);
+        FeatureModuleService sourceService = featureServices.forModule(sourceModule);
+        List<String> options = sourceService.findAll(sourceModule).stream()
+                .filter(row -> row.values().size() > valueIndex)
+                .map(row -> row.values().get(valueIndex))
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .toList();
+        ComboBox<String> filter = new ComboBox<>(FXCollections.observableArrayList(options));
+        filter.setPromptText(Localization.text(prompt));
+        filter.setMaxWidth(Double.MAX_VALUE);
+        return filter;
     }
 
     private InventoryFilters createInventoryFilters() {
@@ -1067,7 +1585,9 @@ public class PageRenderer {
         if (values == null || values.size() < 7) {
             return false;
         }
-        String searchable = normalize(String.join(" ", values));
+        String searchableText = String.join(" ", values);
+        searchableText += " " + Localization.movementTypeText(values.get(2));
+        String searchable = normalize(searchableText);
         String normalizedQuery = normalize(query);
         if (!normalizedQuery.isBlank() && !searchable.contains(normalizedQuery)) {
             return false;
@@ -1391,6 +1911,11 @@ public class PageRenderer {
         for (int index = 0; index < module.columns().size(); index++) {
             final int columnIndex = index;
             TableColumn<ModuleRow, String> column = new TableColumn<>(module.columns().get(index));
+            double columnWidth = reportColumnWidth(module.id(), index);
+            if (columnWidth > 0) {
+                column.setMinWidth(columnWidth);
+                column.setPrefWidth(columnWidth);
+            }
             column.setCellValueFactory(cell -> {
                 String value = cell.getValue().values().get(columnIndex);
                 if ("UC-18".equals(module.id())) {
@@ -1425,7 +1950,8 @@ public class PageRenderer {
         ObservableList<ModuleRow> source = FXCollections.observableArrayList(rows);
         FilteredList<ModuleRow> filteredRows = new FilteredList<>(source, row -> true);
         table.setItems(filteredRows);
-        if ("UC-12".equals(module.id()) || "UC-13".equals(module.id()) || "UC-14".equals(module.id())) {
+        if ("UC-12".equals(module.id()) || "UC-13".equals(module.id())
+                || "UC-14".equals(module.id()) || "UC-15".equals(module.id())) {
             table.setRowFactory(view -> {
                 javafx.scene.control.TableRow<ModuleRow> row =
                         new javafx.scene.control.TableRow<>();
@@ -1440,6 +1966,8 @@ public class PageRenderer {
                             showGoodsReceiptDetails(row.getItem());
                         } else if ("UC-14".equals(module.id())) {
                             showStocktakeDetails(row.getItem());
+                        } else if ("UC-15".equals(module.id())) {
+                            showInventoryMovementDetails(row.getItem());
                         } else {
                             if ("UC-13".equals(module.id())) {
                                 editRow(module, featureService, row.getItem())
@@ -1463,6 +1991,29 @@ public class PageRenderer {
         return result;
     }
 
+<<<<<<< HEAD
+=======
+    private double reportColumnWidth(String moduleId, int columnIndex) {
+        double[] widths = switch (moduleId) {
+            case "UC-10" -> new double[] {100, 160, 220, 100, 210};
+            case "UC-11" -> new double[] {105, 180, 125, 100, 200};
+            default -> new double[0];
+        };
+        return columnIndex < widths.length ? widths[columnIndex] : 0;
+    }
+
+    private Node createReportSummary(ModuleDefinition module, FeatureModuleService featureService) {
+        FlowPane summary = new FlowPane(12, 8);
+        summary.getStyleClass().add("demo-summary");
+        summary.getChildren().add(summaryCard(Localization.text("BẢN GHI"),
+                featureService.findAll(module).size() + Localization.text(" dòng")));
+        summary.getChildren().add(summaryCard(Localization.text("PHẠM VI"), module.id()));
+        summary.getChildren().add(summaryCard(Localization.text("TRẠNG THÁI"),
+                Localization.text("Đọc từ MySQL")));
+        return summary;
+    }
+
+>>>>>>> 54921761a3095ecb8919f62602fd2517fb311178
     private Node createReportCharts(ModuleDefinition module, FeatureModuleService featureService) {
         FlowPane charts = new FlowPane(16, 16);
         charts.getStyleClass().add("report-chart-row");
@@ -1515,32 +2066,27 @@ public class PageRenderer {
                         "Trạng thái", "Đúng giờ", attendance.size() - lateCount,
                         "Đi trễ", lateCount)));
             }
-           case "UC-10" -> {
-                List<ModuleRow> categoryRows = featureService.findAll(module);
-                List<String> categories = categoryRows.stream()
-                        .map(row -> row.values().get(0) + " · " + Localization.text(row.values().get(1)))
-                        .toList();
-                List<Number> counts = categoryRows.stream()
-                        .map(row -> (Number) Integer.parseInt(row.values().get(2).split("\\s+")[0]))
-                        .toList();
-                charts.getChildren().add(chartCard("Số sản phẩm theo quý & danh mục", barChart(
-                        "Quý · Danh mục", "Số sản phẩm", categories, seriesFromList("Sản phẩm", counts))));
-                charts.getChildren().add(chartCard("Tỷ trọng ngành hàng",
-                        pieChart("Danh mục", seriesPairs(categories, counts))));
+            case "UC-10" -> {
+                TrendChartData data = createTrendChartData(featureService.findAll(module), 0, 1);
+                charts.getChildren().add(chartCard("Biểu đồ cột: Số mặt hàng theo quý và ngành hàng",
+                        barChart("Quý", "Số mặt hàng", data.periods(), data.series())));
+                charts.getChildren().add(chartCard("Biểu đồ đường: Xu hướng ngành hàng theo quý",
+                        lineChart("Quý", "Số mặt hàng", data.periods(), data.series())));
+                charts.getChildren().add(chartCard("Biểu đồ miền: Ngành hàng theo quý",
+                        areaChart("Quý", "Số mặt hàng", data.periods(), data.series())));
+                charts.getChildren().add(chartCard("Biểu đồ hình bánh: Tỷ trọng ngành hàng",
+                        pieChart("Danh mục", seriesPairs(data.dimensions(), data.latestPeriodTotals()))));
             }
             case "UC-11" -> {
-                List<ModuleRow> supplierRows = featureService.findAll(module);
-                List<String> suppliers = supplierRows.stream()
-                        .map(row -> row.values().get(0) + " · " + Localization.text(row.values().get(1)))
-                        .toList();
-                List<Number> itemCounts = supplierRows.stream()
-                        .map(row -> (Number) Integer.parseInt(row.values().get(2)))
-                        .toList();
-                charts.getChildren().add(chartCard("Mặt hàng cung ứng theo tháng & NCC", barChart(
-                        "Tháng · Nhà cung cấp", "Số mặt hàng", suppliers,
-                        seriesFromList("Mặt hàng", itemCounts))));
-                charts.getChildren().add(chartCard("Tỷ trọng độ phủ nhà cung cấp",
-                        pieChart("Nhà cung cấp", seriesPairs(suppliers, itemCounts))));
+                TrendChartData data = createTrendChartData(featureService.findAll(module), 0, 1);
+                charts.getChildren().add(chartCard("Biểu đồ cột: Số mặt hàng theo tháng và nhà cung cấp",
+                        barChart("Tháng", "Số mặt hàng", data.periods(), data.series())));
+                charts.getChildren().add(chartCard("Biểu đồ đường: Xu hướng độ phủ nhà cung cấp",
+                        lineChart("Tháng", "Số mặt hàng", data.periods(), data.series())));
+                charts.getChildren().add(chartCard("Biểu đồ miền: Cung ứng theo tháng",
+                        areaChart("Tháng", "Số mặt hàng", data.periods(), data.series())));
+                charts.getChildren().add(chartCard("Biểu đồ hình bánh: Tỷ trọng nhà cung cấp",
+                        pieChart("Nhà cung cấp", seriesPairs(data.dimensions(), data.latestPeriodTotals()))));
             }
             case "UC-15" -> {
                 List<ModuleRow> movementRows = featureService.findAll(module);
@@ -1570,6 +2116,51 @@ public class PageRenderer {
         return charts;
     }
 
+    static TrendChartData createTrendChartData(
+            List<ModuleRow> rows, int periodIndex, int dimensionIndex) {
+        Map<String, Map<String, Integer>> countsByPeriod = new TreeMap<>();
+        for (ModuleRow row : rows) {
+            if (row.values().size() < 3) {
+                throw new IllegalArgumentException("Trend report rows require period, dimension, and count values.");
+            }
+            String period = row.values().get(periodIndex);
+            String dimension = row.values().get(dimensionIndex);
+            int count = parseReportProductCount(row.values().get(2));
+            countsByPeriod.computeIfAbsent(period, ignored -> new LinkedHashMap<>())
+                    .merge(dimension, count, Integer::sum);
+        }
+
+        List<String> periods = List.copyOf(countsByPeriod.keySet());
+        List<String> dimensions = countsByPeriod.values().stream()
+                .flatMap(counts -> counts.keySet().stream())
+                .distinct()
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .toList();
+        Map<String, List<Number>> series = new LinkedHashMap<>();
+        List<Number> latestPeriodTotals = new ArrayList<>();
+        for (String dimension : dimensions) {
+            List<Number> values = periods.stream()
+                    .map(period -> (Number) countsByPeriod.get(period).getOrDefault(dimension, 0))
+                    .toList();
+            series.put(dimension, values);
+            int latestCount = periods.isEmpty()
+                    ? 0
+                    : countsByPeriod.get(periods.get(periods.size() - 1)).getOrDefault(dimension, 0);
+            latestPeriodTotals.add(latestCount);
+        }
+        return new TrendChartData(
+                periods, Collections.unmodifiableMap(series), dimensions, List.copyOf(latestPeriodTotals));
+    }
+
+    private static int parseReportProductCount(String value) {
+        String count = value.trim().split("\\s+", 2)[0];
+        try {
+            return Integer.parseInt(count);
+        } catch (NumberFormatException exception) {
+            throw new IllegalArgumentException("Expected a numeric report count: " + value, exception);
+        }
+    }
+
     private VBox chartCard(String title, Chart chart) {
         VBox card = new VBox(10);
         card.getStyleClass().add("chart-card");
@@ -1593,6 +2184,7 @@ public class PageRenderer {
             Map<String, List<Number>> values) {
         CategoryAxis xAxis = new CategoryAxis();
         xAxis.setLabel(Localization.text(categoryLabel));
+        xAxis.setTickLabelRotation(categories.size() > 5 ? 35 : 0);
         NumberAxis yAxis = new NumberAxis();
         yAxis.setLabel(Localization.text(valueLabel));
         BarChart<String, Number> chart = new BarChart<>(xAxis, yAxis);
@@ -1607,6 +2199,7 @@ public class PageRenderer {
             Map<String, List<Number>> values) {
         CategoryAxis xAxis = new CategoryAxis();
         xAxis.setLabel(Localization.text(categoryLabel));
+        xAxis.setTickLabelRotation(categories.size() > 5 ? 35 : 0);
         NumberAxis yAxis = new NumberAxis();
         yAxis.setLabel(Localization.text(valueLabel));
         LineChart<String, Number> chart = new LineChart<>(xAxis, yAxis);
@@ -1619,6 +2212,7 @@ public class PageRenderer {
             Map<String, List<Number>> values) {
         CategoryAxis xAxis = new CategoryAxis();
         xAxis.setLabel(Localization.text(categoryLabel));
+        xAxis.setTickLabelRotation(categories.size() > 5 ? 35 : 0);
         NumberAxis yAxis = new NumberAxis();
         yAxis.setLabel(Localization.text(valueLabel));
         AreaChart<String, Number> chart = new AreaChart<>(xAxis, yAxis);
@@ -1734,7 +2328,7 @@ public class PageRenderer {
                 .toList();
         rows.setPredicate(row -> {
             String searchableRow = row.values().stream()
-                    .map(Localization::text)
+                    .map(value -> value + " " + Localization.text(value))
                     .reduce("", (left, right) -> left + " " + right)
                     .toLowerCase(Locale.ROOT);
             return (query.isBlank() || searchableRow.contains(query))
@@ -1742,9 +2336,111 @@ public class PageRenderer {
         });
     }
 
+    private void applyReportFilters(
+            FilteredList<ModuleRow> rows, TextField search, ReportFilters filters) {
+        List<String> columnQueries = filters.fields().stream()
+                .map(this::inputValue)
+                .toList();
+        rows.setPredicate(row -> matchesReportFilters(row, search.getText(), columnQueries));
+    }
+
+    static boolean matchesReportFilters(
+            ModuleRow row, String searchQuery, List<String> columnQueries) {
+        List<String> values = row.values();
+        if (values.size() != columnQueries.size()) {
+            throw new IllegalArgumentException("Report filters must match the report column count.");
+        }
+
+        String searchableRow = values.stream()
+                .map(value -> value + " " + Localization.text(value))
+                .reduce("", (left, right) -> left + " " + right)
+                .toLowerCase(Locale.ROOT);
+        if (!normalize(searchQuery).isBlank() && !searchableRow.contains(normalize(searchQuery))) {
+            return false;
+        }
+        for (int index = 0; index < columnQueries.size(); index++) {
+            String query = normalize(columnQueries.get(index));
+            String value = normalize(values.get(index) + " " + Localization.text(values.get(index)));
+            if (!query.isBlank() && !value.contains(query)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void applyStatusFilters(
+            FilteredList<ModuleRow> rows, TextField search, ComboBox<String> statusFilter) {
+        String query = search.getText() == null
+                ? "" : search.getText().trim().toLowerCase(Locale.ROOT);
+        String status = statusFilter.getValue();
+        rows.setPredicate(row -> {
+            String searchableRow = row.values().stream()
+                    .map(Localization::text)
+                    .reduce("", (left, right) -> left + " " + right)
+                    .toLowerCase(Locale.ROOT);
+            return (query.isBlank() || searchableRow.contains(query))
+                    && (status == null || Localization.text("Tất cả trạng thái").equals(status)
+                    || row.values().size() > 4 && status.equals(Localization.text(row.values().get(4))));
+        });
+    }
+
+    private boolean isUnconfirmedReceipt(ModuleRow receipt) {
+        return receipt != null && receipt.values().size() > 4
+                && "Chưa xác nhận".equals(receipt.values().get(4));
+    }
+
+    private boolean isUnconfirmedStocktake(ModuleRow stocktake) {
+        return stocktake != null && stocktake.values().size() > 4
+                && "Chưa xác nhận".equals(stocktake.values().get(4));
+    }
+
+    private boolean confirmGoodsReceipt(ModuleRow receipt) {
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+        alert.setTitle(Localization.text("Xác nhận phiếu nhập"));
+        alert.setHeaderText(receipt.values().get(0));
+        alert.setContentText(Localization.text(
+                "Xác nhận phiếu sẽ cập nhật tồn kho. Sau khi xác nhận, không thể sửa hoặc xóa phiếu."));
+        alert.getButtonTypes().setAll(ButtonType.CANCEL, ButtonType.OK);
+        return alert.showAndWait().filter(ButtonType.OK::equals).isPresent();
+    }
+
+    private boolean confirmCancelReceiptDraft(ModuleRow receipt) {
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+        alert.setTitle(Localization.text("Hủy phiếu nhập"));
+        alert.setHeaderText(receipt.values().get(0));
+        alert.setContentText(Localization.text(
+                "Phiếu chưa xác nhận sẽ được chuyển sang trạng thái đã hủy và vẫn được lưu trong lịch sử. Tồn kho không thay đổi."));
+        alert.getButtonTypes().setAll(ButtonType.CANCEL, ButtonType.OK);
+        return alert.showAndWait().filter(ButtonType.OK::equals).isPresent();
+    }
+
+    private boolean confirmStocktake(ModuleRow stocktake) {
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+        alert.setTitle(Localization.text("Xác nhận phiên kiểm kê"));
+        alert.setHeaderText(stocktake.values().get(0));
+        alert.setContentText(Localization.text(
+                "Xác nhận sẽ điều chỉnh tồn kho theo số đếm. Sau đó không thể sửa hoặc xóa phiên."));
+        alert.getButtonTypes().setAll(ButtonType.CANCEL, ButtonType.OK);
+        return alert.showAndWait().filter(ButtonType.OK::equals).isPresent();
+    }
+
+    private boolean confirmCancelStocktake(ModuleRow stocktake) {
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+        alert.setTitle(Localization.text("Hủy phiên kiểm kê"));
+        alert.setHeaderText(stocktake.values().get(0));
+        alert.setContentText(Localization.text(
+                "Phiên chưa xác nhận sẽ được chuyển sang trạng thái đã hủy và vẫn được lưu trong lịch sử. Tồn kho không thay đổi."));
+        alert.getButtonTypes().setAll(ButtonType.CANCEL, ButtonType.OK);
+        return alert.showAndWait().filter(ButtonType.OK::equals).isPresent();
+    }
+
     private String inputValue(Node node) {
         if (node instanceof TextInputControl textInput) {
             return textInput.getText().trim();
+        }
+        if (node instanceof ComboBox<?> comboBox) {
+            Object value = comboBox.getValue();
+            return value == null ? "" : value.toString().trim();
         }
         return "";
     }
@@ -1849,6 +2545,12 @@ public class PageRenderer {
         addCustomerField(summary, 1, "Chênh lệch", new Label(stocktake.values().get(3)));
         addCustomerField(summary, 2, "Trạng thái", new Label(
                 Localization.text(stocktake.values().get(4))));
+        if (stocktake.values().size() > 5 && !stocktake.values().get(5).isBlank()) {
+            Label note = new Label(stocktake.values().get(5));
+            note.setWrapText(true);
+            note.setMaxWidth(Double.MAX_VALUE);
+            addCustomerField(summary, 3, "Ghi chú", note);
+        }
 
         TableView<InventoryWorkflowDAO.StocktakeDetail> table = new TableView<>();
         table.getStyleClass().add("data-table");
@@ -1881,6 +2583,40 @@ public class PageRenderer {
         dialog.showAndWait();
     }
 
+    private void showInventoryMovementDetails(ModuleRow movement) {
+        List<String> values = movement.values();
+
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.setTitle(Localization.text("Chi tiết biến động kho"));
+        dialog.setHeaderText(Localization.text(values.get(1)));
+        dialog.initModality(Modality.APPLICATION_MODAL);
+        dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        dialog.getDialogPane().getStyleClass().add("form-dialog");
+        dialog.getDialogPane().setPrefWidth(720);
+
+        GridPane fields = new GridPane();
+        fields.setHgap(16);
+        fields.setVgap(12);
+        addCustomerField(fields, 0, "Thời điểm", new Label(Localization.text(values.get(0))));
+        addCustomerField(fields, 1, "Sản phẩm / lô", new Label(Localization.text(values.get(1))));
+        addCustomerField(fields, 2, "Loại biến động",
+                new Label(Localization.movementTypeText(values.get(2))));
+        addCustomerField(fields, 3, "Số lượng", new Label(Localization.text(values.get(3))));
+        Label explanation = new Label(Localization.text(
+                values.get(4).isBlank() ? "Không có ghi chú" : values.get(4)));
+        explanation.setWrapText(true);
+        addCustomerField(fields, 4, "Diễn giải", explanation);
+        addCustomerField(fields, 5, "Hạn sử dụng",
+                new Label(Localization.text("—".equals(values.get(5))
+                        ? "Không có hạn sử dụng" : values.get(5))));
+        addCustomerField(fields, 6, "Vị trí kho", new Label(Localization.text(values.get(6))));
+
+        VBox content = new VBox(12, fields);
+        content.setPadding(new Insets(12, 0, 8, 0));
+        dialog.getDialogPane().setContent(content);
+        dialog.showAndWait();
+    }
+
     private String formatSignedQuantity(BigDecimal quantity) {
         String formatted = quantity.stripTrailingZeros().toPlainString();
         if (quantity.signum() > 0) {
@@ -1904,6 +2640,11 @@ public class PageRenderer {
     }
 
     private java.util.Optional<InventoryWorkflowDAO.ReceiptRequest> createGoodsReceiptDialog() {
+        return createGoodsReceiptDialog(null);
+    }
+
+    private java.util.Optional<InventoryWorkflowDAO.ReceiptRequest> createGoodsReceiptDialog(
+            InventoryWorkflowDAO.ReceiptDraft initialDraft) {
         InventoryWorkflowService service = featureServices.inventoryWorkflowService();
         List<InventoryWorkflowDAO.SupplierOption> suppliers = service.findSuppliers();
         List<InventoryWorkflowDAO.ProductOption> products = service.findProducts();
@@ -1915,8 +2656,9 @@ public class PageRenderer {
         }
 
         Dialog<InventoryWorkflowDAO.ReceiptRequest> dialog = new Dialog<>();
-        dialog.setTitle(Localization.text("Tạo phiếu nhập"));
-        dialog.setHeaderText(Localization.text("Nhập hàng vào kho"));
+        dialog.setTitle(Localization.text(initialDraft == null ? "Tạo phiếu nhập" : "Sửa phiếu nhập"));
+        dialog.setHeaderText(Localization.text(initialDraft == null
+                ? "Nhập hàng vào kho" : "Chỉnh sửa phiếu chưa xác nhận"));
         dialog.initModality(Modality.APPLICATION_MODAL);
         dialog.getDialogPane().getButtonTypes().addAll(ButtonType.CANCEL, ButtonType.OK);
         dialog.getDialogPane().getStyleClass().add("form-dialog");
@@ -1924,16 +2666,27 @@ public class PageRenderer {
 
         ComboBox<InventoryWorkflowDAO.SupplierOption> supplier = new ComboBox<>(
                 FXCollections.observableArrayList(suppliers));
-        supplier.getSelectionModel().selectFirst();
+        if (initialDraft == null) {
+            supplier.getSelectionModel().selectFirst();
+        } else {
+            supplier.getItems().stream()
+                    .filter(option -> option.id() == initialDraft.supplierId())
+                    .findFirst()
+                    .ifPresent(supplier.getSelectionModel()::select);
+        }
         supplier.setMaxWidth(Double.MAX_VALUE);
         Node supplierSelector = searchableInventorySelector(
                 supplier, "Tìm nhà cung cấp...", 460);
-        DatePicker receivedDate = new DatePicker(LocalDate.now());
+        DatePicker receivedDate = new DatePicker(
+                initialDraft == null ? LocalDate.now() : initialDraft.receivedDate());
         TextArea note = new TextArea();
         note.setPromptText(Localization.text("Số hóa đơn nhà cung cấp / ghi chú"));
         note.setPrefRowCount(2);
         note.setWrapText(true);
         note.getStyleClass().add("text-input");
+        if (initialDraft != null && initialDraft.note() != null) {
+            note.setText(initialDraft.note());
+        }
 
         GridPane header = new GridPane();
         header.setHgap(16);
@@ -1950,10 +2703,18 @@ public class PageRenderer {
         Button addLine = new Button(Localization.text("Thêm mặt hàng"));
         addLine.getStyleClass().add("button-secondary");
         addLine.setOnAction(event -> addReceiptLine(lines, lineRows, products));
-        addReceiptLine(lines, lineRows, products);
+        if (initialDraft == null) {
+            addReceiptLine(lines, lineRows, products);
+        } else {
+            for (InventoryWorkflowDAO.ReceiptLine line : initialDraft.lines()) {
+                addReceiptLine(lines, lineRows, products, line);
+            }
+        }
 
         VBox content = new VBox(12,
                 header,
+                new Label(Localization.text(
+                        "Phiếu mới sẽ ở trạng thái chưa xác nhận và chưa làm thay đổi tồn kho.")),
                 new Label(Localization.text(
                         "Mỗi dòng nhập lưu sản phẩm, mã lô, hạn sử dụng, vị trí, số lượng và giá nhập.")),
                 lineScroll,
@@ -1994,13 +2755,12 @@ public class PageRenderer {
             if (selected != null && !filteredItems.contains(selected)) {
                 combo.getSelectionModel().clearSelection();
             }
-        });
-        combo.valueProperty().addListener((observable, oldValue, newValue) -> {
-            if (newValue != null && !search.getText().isBlank()) {
-                search.clear();
+            if (query.isBlank() || filteredItems.isEmpty()) {
+                combo.hide();
+            } else {
+                combo.show();
             }
         });
-
         VBox selector = new VBox(4, search, combo);
         selector.setPrefWidth(width);
         selector.setMinWidth(0);
@@ -2011,6 +2771,14 @@ public class PageRenderer {
             List<ReceiptLineInput> lines,
             VBox lineRows,
             List<InventoryWorkflowDAO.ProductOption> products) {
+        addReceiptLine(lines, lineRows, products, null);
+    }
+
+    private void addReceiptLine(
+            List<ReceiptLineInput> lines,
+            VBox lineRows,
+            List<InventoryWorkflowDAO.ProductOption> products,
+            InventoryWorkflowDAO.ReceiptLine initialLine) {
         ComboBox<InventoryWorkflowDAO.ProductOption> product =
                 new ComboBox<>(FXCollections.observableArrayList(products));
         product.setPromptText(Localization.text("Sản phẩm"));
@@ -2019,7 +2787,14 @@ public class PageRenderer {
                 featureServices.inventoryWorkflowService().findLocations();
         ComboBox<InventoryWorkflowDAO.LocationOption> location =
                 new ComboBox<>(FXCollections.observableArrayList(locations));
-        location.getSelectionModel().selectFirst();
+        if (initialLine == null) {
+            location.getSelectionModel().selectFirst();
+        } else {
+            location.getItems().stream()
+                    .filter(option -> option.id() == initialLine.locationId())
+                    .findFirst()
+                    .ifPresent(location.getSelectionModel()::select);
+        }
         Node locationSelector = searchableInventorySelector(location, "Tìm kệ / vị trí...", 150);
         TextField batchCode = new TextField();
         batchCode.setPromptText(Localization.text("Mã lô"));
@@ -2033,6 +2808,16 @@ public class PageRenderer {
         TextField unitCost = new TextField();
         unitCost.setPromptText(Localization.text("Giá nhập"));
         unitCost.setPrefWidth(100);
+        if (initialLine != null) {
+            product.getItems().stream()
+                    .filter(option -> option.id() == initialLine.productId())
+                    .findFirst()
+                    .ifPresent(product.getSelectionModel()::select);
+            batchCode.setText(initialLine.batchCode());
+            expiryDate.setValue(initialLine.expiryDate());
+            quantity.setText(initialLine.quantity().stripTrailingZeros().toPlainString());
+            unitCost.setText(initialLine.unitCost().stripTrailingZeros().toPlainString());
+        }
         Button remove = new Button(Localization.text("Bỏ"));
         HBox row = new HBox(
                 8, productSelector, batchCode, expiryDate, locationSelector, quantity, unitCost, remove);
@@ -2098,6 +2883,11 @@ public class PageRenderer {
     }
 
     private java.util.Optional<InventoryWorkflowDAO.StocktakeRequest> createStocktakeDialog() {
+        return createStocktakeDialog(null);
+    }
+
+    private java.util.Optional<InventoryWorkflowDAO.StocktakeRequest> createStocktakeDialog(
+            InventoryWorkflowDAO.StocktakeDraft initialDraft) {
         InventoryWorkflowService service = featureServices.inventoryWorkflowService();
         List<InventoryWorkflowDAO.LocationOption> locations = service.findLocations();
         if (locations.isEmpty()) {
@@ -2107,8 +2897,9 @@ public class PageRenderer {
         }
 
         Dialog<InventoryWorkflowDAO.StocktakeRequest> dialog = new Dialog<>();
-        dialog.setTitle(Localization.text("Tạo phiên kiểm kê"));
-        dialog.setHeaderText(Localization.text("Ghi nhận tồn thực tế theo từng lô"));
+        dialog.setTitle(Localization.text(initialDraft == null ? "Tạo phiên kiểm kê" : "Sửa phiên kiểm kê"));
+        dialog.setHeaderText(Localization.text(initialDraft == null
+                ? "Ghi nhận tồn thực tế theo từng lô" : "Chỉnh sửa phiên chưa xác nhận"));
         dialog.initModality(Modality.APPLICATION_MODAL);
         dialog.getDialogPane().getButtonTypes().addAll(ButtonType.CANCEL, ButtonType.OK);
         dialog.getDialogPane().getStyleClass().add("form-dialog");
@@ -2116,12 +2907,23 @@ public class PageRenderer {
 
         ComboBox<InventoryWorkflowDAO.LocationOption> location = new ComboBox<>(
                 FXCollections.observableArrayList(locations));
-        location.getSelectionModel().selectFirst();
-        DatePicker stocktakeDate = new DatePicker(LocalDate.now());
+        if (initialDraft == null) {
+            location.getSelectionModel().selectFirst();
+        } else {
+            location.getItems().stream()
+                    .filter(option -> option.id() == initialDraft.locationId())
+                    .findFirst()
+                    .ifPresent(location.getSelectionModel()::select);
+        }
+        DatePicker stocktakeDate = new DatePicker(
+                initialDraft == null ? LocalDate.now() : initialDraft.stocktakeDate());
         TextArea note = new TextArea();
         note.setPromptText(Localization.text("Ghi chú kiểm kê"));
         note.setPrefRowCount(2);
         note.setWrapText(true);
+        if (initialDraft != null && initialDraft.note() != null) {
+            note.setText(initialDraft.note());
+        }
         GridPane header = new GridPane();
         header.setHgap(16);
         header.setVgap(10);
@@ -2131,6 +2933,11 @@ public class PageRenderer {
 
         VBox batchRows = new VBox(6);
         Map<Long, TextField> countedQuantities = new java.util.LinkedHashMap<>();
+        Map<Long, BigDecimal> savedCounts = initialDraft == null
+                ? Map.of()
+                : initialDraft.counts().stream().collect(java.util.stream.Collectors.toMap(
+                        InventoryWorkflowDAO.StocktakeCount::batchId,
+                        InventoryWorkflowDAO.StocktakeCount::countedQuantity));
         Label batchStatus = new Label();
         Runnable reloadBatches = () -> {
             batchRows.getChildren().clear();
@@ -2143,7 +2950,11 @@ public class PageRenderer {
             List<InventoryWorkflowDAO.BatchOption> batches = location.getValue() == null
                     ? List.of() : service.findBatches(location.getValue().id());
             for (InventoryWorkflowDAO.BatchOption batch : batches) {
-                TextField counted = new TextField(batch.quantityOnHand().stripTrailingZeros().toPlainString());
+                BigDecimal savedCount = initialDraft != null
+                        && location.getValue().id() == initialDraft.locationId()
+                        ? savedCounts.get(batch.id()) : null;
+                TextField counted = new TextField((savedCount == null
+                        ? batch.quantityOnHand() : savedCount).stripTrailingZeros().toPlainString());
                 counted.setPromptText(Localization.text("Số lượng thực tế"));
                 counted.setPrefWidth(120);
                 countedQuantities.put(batch.id(), counted);
@@ -2156,7 +2967,8 @@ public class PageRenderer {
             }
             batchStatus.setText(batches.isEmpty()
                     ? Localization.text("Vị trí này chưa có lô tồn kho để kiểm kê.")
-                    : Localization.text("Phiên sẽ chốt tồn và ghi biến động cho các chênh lệch."));
+                    : Localization.text(
+                            "Phiên chưa xác nhận sẽ chưa thay đổi tồn kho; xác nhận để áp dụng chênh lệch."));
         };
         location.valueProperty().addListener((observable, oldValue, newValue) -> reloadBatches.run());
         reloadBatches.run();
@@ -2164,7 +2976,10 @@ public class PageRenderer {
         ScrollPane batchScroll = new ScrollPane(batchRows);
         batchScroll.setFitToWidth(true);
         batchScroll.setPrefViewportHeight(340);
-        VBox content = new VBox(10, header, batchStatus, batchScroll);
+        VBox content = new VBox(10, header,
+                new Label(Localization.text(
+                        "Phiên mới ở trạng thái chưa xác nhận; tồn kho chỉ đổi sau khi xác nhận.")),
+                batchStatus, batchScroll);
         content.setPadding(new Insets(10, 0, 0, 0));
         dialog.getDialogPane().setContent(content);
 
@@ -2258,7 +3073,7 @@ public class PageRenderer {
         TextField quantity = new TextField();
         quantity.setPromptText(Localization.text("Số lượng cần trừ"));
         TextArea note = new TextArea();
-        note.setPromptText(Localization.text("Lý do / ghi chú"));
+        note.setPromptText(Localization.text("Lý do / ghi chú (không bắt buộc)"));
         note.setPrefRowCount(3);
         note.setWrapText(true);
 
@@ -2418,6 +3233,9 @@ public class PageRenderer {
             return createPromotionDialog(
                     module, (PromotionsLoyaltyService) featureService, existingRow);
         }
+        if ("UC-08".equals(module.id())) {
+            return createProductDialog(module, existingRow);
+        }
         Dialog<ButtonType> dialog = new Dialog<>();
         dialog.setTitle(existingRow == null
                 ? Localization.text(module.actionLabel())
@@ -2431,6 +3249,7 @@ public class PageRenderer {
         fields.setHgap(16);
         fields.setVgap(12);
         fields.setPadding(new Insets(12, 0, 8, 0));
+<<<<<<< HEAD
         List<java.util.function.Supplier<String>> valueReaders = new ArrayList<>();
         List<String> fieldLabels = "UC-04".equals(module.id())
                 ? module.formFields() : module.columns();
@@ -2458,6 +3277,27 @@ public class PageRenderer {
                     value = formatDisplayDate(value);
                 }
                 input.setText(value);
+=======
+        List<Node> inputs = new ArrayList<>();
+        List<String> fieldLabels = module.formFields();
+        for (int index = 0; index < fieldLabels.size(); index++) {
+            Node input;
+            if ("UC-09".equals(module.id()) && index == 5) {
+                ComboBox<String> status = new ComboBox<>(FXCollections.observableArrayList(
+                        Localization.text("Đang hoạt động"), Localization.text("Ngừng hoạt động")));
+                status.setMaxWidth(Double.MAX_VALUE);
+                status.getSelectionModel().select(existingRow != null
+                        && "INACTIVE".equalsIgnoreCase(existingRow.values().get(index)) ? 1 : 0);
+                input = status;
+            } else {
+                TextField textField = new TextField();
+                textField.setPromptText(fieldLabels.get(index));
+                textField.getStyleClass().add("text-input");
+                if (existingRow != null) {
+                    textField.setText(Localization.text(existingRow.values().get(index)));
+                }
+                input = textField;
+>>>>>>> 54921761a3095ecb8919f62602fd2517fb311178
             }
             if ("UC-04".equals(module.id()) && userRole == UserRole.STAFF
                     && existingRow == null && index == 0) {
@@ -2482,6 +3322,7 @@ public class PageRenderer {
         dialog.setResultConverter(button -> button == ButtonType.OK ? ButtonType.OK : null);
         return dialog.showAndWait()
                 .filter(ButtonType.OK::equals)
+<<<<<<< HEAD
                 .map(ignored -> valueReaders.stream().map(reader -> reader.get().trim()).toList())
                 .map(values -> preserveUnchangedValues(existingRow, values));
     }
@@ -2505,6 +3346,166 @@ public class PageRenderer {
             showInformation(Localization.text("Thao tác chưa hỗ trợ"),
                     Localization.text(exception.getMessage()));
         }
+=======
+                .map(ignored -> inputs.stream()
+                        .map(input -> input instanceof ComboBox<?> comboBox
+                                ? (comboBox.getSelectionModel().getSelectedIndex() == 0 ? "ACTIVE" : "INACTIVE")
+                                : ((TextField) input).getText().trim())
+                        .toList())
+                .map(values -> preserveUnchangedValues(existingRow, values));
+    }
+
+    private java.util.Optional<List<String>> createProductDialog(
+            ModuleDefinition module,
+            ModuleRow existingRow) {
+        List<String> oldValues = existingRow == null ? List.of() : existingRow.values();
+        TextField code = productTextField(module, oldValues, 0, "");
+        TextField name = productTextField(module, oldValues, 1, "");
+        TextField dosageForm = productTextField(module, oldValues, 3, "");
+        TextField unit = productTextField(module, oldValues, 4, "");
+        TextField price = productTextField(module, oldValues, 5, "");
+        TextField minimumAge = productTextField(module, oldValues, 9, "0");
+
+        ComboBox<String> category = new ComboBox<>();
+        category.setMaxWidth(Double.MAX_VALUE);
+        category.setPromptText(Localization.text("Chọn danh mục"));
+        List<String> categoryNames = new ArrayList<>();
+        ModuleDefinition categoriesModule = moduleDefinition("UC-07");
+        for (ModuleRow row : featureServices.forModule(categoriesModule).findAll(categoriesModule)) {
+            if (row.values().size() >= 3 && isActiveOption(row.values().get(2))) {
+                categoryNames.add(row.values().get(0));
+            }
+        }
+        String oldCategory = productValue(oldValues, 2);
+        if (!oldCategory.isBlank() && !categoryNames.contains(oldCategory)) {
+            categoryNames.add(oldCategory);
+        }
+        category.getItems().setAll(categoryNames);
+        category.getSelectionModel().select(oldCategory);
+
+        List<String> selectedSuppliers = new ArrayList<>();
+        String oldSupplierValue = productValue(oldValues, 8);
+        if (!oldSupplierValue.isBlank()) {
+            for (String supplier : oldSupplierValue.split(",")) {
+                String trimmed = supplier.trim();
+                if (!trimmed.isEmpty() && !selectedSuppliers.contains(trimmed)) {
+                    selectedSuppliers.add(trimmed);
+                }
+            }
+        }
+        MenuButton suppliers = new MenuButton();
+        suppliers.setMaxWidth(Double.MAX_VALUE);
+        suppliers.getStyleClass().add("supplier-multiselect");
+        ModuleDefinition suppliersModule = moduleDefinition("UC-09");
+        List<ModuleRow> supplierRows =
+                featureServices.forModule(suppliersModule).findAll(suppliersModule);
+        List<String> supplierNames = new ArrayList<>();
+        for (ModuleRow row : supplierRows) {
+            if (row.values().size() >= 6
+                    && (isActiveOption(row.values().get(5)) || selectedSuppliers.contains(row.values().get(1)))) {
+                supplierNames.add(row.values().get(1));
+            }
+        }
+        for (String selected : selectedSuppliers) {
+            if (!supplierNames.contains(selected)) {
+                supplierNames.add(selected);
+            }
+        }
+        Runnable updateSupplierLabel = () -> suppliers.setText(selectedSuppliers.isEmpty()
+                ? Localization.text("Chọn nhà cung cấp")
+                : Localization.productText(String.join(", ", selectedSuppliers)));
+        for (String supplierName : supplierNames) {
+            CheckMenuItem item = new CheckMenuItem(Localization.productText(supplierName));
+            item.setSelected(selectedSuppliers.contains(supplierName));
+            item.setOnAction(event -> {
+                if (item.isSelected()) {
+                    if (!selectedSuppliers.contains(supplierName)) {
+                        selectedSuppliers.add(supplierName);
+                    }
+                } else {
+                    selectedSuppliers.remove(supplierName);
+                }
+                updateSupplierLabel.run();
+            });
+            suppliers.getItems().add(item);
+        }
+        updateSupplierLabel.run();
+
+        ComboBox<String> prescription = new ComboBox<>(FXCollections.observableArrayList(
+                Localization.text("Có"), Localization.text("Không")));
+        prescription.setMaxWidth(Double.MAX_VALUE);
+        prescription.getSelectionModel().select(
+                "YES".equalsIgnoreCase(productValue(oldValues, 6))
+                        || "TRUE".equalsIgnoreCase(productValue(oldValues, 6)) ? 0 : 1);
+        ComboBox<String> status = new ComboBox<>(FXCollections.observableArrayList(
+                Localization.text("Đang hoạt động"), Localization.text("Ngừng hoạt động")));
+        status.setMaxWidth(Double.MAX_VALUE);
+        status.getSelectionModel().select(
+                "INACTIVE".equalsIgnoreCase(productValue(oldValues, 7)) ? 1 : 0);
+
+        GridPane fields = new GridPane();
+        fields.setHgap(16);
+        fields.setVgap(12);
+        fields.setPadding(new Insets(12, 0, 8, 0));
+        Node[] inputs = {code, name, category, dosageForm, unit, price, prescription, status, suppliers, minimumAge};
+        for (int index = 0; index < inputs.length; index++) {
+            Label label = new Label(Localization.text(module.formFields().get(index)));
+            label.getStyleClass().add("field-label");
+            fields.add(label, 0, index);
+            fields.add(inputs[index], 1, index);
+            GridPane.setHgrow(inputs[index], Priority.ALWAYS);
+        }
+
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.setTitle(Localization.text(existingRow == null
+                ? module.actionLabel() : "Chỉnh sửa") + (existingRow == null ? "" : " · " + module.title()));
+        dialog.setHeaderText(module.title());
+        dialog.initModality(Modality.APPLICATION_MODAL);
+        dialog.getDialogPane().getButtonTypes().addAll(ButtonType.CANCEL, ButtonType.OK);
+        dialog.getDialogPane().getStyleClass().add("form-dialog");
+        dialog.getDialogPane().setContent(fields);
+        dialog.getDialogPane().setPrefWidth(680);
+        dialog.setResultConverter(button -> button == ButtonType.OK ? ButtonType.OK : null);
+        return dialog.showAndWait()
+                .filter(ButtonType.OK::equals)
+                .map(ignored -> List.of(
+                        code.getText().trim(),
+                        name.getText().trim(),
+                        category.getValue() == null ? "" : category.getValue(),
+                        dosageForm.getText().trim(),
+                        unit.getText().trim(),
+                        price.getText().trim(),
+                        prescription.getSelectionModel().getSelectedIndex() == 0 ? "Yes" : "No",
+                        status.getSelectionModel().getSelectedIndex() == 0 ? "ACTIVE" : "INACTIVE",
+                        String.join(", ", selectedSuppliers),
+                        minimumAge.getText().trim()));
+    }
+
+    private TextField productTextField(
+            ModuleDefinition module, List<String> values, int index, String defaultValue) {
+        TextField field = new TextField(values.size() > index ? values.get(index) : defaultValue);
+        field.getStyleClass().add("text-input");
+        field.setPromptText(Localization.text(module.formFields().get(index)));
+        return field;
+    }
+
+    private String productValue(List<String> values, int index) {
+        return values.size() > index ? values.get(index) : "";
+    }
+
+    private boolean isActiveOption(String value) {
+        return "ACTIVE".equalsIgnoreCase(value)
+                || "Active".equalsIgnoreCase(value)
+                || "Đang hoạt động".equalsIgnoreCase(value)
+                || "Đang hợp tác".equalsIgnoreCase(value);
+    }
+
+    private static ModuleDefinition moduleDefinition(String moduleId) {
+        return ModuleCatalog.MODULES.stream()
+                .filter(module -> module.id().equals(moduleId))
+                .findFirst()
+                .orElseThrow();
+>>>>>>> 54921761a3095ecb8919f62602fd2517fb311178
     }
 
     private java.util.Optional<List<String>> createCustomerDialog(ModuleRow existingRow) {
@@ -3124,16 +4125,24 @@ public class PageRenderer {
         Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
         boolean promotion = "UC-18".equals(module.id());
         boolean customer = "UC-16".equals(module.id());
-        boolean location = "UC-13".equals(module.id());
         alert.setTitle(Localization.text(promotion ? "Xác nhận vô hiệu hóa"
                 : customer ? "Xác nhận lưu trữ"
-                : location ? "Xác nhận ngừng sử dụng" : "Xác nhận xóa"));
+                : "Xác nhận xóa"));
         alert.setHeaderText(module.title());
         alert.setContentText(Localization.text(promotion
                 ? "Bạn có chắc muốn vô hiệu hóa chương trình đang chọn?"
                 : customer ? "Hồ sơ được lưu trữ, lịch sử mua hàng và điểm vẫn được giữ."
-                        : location ? "Vị trí sẽ ngừng sử dụng nhưng dữ liệu lô hàng và kiểm kê vẫn được giữ."
                         : "Bạn có chắc muốn xóa dòng dữ liệu đang chọn?"));
+        alert.getButtonTypes().setAll(ButtonType.CANCEL, ButtonType.OK);
+        return alert.showAndWait().filter(ButtonType.OK::equals).isPresent();
+    }
+
+    private boolean confirmDeleteLocation(ModuleRow location) {
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+        alert.setTitle(Localization.text("Xác nhận xóa vị trí"));
+        alert.setHeaderText(location.values().get(0) + " · " + location.values().get(1));
+        alert.setContentText(Localization.text(
+                "Chỉ xóa được vị trí không còn hàng tồn và không có dữ liệu lô hàng, phiếu nhập hoặc kiểm kê tham chiếu."));
         alert.getButtonTypes().setAll(ButtonType.CANCEL, ButtonType.OK);
         return alert.showAndWait().filter(ButtonType.OK::equals).isPresent();
     }
@@ -3183,7 +4192,15 @@ public class PageRenderer {
         return role != null && isWritableModule(moduleId)
                 && (role == UserRole.ADMIN
                 || role == UserRole.STAFF
+<<<<<<< HEAD
                 && !List.of("UC-03", "UC-07", "UC-08", "UC-09", "UC-18").contains(moduleId));
+=======
+                && !List.of("UC-07", "UC-08", "UC-09", "UC-13", "UC-18").contains(moduleId));
+    }
+
+    static boolean canConfirmInventoryWorkflow(String moduleId, UserRole role) {
+        return role == UserRole.ADMIN && List.of("UC-12", "UC-14").contains(moduleId);
+>>>>>>> 54921761a3095ecb8919f62602fd2517fb311178
     }
 
     static boolean canDeleteModule(String moduleId, UserRole role) {

@@ -43,6 +43,32 @@ class FeatureServicesTest {
     }
 
     @Test
+    void supplierRowsIncludeProductCountsWithoutAddingAFormField() {
+        FeatureServices services = new FeatureServices();
+        ModuleDefinition suppliersModule = module("UC-09");
+
+        assertEquals(7, suppliersModule.columns().size());
+        assertEquals(6, suppliersModule.formFields().size());
+        Map<String, String> productCounts = services.forModule(suppliersModule).findAll(suppliersModule).stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        row -> row.values().get(1), row -> row.values().get(6)));
+
+        assertEquals("3", productCounts.get("Dược phẩm Hậu Giang"));
+        assertEquals("2", productCounts.get("Thiết bị y tế Mekong"));
+        assertEquals("1", productCounts.get("Phân phối An Khang"));
+        assertEquals("0", productCounts.get("Dược liệu Tây Đô"));
+
+        services.forModule(suppliersModule).create(suppliersModule,
+                List.of("NCC999", "Nhà cung cấp mới", "", "", "", "ACTIVE"));
+        var newSupplier = services.forModule(suppliersModule).findAll(suppliersModule).stream()
+                .filter(row -> row.values().get(0).equals("NCC999"))
+                .findFirst()
+                .orElseThrow();
+        assertEquals(7, newSupplier.values().size());
+        assertEquals("0", newSupplier.values().get(6));
+    }
+
+    @Test
     void readOnlyReportsShareTheirOwningDomainService() {
         FeatureServices services = new FeatureServices();
         REPORT_OWNERS.forEach((reportId, ownerId) ->
@@ -67,12 +93,12 @@ class FeatureServicesTest {
 
         ModuleRow created = products.create(productsModule,
                 List.of("TEST01", "Test Product", "Test Category", "Tablet", "Box",
-                        "12000", "No", "ACTIVE", "Test Supplier"));
+                        "12000", "No", "ACTIVE", "Test Supplier", "0"));
         assertEquals(originalSize + 1, products.findAll(productsModule).size());
 
         products.update(productsModule, created.id(),
                 List.of("TEST01", "Updated Product", "Test Category", "Tablet", "Box",
-                        "12000", "No", "ACTIVE", "Test Supplier"));
+                        "12000", "No", "ACTIVE", "Test Supplier", "0"));
         assertTrue(products.findAll(productsModule).stream()
                 .anyMatch(row -> row.id().equals(created.id())
                         && row.values().get(1).equals("Updated Product")));
@@ -95,7 +121,7 @@ class FeatureServicesTest {
 
         ModuleRow created = products.create(productsModule,
                 List.of("TEST02", "Test Product", "Test Category", "Tablet", "Box",
-                        "12000", "No", "ACTIVE", "Test Supplier A, Test Supplier B"));
+                        "12000", "No", "ACTIVE", "Test Supplier A, Test Supplier B", "0"));
         List<ModuleRow> categoryRows = services.forModule(categoryReport).findAll(categoryReport);
         assertTrue(categoryRows.stream()
                 .anyMatch(row -> row.values().get(1).equals("Test Category")

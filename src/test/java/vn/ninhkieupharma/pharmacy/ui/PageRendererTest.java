@@ -61,18 +61,91 @@ class PageRendererTest {
 
     @Test
     void catalogMutationsAreAdminOnly() {
-        for (String moduleId : List.of("UC-07", "UC-08", "UC-09")) {
+        for (String moduleId : List.of("UC-07", "UC-08", "UC-09", "UC-13")) {
             assertTrue(PageRenderer.canWriteModule(moduleId, UserRole.ADMIN));
             assertFalse(PageRenderer.canWriteModule(moduleId, UserRole.STAFF));
         }
     }
 
     @Test
+<<<<<<< HEAD
     void onlyAdministratorsCanManageTheStoreSchedule() {
         assertTrue(PageRenderer.canWriteModule("UC-03", UserRole.ADMIN));
         assertTrue(PageRenderer.canDeleteModule("UC-03", UserRole.ADMIN));
         assertFalse(PageRenderer.canWriteModule("UC-03", UserRole.STAFF));
         assertFalse(PageRenderer.canDeleteModule("UC-03", UserRole.STAFF));
+=======
+    void productTableAndFormIncludeMinimumAge() {
+        ModuleDefinition products = ModuleCatalog.MODULES.stream()
+                .filter(module -> module.id().equals("UC-08"))
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals(10, products.columns().size());
+        assertEquals("Tuổi tối thiểu", products.columns().get(9));
+        assertEquals(products.columns(), products.formFields());
+    }
+
+    @Test
+    void productFiltersMatchFieldsAndInclusivePriceRange() {
+        ModuleRow product = new ModuleRow(UUID.randomUUID(),
+                List.of("SP0001", "Paracetamol 500mg", "Thuốc giảm đau", "Viên nén", "Vỉ",
+                        "15000.00", "No", "ACTIVE", "Dược phẩm Hậu Giang", "0"));
+        List<String> columnQueries = List.of("", "para", "", "", "", "", "", "", "HẬU", "");
+
+        assertTrue(PageRenderer.matchesProductFilters(
+                product, "", columnQueries, new BigDecimal("15000"), new BigDecimal("15000")));
+        assertFalse(PageRenderer.matchesProductFilters(
+                product, "", columnQueries, new BigDecimal("15000.01"), null));
+        assertFalse(PageRenderer.matchesProductFilters(
+                product, "", List.of("", "para", "", "", "", "", "", "INACTIVE", "", ""),
+                null, null));
+        assertTrue(PageRenderer.matchesProductFilters(
+                product, "", List.of("", "", "", "", "", "", "No", "", "", ""), null, null));
+        assertFalse(PageRenderer.matchesProductFilters(
+                product, "", List.of("", "", "", "", "", "", "Yes", "", "", ""), null, null));
+        assertEquals(new BigDecimal("15000"), PageRenderer.parseProductPriceBound("15.000"));
+        assertEquals(new BigDecimal("20000"), PageRenderer.parseProductPriceBound("20,000"));
+    }
+
+    @Test
+    void reportFiltersMatchEachColumnIndependently() {
+        ModuleRow reportRow = new ModuleRow(UUID.randomUUID(), List.of(
+                "2026-Q2", "Thực phẩm bổ sung", "3 SP (2 dạng / 1 NCC)", "50.0%",
+                "Có thể thay thế cơ bản"));
+
+        assertTrue(PageRenderer.matchesReportFilters(
+                reportRow, "q2", List.of("", "", "3 SP", "", "")));
+        assertTrue(PageRenderer.matchesReportFilters(
+                reportRow, "", List.of("", "", "", "50.0", "")));
+        assertFalse(PageRenderer.matchesReportFilters(
+                reportRow, "", List.of("", "", "50.0", "", "")));
+    }
+
+    @Test
+    void trendChartDataGroupsCountsAndFillsMissingPeriodsWithZero() {
+        List<ModuleRow> rows = List.of(
+                reportRow("2026-Q2", "Ngành A", "2 SP"),
+                reportRow("2026-Q1", "Ngành A", "1 SP"),
+                reportRow("2026-Q1", "Ngành B", "3 SP"));
+
+        PageRenderer.TrendChartData data = PageRenderer.createTrendChartData(rows, 0, 1);
+
+        assertEquals(List.of("2026-Q1", "2026-Q2"), data.periods());
+        assertEquals(List.of("Ngành A", "Ngành B"), data.dimensions());
+        assertEquals(List.of(1, 2), data.series().get("Ngành A"));
+        assertEquals(List.of(3, 0), data.series().get("Ngành B"));
+        assertEquals(List.of(2, 0), data.latestPeriodTotals());
+    }
+
+    @Test
+    void onlyAdminsCanConfirmGoodsReceiptsAndStocktakes() {
+        for (String moduleId : List.of("UC-12", "UC-14")) {
+            assertTrue(PageRenderer.canConfirmInventoryWorkflow(moduleId, UserRole.ADMIN));
+            assertFalse(PageRenderer.canConfirmInventoryWorkflow(moduleId, UserRole.STAFF));
+        }
+        assertFalse(PageRenderer.canConfirmInventoryWorkflow("UC-15", UserRole.ADMIN));
+>>>>>>> 54921761a3095ecb8919f62602fd2517fb311178
     }
 
     @Test
@@ -85,6 +158,11 @@ class PageRendererTest {
         assertTrue(PageRenderer.canWriteModule("UC-18", UserRole.ADMIN));
         assertFalse(PageRenderer.canWriteModule("UC-18", UserRole.STAFF));
         assertFalse(PageRenderer.canWriteModule("UC-19", UserRole.STAFF));
+    }
+
+    private ModuleRow reportRow(String period, String dimension, String count) {
+        return new ModuleRow(UUID.randomUUID(),
+                List.of(period, dimension, count, "50.0%", "Đánh giá"));
     }
 
     @Test
@@ -165,4 +243,21 @@ class PageRendererTest {
                 row, "", null, null, "SALE", "ALL", "ALL",
                 LocalDate.of(2026, 11, 23)));
     }
+
+    @Test
+    void inventorySearchMatchesTheVisibleMovementTypeLabel() {
+        List<String> row = List.of(
+                "2026-11-23 00:00",
+                "Paracetamol / LOT-1",
+                "RECEIPT",
+                "2",
+                "Nhập hàng PN-1",
+                "2027-01-01",
+                "KE-A1 · Ke A tầng 1");
+
+        assertTrue(PageRenderer.matchesInventoryRow(
+                row, Localization.movementTypeText("RECEIPT"), null, null,
+                "ALL", "ALL", "ALL", LocalDate.of(2026, 11, 23)));
+    }
+
 }

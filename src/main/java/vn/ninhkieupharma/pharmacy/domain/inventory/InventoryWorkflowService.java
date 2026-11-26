@@ -35,17 +35,52 @@ public final class InventoryWorkflowService {
         return workflowDAO().findGoodsReceiptDetails(receiptId);
     }
 
+    public InventoryWorkflowDAO.ReceiptDraft findReceiptDraft(UUID receiptId) {
+        return workflowDAO().findGoodsReceiptDraft(receiptId);
+    }
+
     public List<InventoryWorkflowDAO.StocktakeDetail> findStocktakeDetails(UUID stocktakeId) {
         return workflowDAO().findStocktakeDetails(stocktakeId);
     }
 
-    public ModuleRow receiveGoods(long authenticatedUserId, InventoryWorkflowDAO.ReceiptRequest request) {
-        return workflowDAO().receiveGoods(authenticatedUserId, request);
+    public InventoryWorkflowDAO.StocktakeDraft findStocktakeDraft(UUID stocktakeId) {
+        return workflowDAO().findStocktakeDraft(stocktakeId);
     }
 
-    public ModuleRow completeStocktake(
+    public ModuleRow createGoodsReceiptDraft(
+            long authenticatedUserId, InventoryWorkflowDAO.ReceiptRequest request) {
+        return workflowDAO().createGoodsReceiptDraft(authenticatedUserId, request);
+    }
+
+    public ModuleRow updateReceiptDraft(
+            long authenticatedUserId, UUID receiptId, InventoryWorkflowDAO.ReceiptRequest request) {
+        return workflowDAO().updateGoodsReceiptDraft(authenticatedUserId, receiptId, request);
+    }
+
+    public void cancelReceiptDraft(long authenticatedUserId, UUID receiptId) {
+        workflowDAO().cancelGoodsReceiptDraft(authenticatedUserId, receiptId);
+    }
+
+    public ModuleRow confirmReceipt(long authenticatedUserId, UUID receiptId) {
+        return workflowDAO().confirmGoodsReceipt(authenticatedUserId, receiptId);
+    }
+
+    public ModuleRow createStocktakeDraft(
             long authenticatedUserId, InventoryWorkflowDAO.StocktakeRequest request) {
-        return workflowDAO().completeStocktake(authenticatedUserId, request);
+        return workflowDAO().createStocktakeDraft(authenticatedUserId, request);
+    }
+
+    public ModuleRow updateStocktakeDraft(
+            long authenticatedUserId, UUID stocktakeId, InventoryWorkflowDAO.StocktakeRequest request) {
+        return workflowDAO().updateStocktakeDraft(authenticatedUserId, stocktakeId, request);
+    }
+
+    public void cancelStocktakeDraft(long authenticatedUserId, UUID stocktakeId) {
+        workflowDAO().cancelStocktakeDraft(authenticatedUserId, stocktakeId);
+    }
+
+    public ModuleRow confirmStocktake(long authenticatedUserId, UUID stocktakeId) {
+        return workflowDAO().confirmStocktake(authenticatedUserId, stocktakeId);
     }
 
     public void recordInventoryLoss(
