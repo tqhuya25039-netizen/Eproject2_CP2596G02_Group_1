@@ -15,7 +15,7 @@ Nếu đã có database `nkp_db` và muốn cài thêm một bản mới, tạo 
 
 ## Chạy trực tiếp bằng Maven
 
-Đặt các biến môi trường sau trong phiên terminal hoặc cấu hình chạy của IDE rồi chạy `mvn javafx:run` tại thư mục gốc dự án. Maven tải JavaFX và trình điều khiển MySQL theo `pom.xml`.
+Đặt các biến môi trường sau trong phiên terminal hoặc cấu hình chạy của IDE rồi chạy `mvn clean javafx:run` tại thư mục gốc dự án. Maven xóa đầu ra build cũ trong `target`, biên dịch lại và khởi động ứng dụng.
 
 | Biến môi trường | Giá trị |
 | --- | --- |

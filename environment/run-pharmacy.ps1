@@ -136,5 +136,6 @@ if (-not (Get-Command mvn -ErrorAction SilentlyContinue)) {
 
 Write-Host 'Starting Ninh Kieu Pharma...'
 Set-Location -LiteralPath $projectRoot
-& mvn javafx:run
+# Rebuild all classes after an incomplete or stale build.
+& mvn clean javafx:run
 exit $LASTEXITCODE
