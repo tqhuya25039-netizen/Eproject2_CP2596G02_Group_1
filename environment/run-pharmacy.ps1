@@ -39,14 +39,14 @@ function New-EnvironmentFile {
     Write-Host 'Example .env values for local XAMPP/MySQL:'
     Write-Host '  PHARMACY_DB_HOST=127.0.0.1'
     Write-Host '  PHARMACY_DB_PORT=3306'
-    Write-Host '  PHARMACY_DB_NAME=quan_ly_cua_hang'
+    Write-Host '  PHARMACY_DB_NAME=nkp_db'
     Write-Host '  PHARMACY_DB_USER=root'
     Write-Host '  PHARMACY_DB_PASSWORD=(your MySQL password)'
     Write-Host 'Press Enter to use the suggested value shown in brackets.'
 
     $hostName = Read-Value 'MySQL host (example: 127.0.0.1)' '127.0.0.1'
     $port = Read-Value 'MySQL port (example: 3306)' '3306'
-    $database = Read-Value 'Database name (example: quan_ly_cua_hang)' 'quan_ly_cua_hang'
+    $database = Read-Value 'Database name (example: nkp_db)' 'nkp_db'
     $user = Read-Value 'MySQL username (example: root)' 'root'
 
     $password = Read-SecretValue 'MySQL password (hidden; press Enter if no password is set)'
@@ -104,7 +104,7 @@ foreach ($line in [System.IO.File]::ReadAllLines($envFile)) {
     }
     $separator = $line.IndexOf('=')
     if ($separator -lt 1) {
-        throw "Invalid .env line; expected KEY=VALUE: $line"
+        throw 'Invalid .env line. Use KEY=VALUE.'
     }
 
     $key = $line.Substring(0, $separator).Trim()
@@ -136,5 +136,6 @@ if (-not (Get-Command mvn -ErrorAction SilentlyContinue)) {
 
 Write-Host 'Starting Ninh Kieu Pharma...'
 Set-Location -LiteralPath $projectRoot
-& mvn javafx:run
+# Rebuild all classes after an incomplete or stale build.
+& mvn clean javafx:run
 exit $LASTEXITCODE

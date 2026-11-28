@@ -37,6 +37,10 @@ public final class SalesService extends AbstractFeatureModuleService {
         return repository.previewSaleStock(lines);
     }
 
+    public SaleStockPreview previewSalePicking(List<SaleLineRequest> lines) {
+        return repository.previewSalePicking(lines);
+    }
+
     public List<SaleAllergyWarning> findAllergyWarnings(
             Optional<UUID> customerId, List<UUID> productIds) {
         return repository.findSaleAllergyWarnings(customerId, productIds);
@@ -80,14 +84,54 @@ public final class SalesService extends AbstractFeatureModuleService {
     public SalesReport salesReport(SalesReport.Period period, int year, int selection) {
         LocalDate start = period.start(year, selection);
         List<SalesReport.Row> days = completedSalesByDay(start, period.endExclusive(start));
+        return new SalesReport(period, start, groupReportRows(days, period.grouping()));
+    }
+
+    public SalesReport salesReport(SalesReport.Filter filter) {
+        SalesReport.Grouping grouping = filter.defaultGrouping();
+        SalesReport.Period period = grouping == SalesReport.Grouping.DAILY
+                ? SalesReport.Period.MONTH
+                : SalesReport.Period.YEAR;
+        return salesReport(filter, period, grouping);
+    }
+
+    public SalesReport salesReport(SalesReport.Filter filter, SalesReport.Period period) {
+        return salesReport(filter, period, period.grouping());
+    }
+
+    public SalesReport.FilterOptions salesReportOptions() {
+        return repository.findSalesReportOptions();
+    }
+
+    private SalesReport salesReport(SalesReport.Filter filter, SalesReport.Period period,
+                                    SalesReport.Grouping grouping) {
+        SalesReport.Rows data;
+        if (repository.supportsNativeReports()) {
+            data = repository.findSalesReportRows(filter);
+        } else {
+            // The in-memory invoices have no linked employee, product or category identifiers.
+            List<SalesReport.Row> days = filter.employeeId() == null && filter.productId() == null
+                    && filter.categoryId() == null
+                    ? completedSalesByDay(filter.fromInclusive(), filter.endExclusive())
+                    : List.of();
+            data = new SalesReport.Rows(days, List.of(), List.of(), List.of());
+        }
+        return new SalesReport(period, grouping, filter.fromInclusive(), filter.endExclusive(),
+                new SalesReport.Rows(groupReportRows(data.timeSeries(), grouping),
+                        data.employees(), data.products(), data.categories()));
+    }
+
+    private static List<SalesReport.Row> groupReportRows(List<SalesReport.Row> days, SalesReport.Grouping grouping) {
+        if (grouping == SalesReport.Grouping.DAILY) {
+            return days;
+        }
         Map<LocalDate, SalesReport.Totals> grouped = new TreeMap<>();
         for (SalesReport.Row day : days) {
-            grouped.merge(period.groupStart(day.start()), day.totals(), SalesReport.Totals::plus);
+            grouped.merge(grouping.bucketStart(day.start()), day.totals(), SalesReport.Totals::plus);
         }
-        List<SalesReport.Row> rows = grouped.entrySet().stream()
+        return grouped.entrySet().stream()
                 .map(entry -> new SalesReport.Row(entry.getKey(), entry.getValue()))
                 .toList();
-        return new SalesReport(period, start, rows);
     }
 
     public SalesReport.Totals completedSalesTotals() {

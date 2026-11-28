@@ -13,7 +13,6 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -48,6 +47,7 @@ class RelationalFeatureModuleDAOTest {
     }
 
     @Test
+<<<<<<< HEAD
     void employeeNamesAndUsernamesRejectDigits() {
         assertThrows(IllegalArgumentException.class, () ->
                 RelationalFeatureModuleDAO.validateEmployeeAccountFields(
@@ -93,6 +93,8 @@ class RelationalFeatureModuleDAOTest {
     }
 
     @Test
+=======
+>>>>>>> c910dd9e5d0954962f081bf169ddcba5f6adf653
     void validatesProductCodeAndParsesGroupedSellingPrices() {
         assertThrows(IllegalArgumentException.class, () -> dao.create("UC-08",
                 List.of("X".repeat(31), "T", "N", "", "Hộp", "10", "FALSE", "ACTIVE", "", "0")));
@@ -120,6 +122,10 @@ class RelationalFeatureModuleDAOTest {
         assertThrows(IllegalArgumentException.class, () -> dao.create("UC-16",
                 List.of("", "T", "0901234567", "", "", "0", "ACTIVE", "", "9999-01-01")));
         assertThrows(IllegalArgumentException.class, () -> dao.create("UC-16",
+                List.of("", "T", "0901234567", "", "", "0", "ACTIVE", "", "9999")));
+        assertThrows(IllegalArgumentException.class, () -> dao.create("UC-16",
+                List.of("", "T", "0901234567", "", "", "0", "ACTIVE", "", "1990-13")));
+        assertThrows(IllegalArgumentException.class, () -> dao.create("UC-16",
                 List.of("", "T", "0901234567", "", "", "4294967296", "ACTIVE", "", "")));
     }
 
@@ -130,7 +136,7 @@ class RelationalFeatureModuleDAOTest {
         assertThrows(IllegalArgumentException.class,
                 () -> adminDao.create("UC-13", List.of("K-A", "", "", "ACTIVE")));
         assertThrows(IllegalArgumentException.class,
-                () -> adminDao.update("UC-13", new UUID(0x4e4b504841524d41L, 1),
+                () -> adminDao.update("UC-13", UUID.randomUUID(),
                         List.of("", "Kệ A", "", "ACTIVE")));
     }
 
@@ -162,19 +168,19 @@ class RelationalFeatureModuleDAOTest {
     void inventoryWorkflowsRejectIncompleteAndInvalidRequestsBeforeConnectingToMysql() {
         assertThrows(IllegalArgumentException.class, () -> adminDao.create("UC-13",
                 List.of("", "Kệ A · Tầng 1", "", "ACTIVE")));
-        assertThrows(IllegalArgumentException.class, () -> dao.createGoodsReceiptDraft(1,
+        assertThrows(IllegalArgumentException.class, () -> adminDao.createGoodsReceiptDraft(1,
                 new InventoryWorkflowDAO.ReceiptRequest(1, LocalDate.now(), "", List.of())));
-        assertThrows(IllegalArgumentException.class, () -> dao.createGoodsReceiptDraft(1,
+        assertThrows(IllegalArgumentException.class, () -> adminDao.createGoodsReceiptDraft(1,
                 new InventoryWorkflowDAO.ReceiptRequest(1, LocalDate.now(), "",
                         List.of(new InventoryWorkflowDAO.ReceiptLine(
                                 1, 1, "LOT-1", LocalDate.now().plusDays(30),
                                 new BigDecimal("-1"), BigDecimal.ZERO)))));
-        assertThrows(IllegalArgumentException.class, () -> dao.createGoodsReceiptDraft(1,
+        assertThrows(IllegalArgumentException.class, () -> adminDao.createGoodsReceiptDraft(1,
                 new InventoryWorkflowDAO.ReceiptRequest(1, LocalDate.now().plusDays(1), "",
                         List.of(new InventoryWorkflowDAO.ReceiptLine(
                                 1, 1, "LOT-1", LocalDate.now().plusDays(30),
                                 new BigDecimal("1"), BigDecimal.ZERO)))));
-        assertThrows(IllegalArgumentException.class, () -> dao.createGoodsReceiptDraft(1,
+        assertThrows(IllegalArgumentException.class, () -> adminDao.createGoodsReceiptDraft(1,
                 new InventoryWorkflowDAO.ReceiptRequest(1, LocalDate.now(), "",
                         List.of(new InventoryWorkflowDAO.ReceiptLine(
                                 1, 1, "LOT-1", LocalDate.now().plusDays(30),
@@ -182,24 +188,47 @@ class RelationalFeatureModuleDAOTest {
                                 new InventoryWorkflowDAO.ReceiptLine(
                                         1, 1, "LOT-1", LocalDate.now().plusDays(30),
                                         new BigDecimal("2"), new BigDecimal("1000"))))));
-        assertThrows(IllegalArgumentException.class, () -> dao.createGoodsReceiptDraft(1,
+        assertThrows(IllegalArgumentException.class, () -> adminDao.createGoodsReceiptDraft(1,
                 new InventoryWorkflowDAO.ReceiptRequest(1, LocalDate.now(), "",
                         List.of(new InventoryWorkflowDAO.ReceiptLine(
                                 1, 1, "LOT-1", LocalDate.now().plusDays(30),
                                 new BigDecimal("1"), new BigDecimal("1.001"))))));
-        assertThrows(IllegalArgumentException.class, () -> dao.createGoodsReceiptDraft(1,
+        assertThrows(IllegalArgumentException.class, () -> adminDao.createGoodsReceiptDraft(1,
                 new InventoryWorkflowDAO.ReceiptRequest(1, LocalDate.now(), "",
                         List.of(new InventoryWorkflowDAO.ReceiptLine(
                                 1, 1, "LOT-1", LocalDate.now().minusDays(1),
                                 new BigDecimal("1"), BigDecimal.ZERO)))));
-        assertThrows(IllegalArgumentException.class, () -> dao.createStocktakeDraft(1,
+        assertThrows(IllegalArgumentException.class, () -> adminDao.createStocktakeDraft(1,
                 new InventoryWorkflowDAO.StocktakeRequest(1, LocalDate.now(), "", List.of())));
-        assertThrows(IllegalArgumentException.class, () -> dao.recordInventoryLoss(
+        assertThrows(IllegalArgumentException.class, () -> adminDao.recordInventoryLoss(
                 1, 1, InventoryWorkflowDAO.LossType.DAMAGED, BigDecimal.ZERO, ""));
     }
 
     @Test
+<<<<<<< HEAD
     void employeeAccountCreationRejectsAnExposedRoleField() {
+=======
+    void inventoryWorkflowRequiresMatchingActorAndAdminConfirmation() {
+        RelationalFeatureModuleDAO staffDao = new RelationalFeatureModuleDAO(
+                new User(2, "staff", "", UserRole.STAFF, true));
+        InventoryWorkflowDAO.ReceiptRequest validReceipt = new InventoryWorkflowDAO.ReceiptRequest(
+                1, LocalDate.now(), "", List.of(new InventoryWorkflowDAO.ReceiptLine(
+                1, 1, "LOT-1", LocalDate.now().plusDays(30),
+                BigDecimal.ONE, BigDecimal.ZERO)));
+
+        assertThrows(SecurityException.class,
+                () -> staffDao.createGoodsReceiptDraft(1, validReceipt));
+        assertThrows(SecurityException.class,
+                () -> staffDao.confirmGoodsReceipt(2, UUID.randomUUID()));
+        assertThrows(SecurityException.class,
+                () -> staffDao.confirmStocktake(2, UUID.randomUUID()));
+        assertThrows(SecurityException.class,
+                () -> dao.findAll("UC-12"));
+    }
+
+    @Test
+    void employeeAccountCreationDoesNotAllowElevatedRoles() {
+>>>>>>> c910dd9e5d0954962f081bf169ddcba5f6adf653
         assertThrows(IllegalArgumentException.class, () -> dao.create("UC-01",
                 List.of("NV-TEST", "Test Employee", "", "", "test_admin", "ADMIN", "Test@12345")));
     }
@@ -211,6 +240,7 @@ class RelationalFeatureModuleDAOTest {
     }
 
     @Test
+<<<<<<< HEAD
     void employeeAccountCreationAndUpdateRejectInvalidCodesNamesEmailsAndUsernames() {
         RelationalFeatureModuleDAO administratorDAO = new RelationalFeatureModuleDAO(
                 new User(1, "admin_demo", "", UserRole.ADMIN, true));
@@ -248,6 +278,8 @@ class RelationalFeatureModuleDAOTest {
     }
 
     @Test
+=======
+>>>>>>> c910dd9e5d0954962f081bf169ddcba5f6adf653
     void customerCreationRequiresNameAndBlockReasonBeforeConnectingToMysql() {
         IllegalArgumentException missingName = assertThrows(IllegalArgumentException.class,
                 () -> dao.create("UC-16", List.of("", "", "0901234567", "", "", "0", "ACTIVE", "", "")));

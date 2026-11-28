@@ -1,5 +1,16 @@
 target/
+<<<<<<< HEAD
 *.log
 .env
 .env.*
 environment/.env
+=======
+.env
+.vscode/
+.idea/
+*.iml
+*.class
+*.log
+*.docx
+*.zip
+>>>>>>> c910dd9e5d0954962f081bf169ddcba5f6adf653

@@ -12,9 +12,17 @@ public record SaleProduct(
         boolean prescriptionRequired,
         BigDecimal sellingPrice,
         BigDecimal stockOnHand,
-        List<String> ingredients) {
+        List<String> ingredients,
+        String barcode) {
     public SaleProduct {
         ingredients = List.copyOf(ingredients);
+        barcode = barcode == null ? "" : barcode;
+    }
+
+    public SaleProduct(
+            UUID id, String code, String name, String unit, boolean prescriptionRequired,
+            BigDecimal sellingPrice, BigDecimal stockOnHand, List<String> ingredients) {
+        this(id, code, name, unit, prescriptionRequired, sellingPrice, stockOnHand, ingredients, "");
     }
 
     @Override

@@ -3,6 +3,7 @@ package vn.ninhkieupharma.pharmacy.common.dao;
 import vn.ninhkieupharma.pharmacy.common.model.ModuleRow;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleAllergyWarning;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleLineRequest;
+import vn.ninhkieupharma.pharmacy.domain.sales.SaleStockPreview;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleStockShortage;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleOrderRequest;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleProduct;
@@ -10,7 +11,6 @@ import vn.ninhkieupharma.pharmacy.domain.sales.SalePendingOrder;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleQuote;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleReceipt;
 import vn.ninhkieupharma.pharmacy.domain.sales.SalesReport;
-import vn.ninhkieupharma.pharmacy.domain.hr.AvailabilitySlot;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -78,6 +78,10 @@ public interface FeatureModuleDAO {
         throw new UnsupportedOperationException("Batch stock checks are not available.");
     }
 
+    default SaleStockPreview previewSalePicking(List<SaleLineRequest> lines) {
+        return new SaleStockPreview(List.of(), previewSaleStock(lines));
+    }
+
     default List<SaleAllergyWarning> findSaleAllergyWarnings(
             Optional<UUID> customerId, List<UUID> productIds) {
         throw new UnsupportedOperationException("Allergy checks for sales are not available.");
@@ -122,27 +126,18 @@ public interface FeatureModuleDAO {
         return false;
     }
 
-    default List<String> findActiveEmployeeNames() {
-        return findAll("UC-01").stream()
-                .filter(row -> row.values().size() > 1)
-                .map(row -> row.values().get(1))
-                .toList();
-    }
-
-    default String findCurrentEmployeeName() {
-        throw new UnsupportedOperationException("Current employee lookup is not available.");
-    }
-
-    default int createWeeklyAvailability(
-            String employeeName, LocalDate weekStart, List<AvailabilitySlot> slots) {
-        throw new UnsupportedOperationException(
-                "Đăng ký lịch khả dụng theo tuần cần kết nối MySQL.");
-    }
-
     /** Returns completed sales totals by day. Omit both bounds to include all dates. */
     default List<SalesReport.Row> findCompletedSalesByDay(
             LocalDate fromInclusive, LocalDate toExclusive) {
         throw new UnsupportedOperationException("Sales reporting is not available.");
+    }
+
+    default SalesReport.FilterOptions findSalesReportOptions() {
+        return new SalesReport.FilterOptions(List.of(), List.of(), List.of());
+    }
+
+    default SalesReport.Rows findSalesReportRows(SalesReport.Filter filter) {
+        throw new UnsupportedOperationException("Sales reporting with filters is not available.");
     }
 
     void replaceAll(String moduleId, List<List<String>> values);

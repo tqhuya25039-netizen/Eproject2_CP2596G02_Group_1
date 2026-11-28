@@ -4,7 +4,12 @@ import vn.ninhkieupharma.pharmacy.config.DatabaseConnection;
 import vn.ninhkieupharma.pharmacy.common.model.ModuleRow;
 import vn.ninhkieupharma.pharmacy.common.service.Localization;
 import vn.ninhkieupharma.pharmacy.domain.sales.AllergyMatcher;
+import vn.ninhkieupharma.pharmacy.domain.sales.DoseInstructions;
+import vn.ninhkieupharma.pharmacy.domain.sales.DoseSession;
+import vn.ninhkieupharma.pharmacy.domain.sales.DoseTiming;
+import vn.ninhkieupharma.pharmacy.domain.sales.DoseUnit;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleAllergyWarning;
+import vn.ninhkieupharma.pharmacy.domain.sales.SaleLineKind;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleLineRequest;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleOrderRequest;
 import vn.ninhkieupharma.pharmacy.domain.sales.SalePendingOrder;
@@ -12,6 +17,7 @@ import vn.ninhkieupharma.pharmacy.domain.sales.SaleProduct;
 import vn.ninhkieupharma.pharmacy.domain.sales.SalePricing;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleQuote;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleReceipt;
+import vn.ninhkieupharma.pharmacy.domain.sales.SaleStockPreview;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleStockShortage;
 
 import java.math.BigDecimal;
@@ -22,11 +28,13 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
+import java.text.NumberFormat;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -57,16 +65,11 @@ public final class SalesCheckoutDAO {
     }
 
     private record ProductState(
-            long id, String name, boolean prescriptionRequired, BigDecimal price) {
+            long id, String name, String unit, boolean prescriptionRequired, BigDecimal price) {
     }
 
-    private record Batch(long id, LocalDate expiry, BigDecimal quantity) {
-    }
-
-    private record BatchAllocation(long batchId, long productId, BigDecimal quantity) {
-    }
-
-    private record InventoryPlan(List<BatchAllocation> allocations, List<SaleStockShortage> shortages) {
+    private record Batch(long id, String code, String locationCode, String locationName,
+                         LocalDate expiry, BigDecimal quantity) {
     }
 
     private record CustomerState(long id, String name, long points) {
@@ -82,7 +85,7 @@ public final class SalesCheckoutDAO {
 
     private record PreparedSale(
             CustomerState customer, Map<Long, ProductState> products, List<BigDecimal> lineTotals,
-            LocalDateTime soldAt, Promotion promotion, SaleQuote quote, List<BatchAllocation> allocations) {
+            LocalDateTime soldAt, Promotion promotion, SaleQuote quote) {
     }
 
     @FunctionalInterface
@@ -92,16 +95,18 @@ public final class SalesCheckoutDAO {
 
     public List<SaleProduct> findSaleProducts() {
         String sql = """
-                SELECT p.product_id, p.product_code, p.product_name, p.unit_name,
+                SELECT p.product_id, p.product_code, p.product_name, p.unit_name, p.barcode,
                        p.requires_prescription, p.selling_price,
-                       COALESCE(SUM(b.quantity_on_hand), 0) AS stock_on_hand,
+                       COALESCE(SUM(CASE WHEN wl.location_id IS NOT NULL THEN b.quantity_on_hand ELSE 0 END), 0)
+                           AS stock_on_hand,
                        COALESCE((SELECT GROUP_CONCAT(pi.ingredient_name
                            ORDER BY pi.ingredient_name SEPARATOR '\\n')
                            FROM product_ingredients pi WHERE pi.product_id = p.product_id), '') AS ingredients
                 FROM products p
                 LEFT JOIN inventory_batches b ON b.product_id = p.product_id AND b.expiry_date >= ?
+                LEFT JOIN warehouse_locations wl ON wl.location_id = b.location_id AND wl.is_active = 1
                 WHERE p.is_active = 1
-                GROUP BY p.product_id, p.product_code, p.product_name, p.unit_name,
+                GROUP BY p.product_id, p.product_code, p.product_name, p.unit_name, p.barcode,
                          p.requires_prescription, p.selling_price
                 ORDER BY p.product_name, p.product_id
                 """;
@@ -123,7 +128,8 @@ public final class SalesCheckoutDAO {
                             resultSet.getBoolean("requires_prescription"),
                             resultSet.getBigDecimal("selling_price"),
                             resultSet.getBigDecimal("stock_on_hand"),
-                            ingredients));
+                            ingredients,
+                            resultSet.getString("barcode")));
                 }
                 return List.copyOf(products);
             }
@@ -147,10 +153,14 @@ public final class SalesCheckoutDAO {
     }
 
     public List<SaleStockShortage> previewSaleStock(List<SaleLineRequest> lines) {
+        return previewSalePicking(lines).shortages();
+    }
+
+    public SaleStockPreview previewSalePicking(List<SaleLineRequest> lines) {
         validateLines(lines);
         return inTransaction("Không thể kiểm tra tồn theo lô.", connection -> {
             Map<Long, ProductState> products = loadProducts(connection, lines, false);
-            return List.copyOf(planInventory(connection, lines, products, LocalDate.now(APP_ZONE), false).shortages());
+            return planInventory(connection, lines, products, LocalDate.now(APP_ZONE), false);
         });
     }
 
@@ -215,6 +225,10 @@ public final class SalesCheckoutDAO {
                 throw new IllegalStateException(Localization.text(
                         "Số tiền hoặc điểm của đơn đã thay đổi. Kiểm tra lại số cần thu trước khi hoàn tất."));
             }
+            if (!sale.quote().picks().equals(acceptedQuote.picks())) {
+                throw new IllegalStateException(Localization.text(
+                        "Lô hoặc vị trí lấy thuốc đã thay đổi. Hãy kiểm tra lại danh sách lấy thuốc trước khi hoàn tất."));
+            }
             return recordSale(connection, authenticatedUserId, employeeId, saleId, request, sale);
         });
     }
@@ -245,7 +259,8 @@ public final class SalesCheckoutDAO {
                      SELECT si.sale_item_id, p.product_code, p.product_name, p.unit_name,
                             CAST(si.quantity AS CHAR), CAST(si.unit_price AS CHAR),
                             CAST(si.line_total AS CHAR), COALESCE(si.dosage_instructions, ''),
-                            CAST(si.treatment_days AS CHAR)
+                            CAST(si.treatment_days AS CHAR), si.line_kind, si.dose_amount,
+                            si.dose_unit, si.dose_timing, si.dose_sessions
                      FROM sale_items si
                      JOIN products p ON p.product_id = si.product_id
                      WHERE si.sale_id = ?
@@ -255,6 +270,7 @@ public final class SalesCheckoutDAO {
             try (ResultSet resultSet = statement.executeQuery()) {
                 List<ModuleRow> details = new ArrayList<>();
                 while (resultSet.next()) {
+                    SaleLineKind kind = readEnum(resultSet, "line_kind", SaleLineKind.class);
                     details.add(new ModuleRow(rowId(resultSet.getLong("sale_item_id")), List.of(
                             resultSet.getString("product_code"),
                             resultSet.getString("product_name"),
@@ -262,8 +278,9 @@ public final class SalesCheckoutDAO {
                             resultSet.getString(5),
                             resultSet.getString(6),
                             resultSet.getString(7),
-                            resultSet.getString(8),
-                            resultSet.getString(9))));
+                            formatDosage(readDose(resultSet), resultSet.getString(8)),
+                            resultSet.getString(9),
+                            kind == null ? "—" : Localization.text(kind.label()))));
                 }
                 return List.copyOf(details);
             }
@@ -284,14 +301,11 @@ public final class SalesCheckoutDAO {
         List<BigDecimal> lineTotals = lineTotals(request.lines(), products);
         BigDecimal subtotal = subtotal(lineTotals);
         LocalDateTime soldAt = LocalDateTime.now(APP_ZONE);
-        List<BatchAllocation> allocations = requireInventory(
+        List<SaleStockPreview.Pick> picks = requireInventory(
                 connection, request.lines(), products, soldAt.toLocalDate());
         Promotion promotion = findBestPromotion(connection, soldAt);
         LoyaltyPolicy loyalty = findLoyaltyPolicy(connection);
-        BigDecimal redemptionRate = promotion != null
-                && !soldAt.isBefore(promotion.redemptionStart())
-                ? promotion.redemptionRate()
-                : loyalty == null ? BigDecimal.ZERO : loyalty.currencyPerPoint();
+        BigDecimal redemptionRate = redemptionRate(promotion, loyalty, soldAt);
         long pointsBalance = customer.points();
         BigDecimal promotionPercent = promotion == null ? BigDecimal.ZERO : promotion.discountPercent();
         SalePricing.Result pricing = SalePricing.calculate(
@@ -315,7 +329,7 @@ public final class SalesCheckoutDAO {
                 saleCode, subtotal, pricing.promotionDiscount(), pricing.pointsDiscount(), pricing.total(),
                 pointsRedeemed, pointsEarned, remainingPoints, promotion == null ? "" : promotion.code());
         return new PreparedSale(customer, products, lineTotals, soldAt, promotion,
-                new SaleQuote(amounts, warnings), allocations);
+                new SaleQuote(amounts, warnings, picks));
     }
 
     private static SaleReceipt recordSale(
@@ -350,6 +364,7 @@ public final class SalesCheckoutDAO {
         requireInventory(connection, request.lines(), products, createdAt.toLocalDate());
         List<BigDecimal> lineTotals = lineTotals(request.lines(), products);
         BigDecimal subtotal = subtotal(lineTotals);
+        validatePendingRedemption(connection, subtotal, customer.points(), request.requestedPoints(), createdAt);
 
         String saleCode = newSaleCode(createdAt);
         long saleId;
@@ -391,6 +406,7 @@ public final class SalesCheckoutDAO {
         requireInventory(connection, request.lines(), products, updatedAt.toLocalDate());
         List<BigDecimal> lineTotals = lineTotals(request.lines(), products);
         BigDecimal subtotal = subtotal(lineTotals);
+        validatePendingRedemption(connection, subtotal, customer.points(), request.requestedPoints(), updatedAt);
 
         try (PreparedStatement statement = connection.prepareStatement("""
                 UPDATE sales
@@ -487,7 +503,8 @@ public final class SalesCheckoutDAO {
 
         List<SaleLineRequest> lines = new ArrayList<>();
         try (PreparedStatement statement = connection.prepareStatement("""
-                SELECT product_id, quantity, dosage_instructions, treatment_days
+                SELECT product_id, quantity, dosage_instructions, treatment_days,
+                       line_kind, dose_amount, dose_unit, dose_timing, dose_sessions
                 FROM sale_items
                 WHERE sale_id = ?
                 ORDER BY sale_item_id
@@ -499,7 +516,9 @@ public final class SalesCheckoutDAO {
                             rowId(resultSet.getLong("product_id")),
                             resultSet.getBigDecimal("quantity"),
                             resultSet.getString("dosage_instructions"),
-                            resultSet.getInt("treatment_days")));
+                            resultSet.getInt("treatment_days"),
+                            readEnum(resultSet, "line_kind", SaleLineKind.class),
+                            readDose(resultSet)));
                 }
             }
         }
@@ -507,6 +526,50 @@ public final class SalesCheckoutDAO {
                 customerId, lines, prescriptionCode, prescriptionDate,
                 doctor, clinic, diagnosis, note, requestedPoints, List.of());
         return new SalePendingOrder(rowId(saleId), saleCode, request, subtotal, revision);
+    }
+
+    private static <T extends Enum<T>> T readEnum(ResultSet resultSet, String column, Class<T> type)
+            throws SQLException {
+        String value = resultSet.getString(column);
+        return value == null ? null : Enum.valueOf(type, value);
+    }
+
+    private static DoseInstructions readDose(ResultSet resultSet) throws SQLException {
+        int sessionMask = resultSet.getInt("dose_sessions");
+        EnumSet<DoseSession> sessions = EnumSet.noneOf(DoseSession.class);
+        for (DoseSession session : DoseSession.values()) {
+            if ((sessionMask & session.mask()) != 0) {
+                sessions.add(session);
+            }
+        }
+        return new DoseInstructions(
+                resultSet.getBigDecimal("dose_amount"),
+                readEnum(resultSet, "dose_unit", DoseUnit.class),
+                readEnum(resultSet, "dose_timing", DoseTiming.class),
+                sessions);
+    }
+
+    private static String formatDosage(DoseInstructions dose, String notes) {
+        List<String> instructions = new ArrayList<>();
+        if (dose.amount() != null && dose.unit() != null) {
+            NumberFormat formatter = NumberFormat.getNumberInstance(
+                    Localization.isEnglish() ? Locale.US : Locale.forLanguageTag("vi-VN"));
+            formatter.setMaximumFractionDigits(3);
+            instructions.add(formatter.format(dose.amount()) + " " + Localization.text(dose.unit().label()));
+        }
+        if (dose.timing() != null) {
+            instructions.add(Localization.text(dose.timing().label()));
+        }
+        if (!dose.sessions().isEmpty()) {
+            List<String> sessions = EnumSet.copyOf(dose.sessions()).stream()
+                    .map(session -> Localization.text(session.label()))
+                    .toList();
+            instructions.add(String.join(", ", sessions));
+        }
+        if (!blank(notes)) {
+            instructions.add(notes);
+        }
+        return String.join(" · ", instructions);
     }
 
     private static List<BigDecimal> lineTotals(
@@ -585,10 +648,9 @@ public final class SalesCheckoutDAO {
         try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT e.employee_id
                 FROM employees e
-                JOIN users u ON u.user_id = e.user_id
-                JOIN roles r ON r.role_id = u.role_id
-                WHERE u.user_id = ? AND u.is_active = 1 AND r.role_code = 'STAFF'
-                  AND e.employment_status = 'ACTIVE'
+                JOIN roles r ON r.role_id = e.role_id
+                WHERE e.employee_id = ? AND e.is_active = 1 AND r.role_code = 'STAFF'
+                  AND e.employee_code IS NOT NULL AND e.employment_status = 'ACTIVE'
                 """)) {
             statement.setLong(1, userId);
             try (ResultSet resultSet = statement.executeQuery()) {
@@ -628,7 +690,7 @@ public final class SalesCheckoutDAO {
                 .distinct().sorted().toList();
         Map<Long, ProductState> products = new HashMap<>();
         try (PreparedStatement statement = connection.prepareStatement("""
-                SELECT product_id, product_name, requires_prescription, selling_price
+                SELECT product_id, product_name, unit_name, requires_prescription, selling_price
                 FROM products
                 WHERE product_id = ? AND is_active = 1
                 """ + (lock ? "FOR UPDATE" : ""))) {
@@ -646,6 +708,7 @@ public final class SalesCheckoutDAO {
                     }
                     products.put(productId, new ProductState(
                             productId, resultSet.getString("product_name"),
+                            resultSet.getString("unit_name"),
                             resultSet.getBoolean("requires_prescription"), price));
                 }
             }
@@ -654,11 +717,17 @@ public final class SalesCheckoutDAO {
     }
 
     private static void validatePrescription(SaleOrderRequest request, Map<Long, ProductState> products) {
-        if (products.values().stream().noneMatch(ProductState::prescriptionRequired)) {
-            return;
+        boolean needsPrescription = false;
+        for (SaleLineRequest line : request.lines()) {
+            ProductState product = products.get(numericId(line.productId()));
+            if (product.prescriptionRequired() && line.kind() == SaleLineKind.ADD_ON) {
+                throw new IllegalArgumentException(Localization.text(
+                        "Thuốc bắt buộc kê đơn phải được đánh dấu là thuốc kê đơn."));
+            }
+            needsPrescription |= product.prescriptionRequired() || line.kind() == SaleLineKind.PRESCRIBED;
         }
-        if (blank(request.prescriptionCode()) || request.prescriptionDate() == null
-                || blank(request.prescribingDoctor())) {
+        if (needsPrescription && (blank(request.prescriptionCode()) || request.prescriptionDate() == null
+                || blank(request.prescribingDoctor()))) {
             throw new IllegalArgumentException(Localization.text(
                     "Thuốc kê đơn yêu cầu mã toa, ngày kê hợp lệ và tên bác sĩ kê đơn."));
         }
@@ -703,6 +772,26 @@ public final class SalesCheckoutDAO {
                     ? new LoyaltyPolicy(resultSet.getBigDecimal(1), resultSet.getBigDecimal(2))
                     : null;
         }
+    }
+
+    private static BigDecimal redemptionRate(Promotion promotion, LoyaltyPolicy loyalty, LocalDateTime at) {
+        if (promotion != null && !at.isBefore(promotion.redemptionStart())) {
+            return promotion.redemptionRate();
+        }
+        return loyalty == null ? BigDecimal.ZERO : loyalty.currencyPerPoint();
+    }
+
+    private static void validatePendingRedemption(
+            Connection connection, BigDecimal subtotal, long availablePoints, long requestedPoints,
+            LocalDateTime at) throws SQLException {
+        if (requestedPoints == 0 || requestedPoints == SaleOrderRequest.REDEEM_MAXIMUM) {
+            return;
+        }
+        Promotion promotion = findBestPromotion(connection, at);
+        LoyaltyPolicy loyalty = findLoyaltyPolicy(connection);
+        BigDecimal promotionPercent = promotion == null ? BigDecimal.ZERO : promotion.discountPercent();
+        SalePricing.calculate(subtotal, promotionPercent, availablePoints, requestedPoints,
+                redemptionRate(promotion, loyalty, at), BigDecimal.ZERO, true);
     }
 
     private static BigDecimal findPointsRate(
@@ -806,8 +895,9 @@ public final class SalesCheckoutDAO {
         try (PreparedStatement statement = connection.prepareStatement("""
                 INSERT INTO sale_items
                     (sale_id, product_id, quantity, unit_price, line_discount, line_total,
-                     dosage_instructions, treatment_days)
-                VALUES (?, ?, ?, ?, 0, ?, ?, ?)
+                     dosage_instructions, treatment_days, line_kind, dose_amount, dose_unit,
+                     dose_timing, dose_sessions)
+                VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
                 """)) {
             statement.setLong(1, saleId);
             statement.setLong(2, productId);
@@ -816,24 +906,31 @@ public final class SalesCheckoutDAO {
             statement.setBigDecimal(5, total);
             setNullableString(statement, 6, line.dosageInstructions());
             statement.setInt(7, line.treatmentDays());
+            setNullableString(statement, 8, line.kind() == null ? null : line.kind().name());
+            DoseInstructions dose = line.dose();
+            statement.setBigDecimal(9, dose.amount());
+            setNullableString(statement, 10, dose.unit() == null ? null : dose.unit().name());
+            setNullableString(statement, 11, dose.timing() == null ? null : dose.timing().name());
+            int sessionMask = dose.sessions().stream().mapToInt(DoseSession::mask).reduce(0, (left, right) -> left | right);
+            statement.setInt(12, sessionMask);
             statement.executeUpdate();
         }
     }
 
-    private static List<BatchAllocation> requireInventory(
+    private static List<SaleStockPreview.Pick> requireInventory(
             Connection connection, List<SaleLineRequest> lines,
             Map<Long, ProductState> products, LocalDate saleDate) throws SQLException {
-        InventoryPlan plan = planInventory(connection, lines, products, saleDate, true);
+        SaleStockPreview plan = planInventory(connection, lines, products, saleDate, true);
         if (!plan.shortages().isEmpty()) {
             SaleStockShortage shortage = plan.shortages().getFirst();
             throw new IllegalStateException(Localization.text("Không đủ tồn kho chưa hết hạn cho ")
                     + shortage.productName()
                     + Localization.text(" đến hết thời gian điều trị đã khai báo."));
         }
-        return plan.allocations();
+        return plan.picks();
     }
 
-    private static InventoryPlan planInventory(
+    private static SaleStockPreview planInventory(
             Connection connection, List<SaleLineRequest> lines,
             Map<Long, ProductState> products, LocalDate saleDate, boolean lock) throws SQLException {
         Map<Long, List<Batch>> batchesByProduct = new HashMap<>();
@@ -849,10 +946,11 @@ public final class SalesCheckoutDAO {
                 .sorted(Comparator.comparingInt(SaleLineRequest::treatmentDays).reversed()
                         .thenComparing(line -> numericId(line.productId())))
                 .toList();
-        List<BatchAllocation> allocations = new ArrayList<>();
+        List<SaleStockPreview.Pick> picks = new ArrayList<>();
         List<SaleStockShortage> shortages = new ArrayList<>();
         for (SaleLineRequest line : allocationOrder) {
             long productId = numericId(line.productId());
+            ProductState product = products.get(productId);
             LocalDate lastTreatmentDate = saleDate.plusDays(line.treatmentDays() - 1L);
             BigDecimal remaining = line.quantity();
             for (Batch batch : batchesByProduct.get(productId)) {
@@ -865,15 +963,16 @@ public final class SalesCheckoutDAO {
                 }
                 BigDecimal allocated = remaining.min(available);
                 remainingByBatch.put(batch.id(), available.subtract(allocated));
-                allocations.add(new BatchAllocation(batch.id(), productId, allocated));
+                picks.add(new SaleStockPreview.Pick(batch.id(), product.name(), product.unit(), batch.code(),
+                        batch.locationCode(), batch.locationName(), batch.expiry(), allocated.stripTrailingZeros()));
                 remaining = remaining.subtract(allocated);
             }
             if (remaining.signum() > 0) {
-                shortages.add(new SaleStockShortage(products.get(productId).name(), lastTreatmentDate,
+                shortages.add(new SaleStockShortage(product.name(), lastTreatmentDate,
                         line.quantity(), line.quantity().subtract(remaining)));
             }
         }
-        return new InventoryPlan(allocations, shortages);
+        return new SaleStockPreview(picks, shortages);
     }
 
     private static void recordInventory(
@@ -883,15 +982,15 @@ public final class SalesCheckoutDAO {
                 SET quantity_on_hand = quantity_on_hand - ?
                 WHERE batch_id = ? AND quantity_on_hand >= ?
                 """)) {
-            for (BatchAllocation allocation : sale.allocations()) {
-                update.setBigDecimal(1, allocation.quantity());
-                update.setLong(2, allocation.batchId());
-                update.setBigDecimal(3, allocation.quantity());
+            for (SaleStockPreview.Pick pick : sale.quote().picks()) {
+                update.setBigDecimal(1, pick.quantity());
+                update.setLong(2, pick.batchId());
+                update.setBigDecimal(3, pick.quantity());
                 if (update.executeUpdate() != 1) {
                     throw new SQLException("Inventory changed while the sale was being completed.");
                 }
-                insertSaleMovement(connection, allocation.batchId(), createdByUserId, saleId, allocation.quantity(),
-                        sale.products().get(allocation.productId()).name(), sale.soldAt());
+                insertSaleMovement(connection, pick.batchId(), createdByUserId, saleId, pick.quantity(),
+                        pick.productName(), sale.soldAt());
             }
         }
     }
@@ -899,10 +998,11 @@ public final class SalesCheckoutDAO {
     private static List<Batch> loadEligibleBatches(
             Connection connection, long productId, LocalDate saleDate, boolean lock) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
-                SELECT batch_id, expiry_date, quantity_on_hand
-                FROM inventory_batches
-                WHERE product_id = ? AND expiry_date >= ? AND quantity_on_hand > 0
-                ORDER BY expiry_date, batch_id
+                SELECT b.batch_id, b.batch_code, wl.location_code, wl.location_name, b.expiry_date, b.quantity_on_hand
+                FROM inventory_batches b
+                JOIN warehouse_locations wl ON wl.location_id = b.location_id AND wl.is_active = 1
+                WHERE b.product_id = ? AND b.expiry_date >= ? AND b.quantity_on_hand > 0
+                ORDER BY b.expiry_date, b.batch_id
                 """ + (lock ? "FOR UPDATE" : ""))) {
             statement.setLong(1, productId);
             statement.setObject(2, saleDate);
@@ -911,6 +1011,9 @@ public final class SalesCheckoutDAO {
                 while (resultSet.next()) {
                     batches.add(new Batch(
                             resultSet.getLong("batch_id"),
+                            resultSet.getString("batch_code"),
+                            resultSet.getString("location_code"),
+                            resultSet.getString("location_name"),
                             resultSet.getDate("expiry_date").toLocalDate(),
                             resultSet.getBigDecimal("quantity_on_hand")));
                 }
@@ -1060,6 +1163,9 @@ public final class SalesCheckoutDAO {
                         "Số lượng bán vượt quá phạm vi được hỗ trợ."));
             }
             requireMaxLength(line.dosageInstructions(), 255, "Hướng dẫn sử dụng");
+            if (!line.dose().hasValidAmount()) {
+                throw new IllegalArgumentException(Localization.text(DoseInstructions.AMOUNT_ERROR));
+            }
         }
     }
 
@@ -1072,7 +1178,7 @@ public final class SalesCheckoutDAO {
 
     private static void requireMaxLength(String value, int maxLength, String label) {
         if (value != null && value.length() > maxLength) {
-            throw new IllegalArgumentException(Localization.text(label + " vượt quá ")
+            throw new IllegalArgumentException(Localization.text(label) + " " + Localization.text("vượt quá ")
                     + maxLength + Localization.text(" ký tự."));
         }
     }

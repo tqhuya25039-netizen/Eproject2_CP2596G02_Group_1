@@ -39,7 +39,7 @@ public final class InventoryWorkflowService {
         return workflowDAO().findGoodsReceiptDraft(receiptId);
     }
 
-    public List<InventoryWorkflowDAO.StocktakeDetail> findStocktakeDetails(UUID stocktakeId) {
+    public InventoryWorkflowDAO.StocktakeDetails findStocktakeDetails(UUID stocktakeId) {
         return workflowDAO().findStocktakeDetails(stocktakeId);
     }
 

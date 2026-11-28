@@ -30,12 +30,12 @@ class GoodsReceiptDraftMySqlIntegrationTest {
     public static final class ReceiptDraftScenario {
         public static void main(String[] args) throws Exception {
             long staffId = firstId("""
-                    SELECT u.user_id FROM users u JOIN roles r ON r.role_id = u.role_id
-                    WHERE u.is_active = 1 AND r.role_code = 'STAFF'
+                    SELECT e.employee_id FROM employees e JOIN roles r ON r.role_id = e.role_id
+                    WHERE e.is_active = 1 AND r.role_code = 'STAFF'
                     """);
             long adminId = firstId("""
-                    SELECT u.user_id FROM users u JOIN roles r ON r.role_id = u.role_id
-                    WHERE u.is_active = 1 AND r.role_code = 'ADMIN'
+                    SELECT e.employee_id FROM employees e JOIN roles r ON r.role_id = e.role_id
+                    WHERE e.is_active = 1 AND r.role_code = 'ADMIN'
                     """);
             RelationalFeatureModuleDAO staffDao = new RelationalFeatureModuleDAO(
                     new User(staffId, "integration-staff", "", UserRole.STAFF, true));

@@ -4,16 +4,10 @@ import vn.ninhkieupharma.pharmacy.common.dao.FeatureModuleDAO;
 import vn.ninhkieupharma.pharmacy.common.service.SingleModuleService;
 import vn.ninhkieupharma.pharmacy.common.time.VietnamDate;
 
-import java.time.DayOfWeek;
-import java.time.LocalDate;
-import java.time.temporal.TemporalAdjusters;
-import java.util.List;
-
 public final class AvailabilityService extends SingleModuleService {
-    private final FeatureModuleDAO repository;
-
     public AvailabilityService(FeatureModuleDAO repository) {
         super(repository, "UC-02");
+<<<<<<< HEAD
         this.repository = repository;
     }
 
@@ -42,5 +36,7 @@ public final class AvailabilityService extends SingleModuleService {
         LocalDate weekStart = dateInWeek.with(
                 TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
         return repository.createWeeklyAvailability(employeeName.trim(), weekStart, List.copyOf(slots));
+=======
+>>>>>>> c910dd9e5d0954962f081bf169ddcba5f6adf653
     }
 }

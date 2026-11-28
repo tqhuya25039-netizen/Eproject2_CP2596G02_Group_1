@@ -4,7 +4,9 @@ import javafx.collections.FXCollections;
 import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
 import javafx.collections.transformation.FilteredList;
+import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.SimpleBooleanProperty;
+import javafx.beans.property.SimpleObjectProperty;
 import javafx.event.ActionEvent;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -41,12 +43,15 @@ import javafx.scene.control.SelectionMode;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
+import javafx.scene.control.TitledPane;
+import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.control.TextFormatter;
 import javafx.scene.control.TextInputControl;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.ColumnConstraints;
 import javafx.scene.layout.GridPane;
@@ -68,20 +73,21 @@ import vn.ninhkieupharma.pharmacy.common.service.Localization;
 import vn.ninhkieupharma.pharmacy.common.service.ModuleCatalog;
 import vn.ninhkieupharma.pharmacy.common.time.VietnamDate;
 import vn.ninhkieupharma.pharmacy.common.auth.UserRole;
+import vn.ninhkieupharma.pharmacy.common.dao.DataAccessException;
 import vn.ninhkieupharma.pharmacy.common.dao.InventoryWorkflowDAO;
 import vn.ninhkieupharma.pharmacy.domain.inventory.InventoryWorkflowService;
-import vn.ninhkieupharma.pharmacy.domain.hr.AvailabilityService;
-import vn.ninhkieupharma.pharmacy.domain.hr.AvailabilitySlot;
-import vn.ninhkieupharma.pharmacy.domain.hr.AttendanceService;
 import vn.ninhkieupharma.pharmacy.domain.sales.PromotionsLoyaltyService;
+import vn.ninhkieupharma.pharmacy.domain.sales.CustomerBirthDate;
 import vn.ninhkieupharma.pharmacy.domain.sales.CustomerLoyaltyService;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleAllergyWarning;
+import vn.ninhkieupharma.pharmacy.domain.sales.SaleLineKind;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleLineRequest;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleOrderRequest;
 import vn.ninhkieupharma.pharmacy.domain.sales.SalePendingOrder;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleQuote;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleProduct;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleReceipt;
+import vn.ninhkieupharma.pharmacy.domain.sales.SaleStockPreview;
 import vn.ninhkieupharma.pharmacy.domain.sales.SalesReport;
 import vn.ninhkieupharma.pharmacy.domain.sales.SalesService;
 
@@ -95,17 +101,14 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.text.NumberFormat;
-import java.time.DayOfWeek;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.LocalTime;
+import java.time.YearMonth;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
-import java.time.format.DateTimeFormatterBuilder;
 import java.time.format.DateTimeParseException;
-import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -115,10 +118,13 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.TreeMap;
 import java.util.UUID;
+import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.stream.IntStream;
 import javafx.util.StringConverter;
 
 public class PageRenderer {
+<<<<<<< HEAD
     private static final DateTimeFormatter VIETNAMESE_DATE_FORMAT =
             DateTimeFormatter.ofPattern("dd/MM/yyyy");
     private static final DateTimeFormatter VIETNAMESE_DATE_TIME_FORMAT =
@@ -134,6 +140,45 @@ public class PageRenderer {
                     .appendPattern(":ss")
                     .optionalEnd()
                     .toFormatter();
+=======
+    private enum ReportRange {
+        CUSTOM("Khoảng ngày", null),
+        MONTH("Tháng", SalesReport.Period.MONTH),
+        QUARTER("Quý", SalesReport.Period.QUARTER),
+        YEAR("Năm", SalesReport.Period.YEAR);
+
+        private final String label;
+        private final SalesReport.Period period;
+
+        ReportRange(String label, SalesReport.Period period) {
+            this.label = label;
+            this.period = period;
+        }
+    }
+
+    private enum ReportView {
+        TIMELINE("Theo thời gian"), EMPLOYEES("Nhân viên"),
+        PRODUCTS("Thuốc / Sản phẩm"), CATEGORIES("Danh mục");
+
+        private final String label;
+
+        ReportView(String label) {
+            this.label = label;
+        }
+
+        List<SalesReport.Breakdown> breakdown(SalesReport report) {
+            return switch (this) {
+                case EMPLOYEES -> report.employees();
+                case PRODUCTS -> report.products();
+                case CATEGORIES -> report.categories();
+                case TIMELINE -> List.of();
+            };
+        }
+    }
+
+    private record ReportDates(LocalDate from, LocalDate to) {
+    }
+>>>>>>> c910dd9e5d0954962f081bf169ddcba5f6adf653
 
     private record RenderedTable(
             TableView<ModuleRow> table,
@@ -144,14 +189,16 @@ public class PageRenderer {
     private record ProductCard(DemoData.Product product, Node node, Button addButton) {
     }
 
-    private record SalesCustomerEntry(Node node, Runnable loadSelectedPending) {
+    private record SalesCustomerEntry(Node node, Runnable loadSelectedPending, Runnable refreshMoney) {
     }
 
     private record CheckoutLineControls(
-            ComboBox<SaleProduct> product,
+            SaleProduct product,
             TextField quantity,
-            TextField dosage,
+            CheckoutLineInstructions instructions,
             TextField treatmentDays,
+            Label unitPrice,
+            Label lineTotal,
             Label allergyWarning,
             Node row) {
     }
@@ -159,6 +206,8 @@ public class PageRenderer {
     private record CheckoutSummary(
             VBox section,
             TextField requestedPoints,
+            Label pointsBalance,
+            Label pointsError,
             TextArea note,
             Label subtotal,
             Label status,
@@ -237,6 +286,7 @@ public class PageRenderer {
     private final ExchangeRateService exchangeRateService;
     private final long authenticatedUserId;
     private final UserRole userRole;
+    private Runnable refreshMoney = () -> {};
 
     public PageRenderer(FeatureServices featureServices, ExchangeRateService exchangeRateService) {
         this(featureServices, exchangeRateService, -1, UserRole.STAFF);
@@ -254,6 +304,10 @@ public class PageRenderer {
         this.exchangeRateService = Objects.requireNonNull(exchangeRateService);
         this.authenticatedUserId = authenticatedUserId;
         this.userRole = Objects.requireNonNull(userRole);
+    }
+
+    void refreshCurrency() {
+        refreshMoney.run();
     }
 
     public Node render(ModuleDefinition module) {
@@ -289,6 +343,14 @@ public class PageRenderer {
                 && userRole == UserRole.STAFF
                 ? createSalesCustomerEntry(module, featureService, renderedTable)
                 : null;
+        if (List.of("UC-16", "UC-17", "UC-18").contains(module.id())) {
+            refreshMoney = () -> {
+                renderedTable.table().refresh();
+                if (salesCustomerEntry != null) {
+                    salesCustomerEntry.refreshMoney().run();
+                }
+            };
+        }
         List<Node> filterInputs = new ArrayList<>();
         PromotionFilters promotionFilters = null;
         CustomerFilters customerFilters = null;
@@ -616,32 +678,16 @@ public class PageRenderer {
         } else if (canWriteModule(module.id(), userRole)) {
             Button addButton = new Button(module.actionLabel());
             addButton.getStyleClass().add("button-primary");
-            if ("UC-02".equals(module.id())) {
-                AvailabilityService availabilityService = (AvailabilityService) featureService;
-                addButton.setOnAction(event -> createWeeklyAvailabilityDialog(
-                        module, availabilityService, featureService, renderedTable));
-                Button singleDayButton = new Button(Localization.text("Đăng ký một ngày"));
-                singleDayButton.getStyleClass().add("button-secondary");
-                singleDayButton.setOnAction(event -> editRow(module, featureService, null)
-                        .ifPresent(values -> runMutation(
-                                () -> featureService.create(module, values),
-                                () -> refreshRows(renderedTable, featureService, module))));
-                actions.getChildren().addAll(addButton, singleDayButton);
-            } else if ("UC-16".equals(module.id())) {
+            if ("UC-16".equals(module.id())) {
                 addButton.setOnAction(event -> editCustomerRow(
                         module, featureService, renderedTable, null));
-                actions.getChildren().add(addButton);
-            } else if ("UC-04".equals(module.id()) && userRole == UserRole.STAFF) {
-                addButton.setOnAction(event -> createStaffAttendanceDialog(
-                        module, featureService, renderedTable));
-                actions.getChildren().add(addButton);
             } else {
                 addButton.setOnAction(event -> editRow(module, featureService, null)
                         .ifPresent(values -> runMutation(() -> featureService.create(module, values),
                                 () -> refreshRows(renderedTable, featureService, module))));
-                actions.getChildren().add(addButton);
             }
 
+            actions.getChildren().add(addButton);
             if (!"UC-01".equals(module.id())) {
                 Button editButton = new Button(Localization.text("Chỉnh sửa"));
                 editButton.getStyleClass().add("button-secondary");
@@ -816,8 +862,11 @@ public class PageRenderer {
                 page.getChildren().addAll(title, description, supportNote,
                         createExchangeRateInformation(), filters, actions, renderedTable.table());
             } else if (salesCustomerEntry != null) {
+                Label ordersHeading = new Label(Localization.text("Danh sách đơn bán"));
+                ordersHeading.getStyleClass().add("section-title");
                 page.getChildren().addAll(
-                        title, description, supportNote, salesCustomerEntry.node(), actions, renderedTable.table());
+                        title, description, supportNote, salesCustomerEntry.node(), ordersHeading,
+                        actions, renderedTable.table());
             } else if (productFilters != null) {
                 page.getChildren().addAll(title, description, supportNote,
                         actions, filters, renderedTable.table());
@@ -828,6 +877,7 @@ public class PageRenderer {
         return page;
     }
 
+<<<<<<< HEAD
     private void createWeeklyAvailabilityDialog(
             ModuleDefinition module,
             AvailabilityService availabilityService,
@@ -988,39 +1038,45 @@ public class PageRenderer {
                 });
     }
 
+=======
+>>>>>>> c910dd9e5d0954962f081bf169ddcba5f6adf653
     private void configureSalesReport(VBox page, ModuleDefinition module) {
         LocalDate today = LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh"));
-        ComboBox<SalesReport.Period> period = new ComboBox<>(
-                FXCollections.observableArrayList(SalesReport.Period.values()));
-        period.setConverter(new StringConverter<SalesReport.Period>() {
-            @Override
-            public String toString(SalesReport.Period value) {
-                return value == null ? "" : reportPeriodLabel(value);
-            }
-
-            @Override
-            public SalesReport.Period fromString(String value) {
-                return null;
-            }
-        });
+        SalesService sales = featureServices.salesService();
+        ComboBox<ReportRange> range = reportCombo(List.of(ReportRange.values()),
+                option -> Localization.text(option.label));
+        DatePicker from = reportDatePicker(today.withDayOfMonth(1));
+        DatePicker to = reportDatePicker(today);
+        FlowPane dates = new FlowPane(10, 8, reportField("Từ ngày", from), reportField("Đến ngày", to));
         TextField year = new TextField(Integer.toString(today.getYear()));
-        year.setPrefColumnCount(4);
+        year.setPrefWidth(88);
         ComboBox<Integer> selection = new ComboBox<>();
         Label selectionLabel = new Label();
         VBox selectionField = new VBox(5, selectionLabel, selection);
-        period.valueProperty().addListener((observable, previous, current) -> {
-            boolean hasSelection = current != SalesReport.Period.YEAR;
-            selectionField.setVisible(hasSelection);
-            selectionField.setManaged(hasSelection);
-            if (hasSelection) {
-                boolean monthly = current == SalesReport.Period.MONTH;
-                selectionLabel.setText(reportPeriodLabel(current));
+        FlowPane preset = new FlowPane(10, 8, reportField("Năm", year), selectionField);
+        dates.visibleProperty().bind(range.valueProperty().isEqualTo(ReportRange.CUSTOM));
+        dates.managedProperty().bind(dates.visibleProperty());
+        preset.visibleProperty().bind(dates.visibleProperty().not());
+        preset.managedProperty().bind(preset.visibleProperty());
+        selectionField.visibleProperty().bind(range.valueProperty().isEqualTo(ReportRange.MONTH)
+                .or(range.valueProperty().isEqualTo(ReportRange.QUARTER)));
+        selectionField.managedProperty().bind(selectionField.visibleProperty());
+        range.valueProperty().addListener((observable, previous, current) -> {
+            if (current == ReportRange.MONTH || current == ReportRange.QUARTER) {
+                boolean monthly = current == ReportRange.MONTH;
+                selectionLabel.setText(Localization.text(current.label));
                 selection.getItems().setAll(IntStream.rangeClosed(1, monthly ? 12 : 4).boxed().toList());
-                Integer initial = monthly ? today.getMonthValue() : (today.getMonthValue() + 2) / 3;
-                selection.setValue(initial);
+                selection.setValue(monthly ? today.getMonthValue() : (today.getMonthValue() + 2) / 3);
             }
         });
-        period.setValue(SalesReport.Period.MONTH);
+
+        SalesReport.Option all = new SalesReport.Option(0, Localization.text("Tất cả"));
+        ComboBox<SalesReport.Option> employee = reportCombo(List.of(all), SalesReport.Option::label);
+        ComboBox<SalesReport.Option> product = reportCombo(List.of(all), SalesReport.Option::label);
+        ComboBox<SalesReport.Option> category = reportCombo(List.of(all), SalesReport.Option::label);
+        employee.setPrefWidth(200);
+        product.setPrefWidth(230);
+        category.setPrefWidth(200);
 
         Button generate = new Button(module.actionLabel());
         generate.getStyleClass().add("button-primary");
@@ -1030,74 +1086,225 @@ public class PageRenderer {
         print.getStyleClass().add("button-secondary");
         export.setDisable(true);
         print.setDisable(true);
-        FlowPane filters = new FlowPane(12, 10,
-                new VBox(5, new Label(Localization.text("Kỳ báo cáo")), period),
-                new VBox(5, new Label(Localization.text("Năm")), year), selectionField,
-                generate, export, print);
-        filters.setAlignment(Pos.BOTTOM_LEFT);
+        FlowPane periods = new FlowPane(10, 8, reportField("Kỳ báo cáo", range), dates, preset);
+        FlowPane dimensions = new FlowPane(10, 8, reportField("Nhân viên", employee),
+                reportField("Thuốc / Sản phẩm", product), reportField("Danh mục", category));
+        Label filterError = new Label();
+        filterError.setWrapText(true);
+        filterError.getStyleClass().add("report-filter-error");
+        filterError.visibleProperty().bind(filterError.textProperty().isNotEmpty());
+        filterError.managedProperty().bind(filterError.visibleProperty());
+        VBox filters = new VBox(12, periods, dimensions, new FlowPane(10, 8, generate), filterError);
         filters.getStyleClass().add("filter-bar");
 
-        Label dateRange = new Label();
-        dateRange.getStyleClass().add("section-title");
+        Label appliedFilters = new Label();
+        appliedFilters.setWrapText(true);
+        appliedFilters.getStyleClass().add("section-title");
+        Label orderCountNote = new Label(Localization.text("Một đơn có thể được tính vào nhiều thuốc hoặc danh mục."));
+        orderCountNote.setWrapText(true);
+        orderCountNote.getStyleClass().add("report-note");
+        ComboBox<ReportView> view = reportCombo(List.of(ReportView.values()),
+                option -> Localization.text(option.label));
+        orderCountNote.visibleProperty().bind(view.valueProperty().isEqualTo(ReportView.PRODUCTS)
+                .or(view.valueProperty().isEqualTo(ReportView.CATEGORIES)));
+        orderCountNote.managedProperty().bind(orderCountNote.visibleProperty());
         FlowPane summary = new FlowPane(12, 8);
         summary.getStyleClass().add("demo-summary");
         FlowPane charts = new FlowPane(16, 16);
         charts.getStyleClass().add("report-chart-row");
-        RenderedTable table = createTable(module, featureServices.salesService(), List.of());
-        page.getChildren().addAll(filters, dateRange, summary, charts, table.table());
+        RenderedTable table = createTable(module, sales, List.of());
+        FlowPane actions = new FlowPane(10, 8, reportField("Xem theo", view), export, print);
+        actions.setAlignment(Pos.BOTTOM_LEFT);
+        VBox result = new VBox(16, appliedFilters, summary, actions, charts, orderCountNote, table.table());
+        ObjectProperty<SalesReport> displayed = new SimpleObjectProperty<>();
+        result.visibleProperty().bind(displayed.isNotNull());
+        result.managedProperty().bind(result.visibleProperty());
+        page.getChildren().addAll(filters, result);
 
-        Runnable refresh = () -> {
-            String rawYear = year.getText().trim();
-            if (!rawYear.matches("[0-9]{4}")) {
-                showInformation(module.title(), Localization.text("Hãy nhập năm từ 1000 đến 9998."));
-                return;
+        Consumer<SalesReport> renderResult = report -> {
+            SalesMoney money = SalesMoney.capture(exchangeRateService);
+            SalesReport.Totals totals = report.totals();
+            ReportView selectedView = view.getValue();
+            List<SalesReport.Breakdown> breakdown = selectedView.breakdown(report);
+            List<ModuleRow> reportRows = selectedView == ReportView.TIMELINE
+                    ? salesReportOutput(report, totals) : salesBreakdownOutput(breakdown, totals);
+            String rowLabel = selectedView == ReportView.TIMELINE
+                    ? reportIntervalLabel(report.grouping()) : selectedView.label;
+            ModuleDefinition displayedModule = salesReportViewDefinition(module, rowLabel);
+            table.table().getColumns().getFirst().setText(displayedModule.columns().getFirst());
+            table.source().setAll(reportRows.subList(0, reportRows.size() - 1));
+            table.table().refresh();
+            summary.getChildren().setAll(
+                    summaryCard(Localization.text("Số đơn"), Long.toString(totals.orderCount())),
+                    summaryCard(Localization.text("Doanh thu"), money.format(totals.revenue(), 2)),
+                    summaryCard(Localization.text("Giảm giá"), money.format(totals.discount(), 2)),
+                    summaryCard(Localization.text("Giá trị trung bình"), money.format(totals.averageOrderValue(), 2)));
+            if (selectedView == ReportView.TIMELINE) {
+                updateSalesReportCharts(charts, report, money);
+            } else {
+                updateSalesBreakdownChart(charts, selectedView, breakdown, money);
             }
+            String viewSuffix = selectedView == ReportView.TIMELINE ? ""
+                    : "-" + selectedView.name().toLowerCase(Locale.ROOT);
+            String fileName = module.id() + "-" + report.start()
+                    + "-" + report.endExclusive().minusDays(1) + viewSuffix + ".csv";
+            export.setOnAction(event -> exportReport(salesReportExportDefinition(displayedModule, money),
+                    salesReportExportRows(reportRows, money), page.getScene().getWindow(), fileName));
+            print.setOnAction(event -> printSalesReport(
+                    displayedModule, appliedFilters.getText(), reportRows, money, page.getScene().getWindow()));
+            export.setDisable(!money.available());
+            print.setDisable(!money.available());
+        };
+        Runnable refreshReportDisplay = () -> {
+            if (displayed.get() != null) {
+                renderResult.accept(displayed.get());
+            }
+        };
+        refreshMoney = refreshReportDisplay;
+        view.valueProperty().addListener((observable, previous, current) -> refreshReportDisplay.run());
+        displayed.addListener((observable, previous, current) -> renderResult.accept(current));
+        Runnable loadOptions = () -> {
+            SalesReport.FilterOptions options = sales.salesReportOptions();
+            setReportOptions(employee, all, options.employees());
+            setReportOptions(product, all, options.products());
+            setReportOptions(category, all, options.categories());
+        };
+        boolean[] optionsLoaded = {false};
+        Runnable refresh = () -> {
             try {
-                SalesReport.Period selectedPeriod = period.getValue();
-                int bucket = selectedPeriod == SalesReport.Period.YEAR ? 1 : selection.getValue();
-                SalesReport report = featureServices.salesService().salesReport(
-                        selectedPeriod, Integer.parseInt(rawYear), bucket);
-                SalesReport.Totals totals = report.totals();
-                List<ModuleRow> reportRows = salesReportOutput(report, totals);
-                String range = report.start() + " – " + report.endExclusive().minusDays(1);
-                dateRange.setText(range);
-                table.source().setAll(reportRows.subList(0, report.rows().size()));
-                summary.getChildren().setAll(
-                        summaryCard(Localization.text("Số đơn"), Long.toString(totals.orderCount())),
-                        summaryCard(Localization.text("Doanh thu"), formatSaleMoney(totals.revenue())),
-                        summaryCard(Localization.text("Giảm giá"), formatSaleMoney(totals.discount())),
-                        summaryCard(Localization.text("Giá trị trung bình"), formatSaleMoney(totals.averageOrderValue())));
-                updateSalesReportCharts(charts, report);
-                String fileName = module.id() + "-" + report.start()
-                        + "-" + report.endExclusive().minusDays(1) + ".csv";
-                export.setOnAction(event -> exportReport(
-                        module, reportRows, page.getScene().getWindow(), fileName));
-                print.setOnAction(event -> printSalesReport(
-                        module, range, reportRows, page.getScene().getWindow()));
-                export.setDisable(false);
-                print.setDisable(false);
-            } catch (IllegalArgumentException | vn.ninhkieupharma.pharmacy.common.dao.DataAccessException exception) {
-                showInformation(module.title(), Localization.text(exception.getMessage()));
+                if (!optionsLoaded[0]) {
+                    loadOptions.run();
+                    optionsLoaded[0] = true;
+                }
+                ReportRange selectedRange = range.getValue();
+                ReportDates bounds = selectedRange == ReportRange.CUSTOM
+                        ? new ReportDates(readReportDate(from), readReportDate(to))
+                        : salesReportPreset(selectedRange, year.getText(), selection.getValue());
+                SalesReport.Filter filter = new SalesReport.Filter(bounds.from(), bounds.to(),
+                        reportOptionId(employee.getValue()), reportOptionId(product.getValue()),
+                        reportOptionId(category.getValue()));
+                SalesReport report = selectedRange.period == null ? sales.salesReport(filter)
+                        : sales.salesReport(filter, selectedRange.period);
+                List<String> applied = new ArrayList<>();
+                applied.add(report.start() + " – " + report.endExclusive().minusDays(1));
+                for (SalesReport.Option option : List.of(employee.getValue(), product.getValue(), category.getValue())) {
+                    if (option.id() != 0) {
+                        applied.add(option.label());
+                    }
+                }
+                appliedFilters.setText(String.join(" · ", applied));
+                displayed.set(report);
+                filterError.setText("");
+            } catch (IllegalArgumentException | DataAccessException exception) {
+                filterError.setText(Localization.text(exception.getMessage()));
             }
         };
         generate.setOnAction(event -> refresh.run());
         refresh.run();
     }
 
-    private String reportPeriodLabel(SalesReport.Period period) {
-        return Localization.text(switch (period) {
-            case MONTH -> "Tháng";
-            case QUARTER -> "Quý";
-            case YEAR -> "Năm";
+    private static VBox reportField(String title, Node control) {
+        Label label = new Label(Localization.text(title));
+        label.setLabelFor(control);
+        return new VBox(5, label, control);
+    }
+
+    private static <T> ComboBox<T> reportCombo(List<T> options, Function<T, String> label) {
+        ComboBox<T> combo = new ComboBox<>(FXCollections.observableArrayList(options));
+        combo.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(T value) {
+                return value == null ? "" : label.apply(value);
+            }
+
+            @Override
+            public T fromString(String text) {
+                return null;
+            }
         });
+        combo.getSelectionModel().selectFirst();
+        return combo;
+    }
+
+    private static void setReportOptions(ComboBox<SalesReport.Option> combo, SalesReport.Option all,
+            List<SalesReport.Option> options) {
+        combo.getItems().setAll(all);
+        combo.getItems().addAll(options);
+        combo.setValue(all);
+    }
+
+    private static Long reportOptionId(SalesReport.Option option) {
+        return option.id() == 0 ? null : option.id();
+    }
+
+    private static DatePicker reportDatePicker(LocalDate date) {
+        DatePicker picker = new DatePicker(date);
+        picker.setPrefWidth(145);
+        picker.setPromptText("YYYY-MM-DD");
+        picker.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(LocalDate value) {
+                return value == null ? "" : value.toString();
+            }
+
+            @Override
+            public LocalDate fromString(String text) {
+                try {
+                    return parseReportDate(text);
+                } catch (DateTimeParseException exception) {
+                    // DatePicker commits on focus loss. Keep the text for validation when generating the report.
+                    return picker.getValue();
+                }
+            }
+        });
+        picker.getEditor().setText(date.toString());
+        return picker;
+    }
+
+    private static LocalDate parseReportDate(String text) {
+        return text == null || text.isBlank() ? null : LocalDate.parse(text.strip());
+    }
+
+    private static LocalDate readReportDate(DatePicker picker) {
+        try {
+            return parseReportDate(picker.getEditor().getText());
+        } catch (DateTimeParseException exception) {
+            throw new IllegalArgumentException("Hãy nhập ngày theo định dạng YYYY-MM-DD.", exception);
+        }
+    }
+
+    private static ReportDates salesReportPreset(ReportRange range, String yearText, Integer selection) {
+        String rawYear = yearText.strip();
+        if (!rawYear.matches("[0-9]{4}")) {
+            throw new IllegalArgumentException("Hãy nhập năm từ 1000 đến 9998.");
+        }
+        LocalDate first = range.period.start(Integer.parseInt(rawYear), range == ReportRange.YEAR ? 1 : selection);
+        return new ReportDates(first, range.period.endExclusive(first).minusDays(1));
     }
 
     static List<ModuleRow> salesReportOutput(SalesReport report, SalesReport.Totals totals) {
         List<ModuleRow> rows = new ArrayList<>();
         for (SalesReport.Row row : report.rows()) {
-            String date = report.period() == SalesReport.Period.MONTH
-                    ? row.start().toString() : java.time.YearMonth.from(row.start()).toString();
+            String date = reportBucketLabel(report.grouping(), row.start());
             rows.add(salesReportDisplayRow(new UUID(0, row.start().toEpochDay()), date, row.totals()));
+        }
+        rows.add(salesReportDisplayRow(new UUID(0, Long.MAX_VALUE), Localization.text("Tổng cộng"), totals));
+        return List.copyOf(rows);
+    }
+
+    private static String reportBucketLabel(SalesReport.Grouping grouping, LocalDate start) {
+        return switch (grouping) {
+            case DAILY -> start.toString();
+            case MONTHLY -> YearMonth.from(start).toString();
+            case YEARLY -> Integer.toString(start.getYear());
+        };
+    }
+
+    private static List<ModuleRow> salesBreakdownOutput(List<SalesReport.Breakdown> breakdown,
+            SalesReport.Totals totals) {
+        List<ModuleRow> rows = new ArrayList<>();
+        for (SalesReport.Breakdown item : breakdown) {
+            rows.add(salesReportDisplayRow(new UUID(1, item.option().id()), item.option().label(), item.totals()));
         }
         rows.add(salesReportDisplayRow(new UUID(0, Long.MAX_VALUE), Localization.text("Tổng cộng"), totals));
         return List.copyOf(rows);
@@ -1109,27 +1316,188 @@ public class PageRenderer {
                 totals.averageOrderValue().toPlainString()));
     }
 
-    private void updateSalesReportCharts(FlowPane charts, SalesReport report) {
-        boolean daily = report.period() == SalesReport.Period.MONTH;
-        List<String> labels = report.rows().stream()
-                .map(row -> Integer.toString(daily ? row.start().getDayOfMonth() : row.start().getMonthValue()))
+    private static ModuleDefinition salesReportViewDefinition(ModuleDefinition module, String rowLabel) {
+        List<String> columns = new ArrayList<>(module.columns());
+        columns.set(0, Localization.text(rowLabel));
+        return new ModuleDefinition(module.id(), module.title(), module.group(), module.description(),
+                module.actionLabel(), List.copyOf(columns), module.formFields(), module.report(), module.staffAccessible());
+    }
+
+    static ModuleDefinition salesReportExportDefinition(ModuleDefinition module, SalesMoney money) {
+        List<String> columns = new ArrayList<>(module.columns());
+        for (int column = 2; column < columns.size(); column++) {
+            columns.set(column, Localization.text(columns.get(column)) + " (" + money.currency() + ")");
+        }
+        return new ModuleDefinition(module.id(), module.title(), module.group(), module.description(),
+                module.actionLabel(), List.copyOf(columns), module.formFields(), module.report(), module.staffAccessible());
+    }
+
+    static List<ModuleRow> salesReportExportRows(List<ModuleRow> rows, SalesMoney money) {
+        return rows.stream().map(row -> {
+            List<String> values = new ArrayList<>(row.values());
+            for (int column = 2; column < values.size(); column++) {
+                values.set(column, money.displayAmount(new BigDecimal(values.get(column)), 2).toPlainString());
+            }
+            return new ModuleRow(row.id(), values);
+        }).toList();
+    }
+
+    private void updateSalesReportCharts(FlowPane charts, SalesReport report, SalesMoney money) {
+        if (report.rows().isEmpty()) {
+            charts.getChildren().setAll(salesReportEmptyChart());
+            return;
+        }
+        SalesReport.Grouping grouping = report.grouping();
+        List<SalesReport.Row> timeline = salesChartTimeline(report);
+        DateTimeFormatter dayLabel = DateTimeFormatter.ofPattern("dd/MM");
+        List<String> labels = timeline.stream()
+                .map(row -> grouping == SalesReport.Grouping.DAILY
+                        ? row.start().format(dayLabel) : reportBucketLabel(grouping, row.start()))
                 .toList();
-        List<Number> counts = report.rows().stream()
+        List<Number> counts = timeline.stream()
                 .<Number>map(row -> row.totals().orderCount()).toList();
-        List<Number> revenue = report.rows().stream()
-                .<Number>map(row -> row.totals().revenue().movePointLeft(6)).toList();
-        String interval = daily ? "Ngày" : "Tháng";
-        charts.getChildren().setAll(
-                chartCard(Localization.text("Số lượng hóa đơn"), barChart(
-                        Localization.text(interval), Localization.text("Số đơn"), labels,
-                        seriesFromList(Localization.text("Hóa đơn"), counts))),
-                chartCard(Localization.text("Doanh thu"), lineChart(
-                        Localization.text(interval), Localization.text("Doanh thu (triệu ₫)"), labels,
-                        seriesFromList(Localization.text("Doanh thu"), revenue))));
+        String interval = reportIntervalLabel(grouping);
+        charts.getChildren().clear();
+        if (money.available()) {
+            List<Number> revenue = timeline.stream()
+                    .<Number>map(row -> chartRevenue(money, row.totals().revenue())).toList();
+            LineChart<String, Number> trend = lineChart(interval, chartRevenueLabel(money), labels,
+                    seriesFromList("Doanh thu", revenue));
+            trend.setCreateSymbols(labels.size() <= 36);
+            formatSalesTrend(trend, labels);
+            charts.getChildren().add(chartCard("Xu hướng doanh thu", trend));
+        }
+        AreaChart<String, Number> volume = areaChart(interval, "Số đơn", labels, seriesFromList("Số đơn", counts));
+        volume.setCreateSymbols(labels.size() <= 36);
+        formatSalesTrend(volume, labels);
+        charts.getChildren().add(chartCard("Số lượng hóa đơn", volume));
+    }
+
+    private static void formatSalesTrend(XYChart<String, Number> chart, List<String> labels) {
+        chart.setLegendVisible(false);
+        chart.getXAxis().setTickLabelRotation(labels.size() > 12 ? -55 : 0);
+    }
+
+    private static String reportIntervalLabel(SalesReport.Grouping grouping) {
+        return switch (grouping) {
+            case DAILY -> "Ngày";
+            case MONTHLY -> "Tháng";
+            case YEARLY -> "Năm";
+        };
+    }
+
+    private static List<SalesReport.Row> salesChartTimeline(SalesReport report) {
+        if (report.endExclusive().getYear() - report.start().getYear() > 100) {
+            return report.rows();
+        }
+        Map<LocalDate, SalesReport.Totals> byDate = new LinkedHashMap<>();
+        report.rows().forEach(row -> byDate.put(row.start(), row.totals()));
+        SalesReport.Grouping grouping = report.grouping();
+        List<SalesReport.Row> timeline = new ArrayList<>();
+        for (LocalDate date = grouping.bucketStart(report.start()); date.isBefore(report.endExclusive());
+                date = grouping.nextBucket(date)) {
+            timeline.add(new SalesReport.Row(date, byDate.getOrDefault(date, SalesReport.Totals.ZERO)));
+        }
+        return timeline;
+    }
+
+    private void updateSalesBreakdownChart(FlowPane charts, ReportView view,
+            List<SalesReport.Breakdown> breakdown, SalesMoney money) {
+        if (breakdown.isEmpty()) {
+            charts.getChildren().setAll(salesReportEmptyChart());
+            return;
+        }
+        VBox card = view == ReportView.CATEGORIES
+                ? salesCategoryShare(breakdown, money) : salesRevenueRanking(view, breakdown, money);
+        card.setPrefWidth(650);
+        charts.getChildren().setAll(card);
+    }
+
+    private VBox salesRevenueRanking(ReportView view, List<SalesReport.Breakdown> breakdown, SalesMoney money) {
+        NumberAxis amount = new NumberAxis();
+        amount.setLabel(money.available() ? chartRevenueLabel(money) : Localization.text("Số đơn"));
+        CategoryAxis category = new CategoryAxis();
+        BarChart<Number, String> chart = new BarChart<>(amount, category);
+        chart.setAnimated(false);
+        chart.setLegendVisible(false);
+        chart.setCategoryGap(10);
+        Comparator<SalesReport.Breakdown> metric = money.available()
+                ? Comparator.comparing(row -> row.totals().revenue())
+                : Comparator.comparingLong(row -> row.totals().orderCount());
+        List<SalesReport.Breakdown> ranking = breakdown.stream().sorted(metric.reversed()).limit(8).toList();
+        XYChart.Series<Number, String> series = new XYChart.Series<>();
+        for (SalesReport.Breakdown row : ranking.reversed()) {
+            String label = row.option().label();
+            Number value = money.available() ? chartRevenue(money, row.totals().revenue()) : row.totals().orderCount();
+            XYChart.Data<Number, String> data = new XYChart.Data<>(value, label);
+            String detail = money.available() ? money.format(row.totals().revenue(), 2)
+                    : Long.toString(row.totals().orderCount());
+            data.nodeProperty().addListener((observable, previous, node) ->
+                    Tooltip.install(node, new Tooltip(label + " · " + detail)));
+            series.getData().add(data);
+        }
+        chart.getData().add(series);
+        String title = money.available() ? "Doanh thu theo" : "Số đơn theo";
+        VBox card = chartCard(Localization.text(title) + " · " + Localization.text(view.label), chart);
+        if (breakdown.size() > ranking.size()) {
+            Label limit = new Label(Localization.text("Biểu đồ hiển thị 8 mục đứng đầu. Bảng bên dưới có đầy đủ các mục."));
+            limit.setWrapText(true);
+            card.getChildren().add(limit);
+        }
+        return card;
+    }
+
+    private VBox salesCategoryShare(List<SalesReport.Breakdown> breakdown, SalesMoney money) {
+        List<SalesReport.Breakdown> positive = breakdown.stream()
+                .filter(row -> row.totals().revenue().signum() > 0)
+                .sorted(Comparator.comparing((SalesReport.Breakdown row) -> row.totals().revenue()).reversed())
+                .toList();
+        if (positive.isEmpty()) {
+            return new VBox(new Label(Localization.text("Không có doanh thu để tính tỷ trọng.")));
+        }
+        BigDecimal total = positive.stream().map(row -> row.totals().revenue()).reduce(BigDecimal.ZERO, BigDecimal::add);
+        PieChart chart = new PieChart();
+        chart.setLabelsVisible(false);
+        chart.setAccessibleText(Localization.text("Tỷ trọng doanh thu theo danh mục"));
+        int shown = Math.min(7, positive.size());
+        for (SalesReport.Breakdown item : positive.subList(0, shown)) {
+            addSalesShare(chart, item.option().label(), item.totals().revenue(), total, money);
+        }
+        if (shown < positive.size()) {
+            BigDecimal others = positive.subList(shown, positive.size()).stream()
+                    .map(row -> row.totals().revenue()).reduce(BigDecimal.ZERO, BigDecimal::add);
+            addSalesShare(chart, Localization.text("Các danh mục còn lại"), others, total, money);
+        }
+        return chartCard("Tỷ trọng doanh thu theo danh mục", chart);
+    }
+
+    private static void addSalesShare(PieChart chart, String label, BigDecimal value, BigDecimal total, SalesMoney money) {
+        NumberFormat formatter = NumberFormat.getPercentInstance(money.english() ? Locale.US : Locale.forLanguageTag("vi-VN"));
+        formatter.setMaximumFractionDigits(1);
+        String share = formatter.format(value.divide(total, 8, RoundingMode.HALF_UP));
+        String legend = label + " · " + share;
+        String detail = money.available() ? legend + " · " + money.format(value, 2) : legend;
+        PieChart.Data slice = new PieChart.Data(legend, value.doubleValue());
+        slice.nodeProperty().addListener((observable, previous, node) -> Tooltip.install(node, new Tooltip(detail)));
+        chart.getData().add(slice);
+    }
+
+    private static Label salesReportEmptyChart() {
+        return new Label(Localization.text("Không có đơn hoàn tất trong phạm vi đã chọn."));
+    }
+
+    private static String chartRevenueLabel(SalesMoney money) {
+        String currency = money.english() ? money.currency() : "triệu " + money.currency();
+        return Localization.text("Doanh thu") + " (" + currency + ")";
+    }
+
+    private static BigDecimal chartRevenue(SalesMoney money, BigDecimal value) {
+        return money.english() ? money.displayAmount(value, 4) : value.movePointLeft(6);
     }
 
     private void printSalesReport(
-            ModuleDefinition module, String dateRange, List<ModuleRow> rows, javafx.stage.Window owner) {
+            ModuleDefinition module, String dateRange, List<ModuleRow> rows,
+            SalesMoney money, javafx.stage.Window owner) {
         String title = Localization.text("In báo cáo");
         PrinterJob job = PrinterJob.createPrinterJob();
         if (job == null) {
@@ -1142,13 +1510,13 @@ public class PageRenderer {
         }
         try {
             var layout = job.getJobSettings().getPageLayout();
-            int perPage = Math.max(1, (int) ((layout.getPrintableHeight() - 110) / 22));
+            int perPage = Math.max(1, (int) ((layout.getPrintableHeight() - 130) / 22));
             int pageCount = (rows.size() + perPage - 1) / perPage;
             for (int index = 0; index < pageCount; index++) {
                 int start = index * perPage;
                 List<ModuleRow> pageRows = rows.subList(start, Math.min(start + perPage, rows.size()));
                 GridPane printedTable = new GridPane();
-                for (double width : new double[] { 21, 12, 22, 22, 23 }) {
+                for (double width : new double[] { 32, 12, 18, 18, 20 }) {
                     ColumnConstraints column = new ColumnConstraints();
                     column.setPercentWidth(width);
                     printedTable.getColumnConstraints().add(column);
@@ -1157,14 +1525,16 @@ public class PageRenderer {
                 for (int row = 0; row < pageRows.size(); row++) {
                     List<String> values = new ArrayList<>(pageRows.get(row).values());
                     for (int column = 2; column < values.size(); column++) {
-                        values.set(column, formatSaleMoney(new BigDecimal(values.get(column))));
+                        values.set(column, money.format(new BigDecimal(values.get(column)), 2));
                     }
                     addPrintedReportRow(printedTable, row + 1, values, start + row == rows.size() - 1);
                 }
                 Label heading = new Label(module.title());
                 heading.setStyle("-fx-font-size: 16pt; -fx-font-weight: bold;");
+                Label printedFilters = new Label(dateRange);
+                printedFilters.setWrapText(true);
                 Label pageNumber = new Label(Localization.text("Trang") + " " + (index + 1) + "/" + pageCount);
-                VBox printedPage = new VBox(8, heading, new Label(dateRange), printedTable, pageNumber);
+                VBox printedPage = new VBox(8, heading, printedFilters, printedTable, pageNumber);
                 new Scene(printedPage, layout.getPrintableWidth(), layout.getPrintableHeight());
                 printedPage.applyCss();
                 printedPage.layout();
@@ -1889,22 +2259,8 @@ public class PageRenderer {
     }
 
     private String formatPromotionMoney(BigDecimal vndAmount, boolean perPoint) {
-        Locale locale = Localization.isEnglish() ? Locale.US : Locale.forLanguageTag("vi-VN");
-        BigDecimal displayAmount = vndAmount;
-        if (Localization.isEnglish()) {
-            if (!exchangeRateService.snapshot().available()) {
-                return Localization.text("Tỷ giá chưa sẵn sàng");
-            }
-            displayAmount = exchangeRateService.convertVndToUsd(vndAmount);
-        }
-        NumberFormat formatter = NumberFormat.getNumberInstance(locale);
-        formatter.setMinimumFractionDigits(perPoint || Localization.isEnglish() ? 2 : 0);
-        formatter.setMaximumFractionDigits(perPoint || Localization.isEnglish() ? 8 : 2);
-        String amount = formatter.format(displayAmount);
-        if (Localization.isEnglish()) {
-            return "$" + amount;
-        }
-        return amount + " VNĐ";
+        SalesMoney money = SalesMoney.capture(exchangeRateService);
+        return money.format(vndAmount, perPoint || money.english() ? 8 : 2);
     }
 
     private RenderedTable createTable(
@@ -1937,7 +2293,7 @@ public class PageRenderer {
                             .format(Long.parseLong(value));
                 }
                 if ("UC-08".equals(module.id()) && columnIndex == 5 && !value.isBlank()) {
-                    value = formatSaleMoney(new BigDecimal(value));
+                    value = formatInventoryMoney(new BigDecimal(value));
                 }
                 if ("UC-08".equals(module.id())) {
                     value = Localization.productText(value);
@@ -1945,10 +2301,16 @@ public class PageRenderer {
                 if ("UC-15".equals(module.id()) && columnIndex == 2) {
                     value = Localization.movementTypeText(value);
                 }
-                if ("UC-19".equals(module.id()) && columnIndex >= 2) {
+                if ("UC-15".equals(module.id()) && columnIndex == 4) {
+                    value = Localization.inventoryMovementNoteText(value);
+                }
+                if (("UC-17".equals(module.id()) && columnIndex == 4)
+                        || ("UC-19".equals(module.id()) && columnIndex >= 2)) {
                     value = formatSaleMoney(new BigDecimal(value));
                 }
-                value = formatDisplayDate(value);
+                if ("UC-17".equals(module.id()) && columnIndex == 5) {
+                    value = Localization.saleStatusText(value);
+                }
                 return new javafx.beans.property.ReadOnlyStringWrapper(Localization.text(value));
             });
             table.getColumns().add(column);
@@ -2022,37 +2384,19 @@ public class PageRenderer {
         FlowPane charts = new FlowPane(16, 16);
         charts.getStyleClass().add("report-chart-row");
         switch (module.id()) {
-           case "UC-05" -> {
+            case "UC-05" -> {
                 List<ModuleRow> employees = featureService.findAll(module);
-                if (employees != null && !employees.isEmpty()) {
-                    List<String> names = new ArrayList<>();
-                    List<Number> hours = new ArrayList<>();
-                    List<Number> shifts = new ArrayList<>();
-
-                    for (ModuleRow row : employees) {
-                        List<String> vals = row.values();
-                        if (vals == null || vals.size() < 4) {
-                            continue;
-                        }
-                        names.add(vals.get(0) != null ? vals.get(0) : "N/A");
-
-                        // Lọc lấy phần số sạch cho Giờ thực tế (tránh lỗi khi có chữ "giờ", "hrs" hoặc null)
-                        String rawHour = vals.get(3) == null ? "0" : vals.get(3).replaceAll("[^0-9.]", "");
-                        hours.add(rawHour.isEmpty() ? 0.0 : parseDecimal(rawHour));
-
-                        // Lọc lấy phần số sạch cho Số ca (tránh lỗi Integer.parseInt khi có ".0" hoặc chữ)
-                        String rawShift = vals.get(2) == null ? "0" : vals.get(2).replaceAll("[^0-9.]", "");
-                        int shiftCount = rawShift.isEmpty() ? 0 : (int) Math.round(parseDecimal(rawShift));
-                        shifts.add(shiftCount);
-                    }
-
-                    if (!names.isEmpty()) {
-                        charts.getChildren().add(chartCard("Giờ làm theo nhân viên", barChart(
-                                "Nhân viên", "Số giờ", names, seriesFromList("Thực tế", hours))));
-                        charts.getChildren().add(chartCard("Phân bổ số ca", pieChart(
-                                "Ca làm", seriesPairs(names, shifts))));
-                    }
-                }
+                List<String> names = employees.stream().map(row -> row.values().get(0)).toList();
+                List<Number> hours = employees.stream()
+                        .map(row -> (Number) parseDecimal(row.values().get(3).replace(" giờ", "")))
+                        .toList();
+                List<Number> shifts = employees.stream()
+                        .map(row -> (Number) completedShiftCount(row.values().get(2)))
+                        .toList();
+                charts.getChildren().add(chartCard("Giờ làm theo nhân viên", barChart(
+                        "Nhân viên", "Số giờ", names, seriesFromList("Thực tế", hours))));
+                charts.getChildren().add(chartCard("Phân bổ số ca", pieChart(
+                        "Ca làm", seriesPairs(names, shifts))));
             }
             case "UC-06" -> {
                 List<ModuleRow> attendance = featureService.findAll(module);
@@ -2129,7 +2473,7 @@ public class PageRenderer {
             }
             String period = row.values().get(periodIndex);
             String dimension = row.values().get(dimensionIndex);
-            int count = parseReportProductCount(row.values().get(2));
+            int count = parseReportCount(row.values().get(2));
             countsByPeriod.computeIfAbsent(period, ignored -> new LinkedHashMap<>())
                     .merge(dimension, count, Integer::sum);
         }
@@ -2156,7 +2500,12 @@ public class PageRenderer {
                 periods, Collections.unmodifiableMap(series), dimensions, List.copyOf(latestPeriodTotals));
     }
 
-    private static int parseReportProductCount(String value) {
+    static int completedShiftCount(String value) {
+        int separator = value.indexOf('/');
+        return parseReportCount(separator < 0 ? value : value.substring(0, separator));
+    }
+
+    private static int parseReportCount(String value) {
         String count = value.trim().split("\\s+", 2)[0];
         try {
             return Integer.parseInt(count);
@@ -2470,8 +2819,8 @@ public class PageRenderer {
 
         Dialog<ButtonType> dialog = new Dialog<>();
         dialog.setTitle(Localization.text("Chi tiết lô hàng nhập"));
-        dialog.setHeaderText(Localization.text(
-                "Phiếu " + receipt.values().get(0) + " · " + receipt.values().get(1)));
+        dialog.setHeaderText(
+                Localization.text("Phiếu nhập") + " " + receipt.values().get(0) + " · " + receipt.values().get(1));
         dialog.initModality(Modality.APPLICATION_MODAL);
         dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
         dialog.getDialogPane().getStyleClass().add("form-dialog");
@@ -2488,11 +2837,11 @@ public class PageRenderer {
         addReceiptDetailColumn(table, "Đơn vị", detail -> detail.unitName(), 80);
         addReceiptDetailColumn(table, "Mã lô", detail -> detail.batchCode(), 110);
         addReceiptDetailColumn(table, "Hạn sử dụng",
-                detail -> detail.expiryDate() == null ? "Không có" : detail.expiryDate().toString(), 115);
+                detail -> detail.expiryDate() == null ? "Chưa có hạn sử dụng" : detail.expiryDate().toString(), 115);
         addReceiptDetailColumn(table, "Số lượng",
                 detail -> detail.quantity().stripTrailingZeros().toPlainString(), 90);
         addReceiptDetailColumn(table, "Đơn giá",
-                detail -> formatSaleMoney(detail.unitCost()), 110);
+                detail -> formatInventoryMoney(detail.unitCost()), 110);
         addReceiptDetailColumn(table, "Vị trí kho",
                 detail -> detail.locationCode() + " · " + detail.locationName(), 170);
 
@@ -2521,7 +2870,7 @@ public class PageRenderer {
     }
 
     private void showStocktakeDetails(ModuleRow stocktake) {
-        List<InventoryWorkflowDAO.StocktakeDetail> details;
+        InventoryWorkflowDAO.StocktakeDetails details;
         try {
             details = featureServices.inventoryWorkflowService().findStocktakeDetails(stocktake.id());
         } catch (IllegalArgumentException | IllegalStateException
@@ -2534,9 +2883,9 @@ public class PageRenderer {
 
         Dialog<ButtonType> dialog = new Dialog<>();
         dialog.setTitle(Localization.text("Chi tiết kiểm kê"));
-        dialog.setHeaderText(Localization.text(
-                "Phiên " + stocktake.values().get(0)
-                        + " · " + stocktake.values().get(1)));
+        dialog.setHeaderText(
+                Localization.text("Phiên kiểm kê") + " " + stocktake.values().get(0)
+                        + " · " + stocktake.values().get(1));
         dialog.initModality(Modality.APPLICATION_MODAL);
         dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
         dialog.getDialogPane().getStyleClass().add("form-dialog");
@@ -2549,8 +2898,8 @@ public class PageRenderer {
         addCustomerField(summary, 1, "Chênh lệch", new Label(stocktake.values().get(3)));
         addCustomerField(summary, 2, "Trạng thái", new Label(
                 Localization.text(stocktake.values().get(4))));
-        if (stocktake.values().size() > 5 && !stocktake.values().get(5).isBlank()) {
-            Label note = new Label(stocktake.values().get(5));
+        if (!details.note().isBlank()) {
+            Label note = new Label(details.note());
             note.setWrapText(true);
             note.setMaxWidth(Double.MAX_VALUE);
             addCustomerField(summary, 3, "Ghi chú", note);
@@ -2559,15 +2908,15 @@ public class PageRenderer {
         TableView<InventoryWorkflowDAO.StocktakeDetail> table = new TableView<>();
         table.getStyleClass().add("data-table");
         table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
-        table.setItems(FXCollections.observableArrayList(details));
-        table.setPrefHeight(Math.min(420, 90 + details.size() * 42));
+        table.setItems(FXCollections.observableArrayList(details.items()));
+        table.setPrefHeight(Math.min(420, 90 + details.items().size() * 42));
 
         addStocktakeDetailColumn(table, "Mã sản phẩm", detail -> detail.productCode(), 110);
         addStocktakeDetailColumn(table, "Tên sản phẩm", detail -> detail.productName(), 180);
         addStocktakeDetailColumn(table, "Đơn vị", detail -> detail.unitName(), 70);
         addStocktakeDetailColumn(table, "Mã lô", detail -> detail.batchCode(), 100);
         addStocktakeDetailColumn(table, "Hạn sử dụng",
-                detail -> detail.expiryDate() == null ? "Không có" : detail.expiryDate().toString(), 115);
+                detail -> detail.expiryDate() == null ? "Chưa có hạn sử dụng" : detail.expiryDate().toString(), 115);
         addStocktakeDetailColumn(table, "Tồn hệ thống",
                 detail -> detail.expectedQuantity().stripTrailingZeros().toPlainString(), 100);
         addStocktakeDetailColumn(table, "Tồn đếm",
@@ -2606,8 +2955,9 @@ public class PageRenderer {
         addCustomerField(fields, 2, "Loại biến động",
                 new Label(Localization.movementTypeText(values.get(2))));
         addCustomerField(fields, 3, "Số lượng", new Label(Localization.text(values.get(3))));
-        Label explanation = new Label(Localization.text(
-                values.get(4).isBlank() ? "Không có ghi chú" : values.get(4)));
+        String movementNote = values.get(4).isBlank()
+                ? "Không có ghi chú" : Localization.inventoryMovementNoteText(values.get(4));
+        Label explanation = new Label(Localization.text(movementNote));
         explanation.setWrapText(true);
         addCustomerField(fields, 4, "Diễn giải", explanation);
         addCustomerField(fields, 5, "Hạn sử dụng",
@@ -2718,12 +3068,14 @@ public class PageRenderer {
         VBox content = new VBox(12,
                 header,
                 new Label(Localization.text(
-                        "Phiếu mới sẽ ở trạng thái chưa xác nhận và chưa làm thay đổi tồn kho.")),
+                        initialDraft == null
+                                ? "Phiếu mới sẽ ở trạng thái chưa xác nhận và chưa làm thay đổi tồn kho."
+                                : "Chỉnh sửa phiếu chưa xác nhận; tồn kho vẫn chưa thay đổi.")),
                 new Label(Localization.text(
-                        "Mỗi dòng nhập lưu sản phẩm, mã lô, hạn sử dụng, vị trí, số lượng và giá nhập.")),
+                        "Mỗi dòng hàng ghi nhận sản phẩm, mã lô, hạn sử dụng, vị trí lưu kho, số lượng và giá nhập.")),
                 lineScroll,
                 addLine);
-        content.setPadding(new Insets(10, 0, 0, 0));
+        content.setPadding(new Insets(12, 16, 12, 16));
         dialog.getDialogPane().setContent(content);
 
         Button okButton = (Button) dialog.getDialogPane().lookupButton(ButtonType.OK);
@@ -2765,7 +3117,7 @@ public class PageRenderer {
                 combo.show();
             }
         });
-        VBox selector = new VBox(4, search, combo);
+        VBox selector = new VBox(8, search, combo);
         selector.setPrefWidth(width);
         selector.setMinWidth(0);
         return selector;
@@ -2935,7 +3287,7 @@ public class PageRenderer {
         addCustomerField(header, 1, "Ngày kiểm kê", stocktakeDate);
         addCustomerField(header, 2, "Ghi chú", note);
 
-        VBox batchRows = new VBox(6);
+        VBox batchRows = new VBox(10);
         Map<Long, TextField> countedQuantities = new java.util.LinkedHashMap<>();
         Map<Long, BigDecimal> savedCounts = initialDraft == null
                 ? Map.of()
@@ -2982,9 +3334,11 @@ public class PageRenderer {
         batchScroll.setPrefViewportHeight(340);
         VBox content = new VBox(10, header,
                 new Label(Localization.text(
-                        "Phiên mới ở trạng thái chưa xác nhận; tồn kho chỉ đổi sau khi xác nhận.")),
+                        initialDraft == null
+                                ? "Phiên mới ở trạng thái chưa xác nhận; tồn kho chỉ đổi sau khi xác nhận."
+                                : "Chỉnh sửa phiên chưa xác nhận; tồn kho vẫn chưa thay đổi.")),
                 batchStatus, batchScroll);
-        content.setPadding(new Insets(10, 0, 0, 0));
+        content.setPadding(new Insets(12, 16, 12, 16));
         dialog.getDialogPane().setContent(content);
 
         Button okButton = (Button) dialog.getDialogPane().lookupButton(ButtonType.OK);
@@ -3051,7 +3405,12 @@ public class PageRenderer {
         batch.setConverter(new StringConverter<>() {
             @Override
             public String toString(InventoryWorkflowDAO.BatchOption value) {
-                return value == null ? "" : value.label();
+                return value == null ? ""
+                        : value.productCode() + " · " + value.productName() + " · " + value.batchCode()
+                                + " · " + value.quantityOnHand().stripTrailingZeros().toPlainString()
+                                + " · " + Localization.text(value.expiryDate() == null
+                                        ? "Không có HSD" : value.expiryDate().toString())
+                                + " · " + value.locationCode();
             }
 
             @Override
@@ -3084,6 +3443,7 @@ public class PageRenderer {
         GridPane fields = new GridPane();
         fields.setHgap(16);
         fields.setVgap(12);
+        fields.setPadding(new Insets(12, 16, 12, 16));
         addCustomerField(fields, 0, "Lô hàng", batch);
         addCustomerField(fields, 1, "Loại biến động", lossType);
         addCustomerField(fields, 2, "Số lượng", quantity);
@@ -3133,7 +3493,8 @@ public class PageRenderer {
         try {
             return new BigDecimal(raw == null ? "" : raw.trim().replace(",", "."));
         } catch (NumberFormatException exception) {
-            throw new IllegalArgumentException(field + " phải là số hợp lệ.");
+            throw new IllegalArgumentException(
+                    Localization.text(field) + Localization.text(" phải là số hợp lệ."));
         }
     }
 
@@ -3196,7 +3557,7 @@ public class PageRenderer {
         GridPane fields = new GridPane();
         fields.setHgap(16);
         fields.setVgap(12);
-        fields.setPadding(new Insets(12, 0, 8, 0));
+        fields.setPadding(new Insets(12, 16, 8, 16));
         addCustomerField(fields, 0, "Mã vị trí", code);
         addCustomerField(fields, 1, "Tên vị trí", name);
         addCustomerField(fields, 2, "Mô tả", description);
@@ -3219,14 +3580,6 @@ public class PageRenderer {
             ModuleDefinition module,
             FeatureModuleService featureService,
             ModuleRow existingRow) {
-        return editRow(module, featureService, existingRow, null);
-    }
-
-    private java.util.Optional<List<String>> editRow(
-            ModuleDefinition module,
-            FeatureModuleService featureService,
-            ModuleRow existingRow,
-            String currentEmployeeName) {
         if ("UC-01".equals(module.id())) {
             return createEmployeeAccountDialog(module);
         }
@@ -3253,13 +3606,11 @@ public class PageRenderer {
         fields.setHgap(16);
         fields.setVgap(12);
         fields.setPadding(new Insets(12, 0, 8, 0));
-        List<java.util.function.Supplier<String>> valueReaders = new ArrayList<>();
-        List<String> fieldLabels = "UC-04".equals(module.id())
-                ? module.formFields() : module.columns();
+        List<Node> inputs = new ArrayList<>();
+        List<String> fieldLabels = module.formFields();
         for (int index = 0; index < fieldLabels.size(); index++) {
-            Label label = new Label(fieldLabels.get(index));
-            label.getStyleClass().add("field-label");
             Node input;
+<<<<<<< HEAD
             if (existingRow == null
                     && (("UC-02".equals(module.id()) && index == 1)
                     || ("UC-03".equals(module.id()) && index == 0))) {
@@ -3276,41 +3627,42 @@ public class PageRenderer {
                 input = statusInput;
                 valueReaders.add(statusInput::getValue);
             } else if ("UC-09".equals(module.id()) && index == 5) {
+=======
+            if ("UC-09".equals(module.id()) && index == 5) {
+>>>>>>> c910dd9e5d0954962f081bf169ddcba5f6adf653
                 ComboBox<String> status = new ComboBox<>(FXCollections.observableArrayList(
                         Localization.text("Đang hoạt động"), Localization.text("Ngừng hoạt động")));
                 status.setMaxWidth(Double.MAX_VALUE);
                 status.getSelectionModel().select(existingRow != null
                         && "INACTIVE".equalsIgnoreCase(existingRow.values().get(index)) ? 1 : 0);
                 input = status;
-                valueReaders.add(() ->
-                        status.getSelectionModel().getSelectedIndex() == 0 ? "ACTIVE" : "INACTIVE");
             } else {
                 TextField textField = new TextField();
                 textField.setPromptText(fieldLabels.get(index));
                 textField.getStyleClass().add("text-input");
                 if (existingRow != null) {
+<<<<<<< HEAD
                     String value = Localization.text(existingRow.values().get(index));
                     if ("UC-04".equals(module.id()) && index >= 2) {
                         value = formatAttendanceInput(value);
                     }
                     textField.setText(value);
+=======
+                    textField.setText(Localization.text(existingRow.values().get(index)));
+>>>>>>> c910dd9e5d0954962f081bf169ddcba5f6adf653
                 }
                 input = textField;
-                valueReaders.add(() -> textField.getText().trim());
             }
-            if ("UC-04".equals(module.id()) && userRole == UserRole.STAFF
-                    && existingRow == null && index == 0) {
-                if (input instanceof TextField textField) {
-                    textField.setText(currentEmployeeName);
-                }
+            if (("UC-03".equals(module.id()) && index == 3)
+                    || ("UC-04".equals(module.id()) && existingRow != null && index < 2)) {
                 input.setDisable(true);
             }
-            if ("UC-04".equals(module.id()) && existingRow != null && index < 2) {
-                input.setDisable(true);
-            }
+            Label label = new Label(fieldLabels.get(index));
+            label.getStyleClass().add("field-label");
             fields.add(label, 0, index);
             fields.add(input, 1, index);
             GridPane.setHgrow(input, Priority.ALWAYS);
+            inputs.add(input);
         }
         Label note = new Label(Localization.text(
                 "Dữ liệu nghiệp vụ được lưu trong MySQL; kết quả báo cáo được tính lại khi mở."));
@@ -3322,10 +3674,15 @@ public class PageRenderer {
         dialog.setResultConverter(button -> button == ButtonType.OK ? ButtonType.OK : null);
         return dialog.showAndWait()
                 .filter(ButtonType.OK::equals)
-                .map(ignored -> valueReaders.stream().map(java.util.function.Supplier::get).toList())
+                .map(ignored -> inputs.stream()
+                        .map(input -> input instanceof ComboBox<?> comboBox
+                                ? (comboBox.getSelectionModel().getSelectedIndex() == 0 ? "ACTIVE" : "INACTIVE")
+                                : ((TextField) input).getText().trim())
+                        .toList())
                 .map(values -> preserveUnchangedValues(existingRow, values));
     }
 
+<<<<<<< HEAD
     private DatePicker schedulingDatePicker(LocalDate initialDate) {
         DatePicker datePicker = new DatePicker(initialDate);
         datePicker.setConverter(new StringConverter<>() {
@@ -3371,6 +3728,8 @@ public class PageRenderer {
         }
     }
 
+=======
+>>>>>>> c910dd9e5d0954962f081bf169ddcba5f6adf653
     private java.util.Optional<List<String>> createProductDialog(
             ModuleDefinition module,
             ModuleRow existingRow) {
@@ -3531,17 +3890,15 @@ public class PageRenderer {
                 ? "Tạo hồ sơ khách hàng" : "Hồ sơ khách hàng"));
         dialog.initModality(Modality.APPLICATION_MODAL);
         dialog.getDialogPane().getButtonTypes().addAll(ButtonType.CANCEL, ButtonType.OK);
+        localizeSalesDialogButtons(dialog);
         dialog.getDialogPane().getStyleClass().add("form-dialog");
 
         TextField name = customerTextField(oldValues, 1);
         TextField phone = customerTextField(oldValues, 2);
         TextField email = customerTextField(oldValues, 3);
-        DatePicker dateOfBirth = new DatePicker();
-        if (oldValues.size() > 8 && !oldValues.get(8).isBlank()) {
-            dateOfBirth.setValue(LocalDate.parse(oldValues.get(8)));
-        }
+        TextField dateOfBirth = customerBirthDateField(oldValues, 8);
         TextArea allergies = new TextArea(oldValues.isEmpty() ? "" : oldValues.get(4));
-        allergies.setPromptText(Localization.text("Mỗi dòng: tên dị ứng | ghi chú tùy chọn"));
+        allergies.setPromptText(Localization.text("Mỗi dòng: một chất dị ứng"));
         allergies.setPrefRowCount(4);
         allergies.setWrapText(true);
         allergies.getStyleClass().add("text-input");
@@ -3564,7 +3921,7 @@ public class PageRenderer {
         addCustomerField(fields, 1, "Điện thoại", phone);
         addCustomerField(fields, 2, "Email", email);
         addCustomerField(fields, 3, "Ngày sinh", dateOfBirth);
-        addCustomerField(fields, 4, "Dị ứng", allergies);
+        addCustomerField(fields, 4, "Chất dị ứng", allergies);
         addCustomerField(fields, 5, "Trạng thái", new VBox(8, blocked, archived));
         addCustomerField(fields, 6, "Lý do hạn chế", reason);
         if (!oldValues.isEmpty()) {
@@ -3580,18 +3937,14 @@ public class PageRenderer {
         validationMessage.getStyleClass().add("form-error");
         validationMessage.setWrapText(true);
         VBox content = new VBox(12, fields, new Label(Localization.text(
-                "Dị ứng do khách hàng khai báo. Mỗi dị ứng nhập trên một dòng; có thể thêm ghi chú sau dấu |.")),
-                validationMessage);
+                "Mỗi chất dị ứng nhập trên một dòng.")), validationMessage);
         content.getChildren().get(1).getStyleClass().add("helper-text");
         dialog.getDialogPane().setContent(content);
         dialog.getDialogPane().setPrefWidth(680);
 
         javafx.scene.Node okButton = dialog.getDialogPane().lookupButton(ButtonType.OK);
         okButton.addEventFilter(ActionEvent.ACTION, event -> {
-            String validationError = validateCustomerForm(name, phone, email, blocked, reason);
-            if (dateOfBirth.getValue() != null && dateOfBirth.getValue().isAfter(LocalDate.now())) {
-                validationError = "Ngày sinh không thể ở tương lai.";
-            }
+            String validationError = validateCustomerForm(name, phone, email, dateOfBirth, blocked, reason);
             if (!validationError.isEmpty()) {
                 validationMessage.setText(Localization.text(validationError));
                 event.consume();
@@ -3613,7 +3966,7 @@ public class PageRenderer {
                             oldValues.isEmpty() ? "0" : oldValues.get(5),
                             status,
                             reason.getText().trim(),
-                            dateOfBirth.getValue() == null ? "" : dateOfBirth.getValue().toString());
+                            dateOfBirth.getText().strip());
                 });
     }
 
@@ -3643,10 +3996,10 @@ public class PageRenderer {
             } catch (IllegalArgumentException | IllegalStateException
                      | java.util.NoSuchElementException
                      | vn.ninhkieupharma.pharmacy.common.dao.DataAccessException exception) {
-                showInformation(Localization.text("Không thể cập nhật dữ liệu"), exception.getMessage());
+                showInformation(Localization.text("Không thể cập nhật dữ liệu"), Localization.text(exception.getMessage()));
                 draft = new ModuleRow(selectedRow == null ? UUID.randomUUID() : selectedRow.id(), values);
             } catch (UnsupportedOperationException exception) {
-                showInformation(Localization.text("Thao tác chưa hỗ trợ"), exception.getMessage());
+                showInformation(Localization.text("Thao tác chưa hỗ trợ"), Localization.text(exception.getMessage()));
                 draft = new ModuleRow(selectedRow == null ? UUID.randomUUID() : selectedRow.id(), values);
             }
         }
@@ -3659,6 +4012,12 @@ public class PageRenderer {
         return field;
     }
 
+    private TextField customerBirthDateField(List<String> values, int index) {
+        TextField field = customerTextField(values, index);
+        field.setPromptText(Localization.text("YYYY, YYYY-MM hoặc YYYY-MM-DD"));
+        return field;
+    }
+
     private void addCustomerField(GridPane fields, int row, String labelText, Node input) {
         Label label = new Label(Localization.text(labelText));
         label.getStyleClass().add("field-label");
@@ -3668,12 +4027,13 @@ public class PageRenderer {
     }
 
     private String validateCustomerForm(
-            TextField name, TextField phone, TextField email, CheckBox blocked, TextField reason) {
+            TextField name, TextField phone, TextField email, TextField dateOfBirth,
+            CheckBox blocked, TextField reason) {
         if (name.getText().isBlank()) {
             return "Tên khách hàng là bắt buộc.";
         }
-        String normalizedPhone = phone.getText().replaceAll("[\\s().-]", "");
-        if (!normalizedPhone.isEmpty() && !normalizedPhone.matches("\\+?[0-9]{7,15}")) {
+        String normalizedPhone = normalizeCustomerPhone(phone.getText());
+        if (!normalizedPhone.isEmpty() && !isValidCustomerPhone(normalizedPhone)) {
             return "Số điện thoại cần có từ 7 đến 15 chữ số.";
         }
         String emailValue = email.getText().trim();
@@ -3686,7 +4046,20 @@ public class PageRenderer {
         if (blocked.isSelected() && reason.getText().isBlank()) {
             return "Cần nhập lý do khi hạn chế bán.";
         }
+        try {
+            CustomerBirthDate.parse(dateOfBirth.getText());
+        } catch (IllegalArgumentException exception) {
+            return exception.getMessage();
+        }
         return "";
+    }
+
+    private static String normalizeCustomerPhone(String phone) {
+        return phone.replaceAll("[\\s().-]", "");
+    }
+
+    private static boolean isValidCustomerPhone(String normalizedPhone) {
+        return normalizedPhone.matches("\\+?[0-9]{7,15}");
     }
 
     private String customerStatusLabel(String status) {
@@ -3711,9 +4084,10 @@ public class PageRenderer {
             return;
         }
 
-        Tab purchasesTab = new Tab(Localization.text("Lịch sử mua"), createCustomerHistoryTable(
+        TableView<ModuleRow> purchasesTable = createCustomerHistoryTable(
                 List.of("Mã hóa đơn", "Ngày giao dịch", "Tổng tiền", "Trạng thái"),
-                purchases, "Khách hàng chưa có giao dịch.", false));
+                purchases, "Khách hàng chưa có giao dịch.", false);
+        Tab purchasesTab = new Tab(Localization.text("Lịch sử mua"), purchasesTable);
         Tab loyaltyTab = new Tab(Localization.text("Lịch sử điểm"), createCustomerHistoryTable(
                 List.of("Mã hóa đơn", "Ngày giao dịch", "Loại giao dịch", "Điểm thay đổi"),
                 loyalty, "Khách hàng chưa có giao dịch điểm.", true));
@@ -3725,10 +4099,20 @@ public class PageRenderer {
         dialog.setHeaderText(customer.values().get(1));
         dialog.initModality(Modality.APPLICATION_MODAL);
         dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        localizeSalesDialogButtons(dialog);
         dialog.getDialogPane().getStyleClass().add("form-dialog");
         dialog.getDialogPane().setContent(tabs);
         dialog.getDialogPane().setPrefSize(760, 420);
-        dialog.showAndWait();
+        Runnable refreshPage = refreshMoney;
+        refreshMoney = () -> {
+            refreshPage.run();
+            purchasesTable.refresh();
+        };
+        try {
+            dialog.showAndWait();
+        } finally {
+            refreshMoney = refreshPage;
+        }
     }
 
     private TableView<ModuleRow> createCustomerHistoryTable(
@@ -3751,14 +4135,9 @@ public class PageRenderer {
                         value = (change > 0 ? "+" : "") + numberFormat.format(change);
                     }
                 } else if (columnIndex == 2) {
-                    value = numberFormat.format(new BigDecimal(value)) + " ₫";
+                    value = formatSaleMoney(new BigDecimal(value));
                 } else if (columnIndex == 3) {
-                    value = switch (value) {
-                        case "PENDING" -> Localization.text("Đang chờ");
-                        case "COMPLETED" -> Localization.text("Hoàn tất");
-                        case "VOIDED" -> Localization.text("Đã hủy");
-                        default -> value;
-                    };
+                    value = Localization.saleStatusText(value);
                 }
                 return new javafx.beans.property.ReadOnlyStringWrapper(Localization.text(value));
             });
@@ -3775,7 +4154,8 @@ public class PageRenderer {
 
     private java.util.Optional<List<String>> createPromotionDialog(
             ModuleDefinition module, PromotionsLoyaltyService service, ModuleRow existingRow) {
-        if (Localization.isEnglish() && !exchangeRateService.snapshot().available()) {
+        SalesMoney money = SalesMoney.capture(exchangeRateService);
+        if (!money.available()) {
             showInformation(
                     Localization.text("Tỷ giá USD/VNĐ"),
                     Localization.text("Tỷ giá chưa sẵn sàng"));
@@ -3789,6 +4169,7 @@ public class PageRenderer {
         dialog.setHeaderText(module.title());
         dialog.initModality(Modality.APPLICATION_MODAL);
         dialog.getDialogPane().getButtonTypes().addAll(ButtonType.CANCEL, ButtonType.OK);
+        localizeSalesDialogButtons(dialog);
         dialog.getDialogPane().getStyleClass().add("form-dialog");
 
         List<String> oldValues = existingRow == null ? List.of() : existingRow.values();
@@ -3797,7 +4178,7 @@ public class PageRenderer {
         TextField name = promotionTextField(oldValues, 1, "");
         TextField discount = promotionTextField(oldValues, 2, "0");
         BigDecimal redemptionVnd = new BigDecimal(oldValues.isEmpty() ? "1000" : oldValues.get(7));
-        TextField redemptionValue = promotionMoneyInput(redemptionVnd);
+        TextField redemptionValue = promotionMoneyInput(redemptionVnd, money);
 
         DatePicker accrualStart = promotionDatePicker(oldValues, 3, today);
         DatePicker redemptionStart = promotionDatePicker(oldValues, 4, today);
@@ -3820,22 +4201,23 @@ public class PageRenderer {
         addPromotionField(fields, 4, "Bắt đầu đổi điểm", redemptionStart);
         addPromotionField(fields, 5, "Kết thúc tích điểm", accrualEnd);
         addPromotionField(fields, 6, "Kết thúc đổi điểm", redemptionEnd);
-        addPromotionField(fields, 7, "Giá trị quy đổi mỗi điểm", redemptionValue);
+        addPromotionField(fields, 7, Localization.text("Giá trị quy đổi mỗi điểm")
+                + " (" + money.currency() + ")", redemptionValue);
         addPromotionField(fields, 8, "Trạng thái", status);
 
         VBox tierInputs = new VBox(8);
         List<TierInput> tiers = new ArrayList<>();
         if (oldValues.isEmpty()) {
-            addTierInput(tierInputs, tiers, BigDecimal.ZERO, "1");
+            addTierInput(tierInputs, tiers, BigDecimal.ZERO, "1", money);
         } else if (!oldValues.get(8).isBlank()) {
             for (String encoded : oldValues.get(8).split(";")) {
                 String[] parts = encoded.split(":", -1);
-                addTierInput(tierInputs, tiers, new BigDecimal(parts[0]), parts[1]);
+                addTierInput(tierInputs, tiers, new BigDecimal(parts[0]), parts[1], money);
             }
         }
         Button addTier = new Button(Localization.text("Thêm bậc"));
         addTier.getStyleClass().add("button-secondary");
-        addTier.setOnAction(event -> addTierInput(tierInputs, tiers, null, ""));
+        addTier.setOnAction(event -> addTierInput(tierInputs, tiers, null, "", money));
         Label tierLabel = new Label(Localization.text("Bậc tích điểm"));
         tierLabel.getStyleClass().add("field-label");
         VBox tierSection = new VBox(8, tierLabel, tierInputs, addTier);
@@ -3860,7 +4242,7 @@ public class PageRenderer {
             try {
                 List<String> values = promotionValues(
                         code, name, discount, accrualStart, redemptionStart,
-                        accrualEnd, redemptionEnd, redemptionValue, tiers, status);
+                        accrualEnd, redemptionEnd, redemptionValue, tiers, status, money);
                 boolean validateStart = existingRow == null
                         || !existingRow.values().get(3).equals(values.get(3));
                 service.validateConfiguration(module, values, validateStart, existingRow);
@@ -3874,7 +4256,7 @@ public class PageRenderer {
         return dialog.showAndWait().filter(ButtonType.OK::equals)
                 .map(ignored -> promotionValues(
                         code, name, discount, accrualStart, redemptionStart,
-                        accrualEnd, redemptionEnd, redemptionValue, tiers, status));
+                        accrualEnd, redemptionEnd, redemptionValue, tiers, status, money));
     }
 
     private TextField promotionTextField(List<String> values, int index, String defaultValue) {
@@ -3902,10 +4284,10 @@ public class PageRenderer {
     }
 
     private void addTierInput(
-            VBox container, List<TierInput> tiers, BigDecimal thresholdVnd, String rateValue) {
-        TextField threshold = promotionMoneyInput(thresholdVnd);
+            VBox container, List<TierInput> tiers, BigDecimal thresholdVnd, String rateValue, SalesMoney money) {
+        TextField threshold = promotionMoneyInput(thresholdVnd, money);
         threshold.setPromptText(Localization.text("Ngưỡng hóa đơn tối thiểu")
-                + (Localization.isEnglish() ? " (USD)" : " (VNĐ)"));
+                + " (" + money.currency() + ")");
         TextField rate = new TextField(rateValue);
         rate.setPromptText(Localization.text("Tỷ lệ điểm (%)"));
         rate.getStyleClass().add("text-input");
@@ -3924,18 +4306,16 @@ public class PageRenderer {
         });
     }
 
-    private TextField promotionMoneyInput(BigDecimal amountVnd) {
-        TextField field = new TextField(amountVnd == null ? "" : formatInputMoney(amountVnd));
+    private TextField promotionMoneyInput(BigDecimal amountVnd, SalesMoney money) {
+        TextField field = new TextField(amountVnd == null ? "" : formatInputMoney(amountVnd, money));
         field.setUserData(amountVnd);
         field.getStyleClass().add("text-input");
         return field;
     }
 
-    private String formatInputMoney(BigDecimal vndAmount) {
-        BigDecimal displayAmount = Localization.isEnglish()
-                ? exchangeRateService.convertVndToUsd(vndAmount) : vndAmount;
-        String value = displayAmount.stripTrailingZeros().toPlainString();
-        return Localization.isEnglish() ? value : value.replace('.', ',');
+    private String formatInputMoney(BigDecimal vndAmount, SalesMoney money) {
+        String value = money.displayAmount(vndAmount, 8).stripTrailingZeros().toPlainString();
+        return money.english() ? value : value.replace('.', ',');
     }
 
     private List<String> promotionValues(
@@ -3948,11 +4328,12 @@ public class PageRenderer {
             DatePicker redemptionEnd,
             TextField redemptionValue,
             List<TierInput> tiers,
-            ComboBox<String> status) {
-        BigDecimal redemptionVnd = promotionInputVnd(redemptionValue, 8);
+            ComboBox<String> status,
+            SalesMoney money) {
+        BigDecimal redemptionVnd = promotionInputVnd(redemptionValue, 8, money);
         List<String> encodedTiers = new ArrayList<>();
         for (TierInput tier : tiers) {
-            BigDecimal thresholdVnd = promotionInputVnd(tier.threshold(), 2);
+            BigDecimal thresholdVnd = promotionInputVnd(tier.threshold(), 2, money);
             encodedTiers.add(thresholdVnd.toPlainString() + ":"
                     + parseDecimalInput(tier.rate()).toPlainString());
         }
@@ -3977,16 +4358,12 @@ public class PageRenderer {
                 statusIndex == 0 ? "ACTIVE" : "INACTIVE");
     }
 
-    private BigDecimal promotionInputVnd(TextField input, int scale) {
+    private BigDecimal promotionInputVnd(TextField input, int scale, SalesMoney money) {
         if (input.getUserData() instanceof BigDecimal previousVnd
-                && formatInputMoney(previousVnd).equals(input.getText().trim())) {
+                && formatInputMoney(previousVnd, money).equals(input.getText().trim())) {
             return previousVnd;
         }
-        BigDecimal displayAmount = parseDecimalInput(input);
-        BigDecimal vndAmount = Localization.isEnglish()
-                ? exchangeRateService.convertUsdToVnd(displayAmount)
-                : displayAmount;
-        return vndAmount.setScale(scale, RoundingMode.HALF_UP);
+        return money.toVnd(parseDecimalInput(input)).setScale(scale, RoundingMode.HALF_UP);
     }
 
     private BigDecimal parseDecimalInput(TextField input) {
@@ -4051,11 +4428,12 @@ public class PageRenderer {
             inputs.add(input);
         }
 
+        String passwordLabelText = module.formFields().getLast();
         PasswordField password = new PasswordField();
-        password.setPromptText(module.formFields().get(5));
+        password.setPromptText(passwordLabelText);
         password.getStyleClass().add("text-input");
         TextField visiblePassword = new TextField();
-        visiblePassword.setPromptText(module.formFields().get(5));
+        visiblePassword.setPromptText(passwordLabelText);
         visiblePassword.getStyleClass().add("text-input");
         visiblePassword.textProperty().bindBidirectional(password.textProperty());
         visiblePassword.setVisible(false);
@@ -4072,7 +4450,7 @@ public class PageRenderer {
             passwordVisibilityButton.setText(Localization.text(showPassword ? "Ẩn" : "Hiện"));
             (showPassword ? visiblePassword : password).requestFocus();
         });
-        Label passwordLabel = new Label(module.formFields().get(5));
+        Label passwordLabel = new Label(passwordLabelText);
         passwordLabel.getStyleClass().add("field-label");
         HBox passwordEntry = new HBox(8, passwordFields, passwordVisibilityButton);
         HBox.setHgrow(passwordFields, Priority.ALWAYS);
@@ -4110,6 +4488,7 @@ public class PageRenderer {
         return List.copyOf(values);
     }
 
+<<<<<<< HEAD
     static String formatDisplayDate(String value) {
         if (value == null || value.isBlank()) {
             return value;
@@ -4145,6 +4524,8 @@ public class PageRenderer {
         }
     }
 
+=======
+>>>>>>> c910dd9e5d0954962f081bf169ddcba5f6adf653
     private boolean confirmDelete(ModuleDefinition module) {
         Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
         boolean promotion = "UC-18".equals(module.id());
@@ -4158,6 +4539,9 @@ public class PageRenderer {
                 : customer ? "Hồ sơ được lưu trữ, lịch sử mua hàng và điểm vẫn được giữ."
                         : "Bạn có chắc muốn xóa dòng dữ liệu đang chọn?"));
         alert.getButtonTypes().setAll(ButtonType.CANCEL, ButtonType.OK);
+        if (customer || promotion) {
+            localizeSalesDialogButtons(alert);
+        }
         return alert.showAndWait().filter(ButtonType.OK::equals).isPresent();
     }
 
@@ -4178,6 +4562,7 @@ public class PageRenderer {
                 delete, ButtonType.CANCEL);
         alert.setTitle(Localization.text("Xác nhận xóa"));
         alert.setHeaderText(customer.values().get(1));
+        localizeSalesDialogButtons(alert);
         ((Button) alert.getDialogPane().lookupButton(delete)).setDefaultButton(false);
         ((Button) alert.getDialogPane().lookupButton(ButtonType.CANCEL)).setDefaultButton(true);
         return alert.showAndWait().filter(delete::equals).isPresent();
@@ -4190,6 +4575,7 @@ public class PageRenderer {
         alert.setContentText(Localization.text(
                 "Bạn có chắc muốn kết thúc chương trình ngay và vô hiệu hóa chương trình đó?"));
         alert.getButtonTypes().setAll(ButtonType.CANCEL, ButtonType.OK);
+        localizeSalesDialogButtons(alert);
         return alert.showAndWait().filter(ButtonType.OK::equals).isPresent();
     }
 
@@ -4215,8 +4601,8 @@ public class PageRenderer {
     static boolean canWriteModule(String moduleId, UserRole role) {
         return role != null && isWritableModule(moduleId)
                 && (role == UserRole.ADMIN
-                || role == UserRole.STAFF
-                && !List.of("UC-03", "UC-07", "UC-08", "UC-09", "UC-13", "UC-18").contains(moduleId));
+                || role == UserRole.STAFF && !List.of("UC-07", "UC-08", "UC-09", "UC-13", "UC-18")
+                        .contains(moduleId));
     }
 
     static boolean canConfirmInventoryWorkflow(String moduleId, UserRole role) {
@@ -4231,20 +4617,12 @@ public class PageRenderer {
             ModuleDefinition module, FeatureModuleService featureService, RenderedTable renderedTable) {
         CustomerLoyaltyService customerService = featureServices.customerLoyaltyService();
         SalesService salesService = featureServices.salesService();
-        List<SaleProduct> loadedProducts;
-        try {
-            loadedProducts = salesService.findSaleProducts();
-        } catch (vn.ninhkieupharma.pharmacy.common.dao.DataAccessException exception) {
-            loadedProducts = List.of();
-            showInformation(Localization.text("Không thể tải sản phẩm bán"),
-                    exception.getMessage());
-        }
-        List<SaleProduct> saleProducts = loadedProducts;
+        ObservableList<SaleProduct> saleProducts = FXCollections.observableArrayList();
+        refreshSaleProducts(salesService, saleProducts);
         ObservableList<ModuleRow> customers = FXCollections.observableArrayList();
         FilteredList<ModuleRow> filteredCustomers = new FilteredList<>(customers, customer -> true);
-        ModuleRow[] selectedCustomer = {null};
+        ObjectProperty<ModuleRow> selectedCustomer = new SimpleObjectProperty<>();
         SalePendingOrder[] activePendingSale = {null};
-        SimpleBooleanProperty hasSelectedCustomer = new SimpleBooleanProperty(false);
         SimpleBooleanProperty hasPendingSale = new SimpleBooleanProperty(false);
         boolean[] updatingSearch = {false};
 
@@ -4254,13 +4632,9 @@ public class PageRenderer {
         customerSection.getStyleClass().add("dashboard-panel");
         Label customerHeading = new Label(Localization.text("1. Thông tin khách hàng"));
         customerHeading.getStyleClass().add("section-title");
-        Label customerStep = new Label(Localization.text(
-                "Nhập tên, số điện thoại hoặc email để tìm và gắn khách hàng trước khi thêm thuốc."));
-        customerStep.getStyleClass().add("helper-text");
-        customerStep.setWrapText(true);
-
         TextField customerSearch = new TextField();
         customerSearch.setPromptText(Localization.text("Nhập tên, số điện thoại hoặc email khách hàng"));
+        customerSearch.setPrefWidth(300);
         customerSearch.getStyleClass().add("search-input");
         ListView<ModuleRow> suggestions = new ListView<>(filteredCustomers);
         suggestions.setPrefHeight(132);
@@ -4277,12 +4651,13 @@ public class PageRenderer {
         customerDetails.getStyleClass().add("customer-details");
         Label customerStatus = new Label();
         customerStatus.getStyleClass().add("helper-text");
+        customerStatus.setWrapText(true);
+        customerStatus.managedProperty().bind(customerStatus.textProperty().isNotEmpty());
+        customerStatus.visibleProperty().bind(customerStatus.managedProperty());
 
         customerSearch.textProperty().addListener((observable, oldValue, query) -> {
             if (!updatingSearch[0]) {
-                selectedCustomer[0] = null;
-                hasSelectedCustomer.set(false);
-                updateSalesCustomerDetails(null, customerDetails);
+                selectedCustomer.set(null);
             }
             filteredCustomers.setPredicate(customer -> matchesSalesCustomerQuery(customer, query));
             showCustomerSuggestions(suggestionsPopup, customerSearch, suggestions, filteredCustomers, query);
@@ -4291,8 +4666,7 @@ public class PageRenderer {
             ModuleRow highlighted = suggestions.getSelectionModel().getSelectedItem();
             if (highlighted != null) {
                 selectSalesCustomer(customerService, highlighted, customers, selectedCustomer,
-                        hasSelectedCustomer, updatingSearch, customerSearch, suggestionsPopup, suggestions,
-                        customerDetails, customerStatus);
+                        updatingSearch, customerSearch, suggestionsPopup, suggestions, customerStatus);
             }
         });
         suggestions.setOnKeyPressed(event -> {
@@ -4300,8 +4674,7 @@ public class PageRenderer {
                 ModuleRow highlighted = suggestions.getSelectionModel().getSelectedItem();
                 if (highlighted != null) {
                     selectSalesCustomer(customerService, highlighted, customers, selectedCustomer,
-                            hasSelectedCustomer, updatingSearch, customerSearch, suggestionsPopup, suggestions,
-                            customerDetails, customerStatus);
+                            updatingSearch, customerSearch, suggestionsPopup, suggestions, customerStatus);
                 }
             }
         });
@@ -4318,57 +4691,54 @@ public class PageRenderer {
         Button refreshCustomers = new Button(Localization.text("Làm mới danh sách khách"));
         refreshCustomers.getStyleClass().add("button-secondary");
         refreshCustomers.setOnAction(event -> refreshSalesCustomers(
-                customerService, customers, selectedCustomer, hasSelectedCustomer,
-                updatingSearch, customerSearch, suggestionsPopup,
-                customerDetails, customerStatus));
+                customerService, customers, selectedCustomer, updatingSearch, customerSearch,
+                suggestionsPopup, customerStatus));
         Button addCustomer = new Button(Localization.text("Thêm khách hàng"));
         addCustomer.getStyleClass().add("button-secondary");
         addCustomer.setOnAction(event -> editSalesCustomer(
-                customerService, null, customers, selectedCustomer, hasSelectedCustomer, updatingSearch,
-                customerSearch, suggestionsPopup, suggestions, customerDetails, customerStatus));
+                customerService, null, salesCustomerPhonePrefill(customerSearch.getText(), customers),
+                customers, selectedCustomer, updatingSearch,
+                customerSearch, suggestionsPopup, suggestions, customerStatus));
         Button editCustomer = new Button(Localization.text("Sửa thông tin khách"));
         editCustomer.getStyleClass().add("button-secondary");
-        editCustomer.disableProperty().bind(hasSelectedCustomer.not());
+        editCustomer.disableProperty().bind(selectedCustomer.isNull());
         editCustomer.setOnAction(event -> {
-            if (selectedCustomer[0] != null) {
-                editSalesCustomer(customerService, selectedCustomer[0], customers, selectedCustomer,
-                        hasSelectedCustomer, updatingSearch, customerSearch, suggestionsPopup, suggestions,
-                        customerDetails, customerStatus);
+            if (selectedCustomer.get() != null) {
+                editSalesCustomer(customerService, selectedCustomer.get(), "", customers, selectedCustomer,
+                        updatingSearch, customerSearch, suggestionsPopup, suggestions, customerStatus);
             }
         });
-        FlowPane customerActions = new FlowPane(10, 8, addCustomer, editCustomer, refreshCustomers);
+        FlowPane customerActions = new FlowPane(10, 8, customerSearch, addCustomer, editCustomer, refreshCustomers);
         customerActions.setAlignment(Pos.CENTER_LEFT);
         customerSection.getChildren().addAll(
-                customerHeading, customerStep, customerSearch,
-                customerDetails, customerStatus, customerActions);
+                customerHeading, customerActions, customerDetails, customerStatus);
 
-        VBox prescriptionSection = new VBox(12);
-        prescriptionSection.getStyleClass().add("dashboard-panel");
-        Label prescriptionHeading = new Label(Localization.text("2. Thông tin đơn kê"));
-        prescriptionHeading.getStyleClass().add("section-title");
-        GridPane prescriptionFields = new GridPane();
-        prescriptionFields.setHgap(16);
-        prescriptionFields.setVgap(12);
         TextField prescriptionCode = new TextField();
-        prescriptionCode.setPromptText(Localization.text("Mã đơn kê / mã toa thuốc"));
         DatePicker prescriptionDate = new DatePicker();
         prescriptionDate.setPromptText(Localization.text("Ngày kê đơn"));
+        prescriptionDate.setPrefWidth(174);
         TextField doctor = new TextField();
-        doctor.setPromptText(Localization.text("Họ tên bác sĩ"));
         TextField clinic = new TextField();
-        clinic.setPromptText(Localization.text("Cơ sở khám chữa bệnh"));
         TextField diagnosis = new TextField();
-        diagnosis.setPromptText(Localization.text("Chẩn đoán"));
-        addCustomerField(prescriptionFields, 0, "Mã đơn kê", prescriptionCode);
-        addCustomerField(prescriptionFields, 1, "Ngày kê", prescriptionDate);
-        addCustomerField(prescriptionFields, 2, "Bác sĩ kê đơn", doctor);
-        addCustomerField(prescriptionFields, 3, "Cơ sở khám", clinic);
-        addCustomerField(prescriptionFields, 4, "Chẩn đoán", diagnosis);
-        prescriptionSection.getChildren().addAll(
-                prescriptionHeading,
-                new Label(Localization.text(
-                        "Bắt buộc điền mã toa, ngày kê và bác sĩ nếu có thuốc kê đơn.")),
-                prescriptionFields);
+        Label prescriptionDateLabel = new Label(Localization.text("Ngày kê đơn"));
+        prescriptionDateLabel.getStyleClass().add("field-label");
+        prescriptionDateLabel.setLabelFor(prescriptionDate);
+        FlowPane prescriptionFields = new FlowPane(12, 8,
+                checkoutLineField("Mã toa thuốc", prescriptionCode, 182),
+                new VBox(4, prescriptionDateLabel, prescriptionDate),
+                checkoutLineField("Bác sĩ kê đơn", doctor, 220),
+                checkoutLineField("Cơ sở khám", clinic, 230),
+                checkoutLineField("Chẩn đoán", diagnosis, 290));
+        Label prescriptionHint = new Label(Localization.text(
+                "Bắt buộc điền mã toa, ngày kê và bác sĩ nếu có thuốc kê đơn."));
+        prescriptionHint.setWrapText(true);
+        VBox prescriptionContent = new VBox(8, prescriptionHint, prescriptionFields);
+        TitledPane prescriptionSection = new TitledPane(
+                Localization.text("2. Thông tin toa thuốc"), prescriptionContent);
+        prescriptionSection.setId("checkout-prescription");
+        prescriptionSection.getStyleClass().add("checkout-prescription");
+        prescriptionSection.setAnimated(false);
+        Runnable showPrescription = () -> prescriptionSection.setExpanded(true);
 
         CheckoutSummary summary = createOrderSummarySection();
         List<CheckoutLineControls> saleLines = new ArrayList<>();
@@ -4378,17 +4748,41 @@ public class PageRenderer {
         };
         Runnable refreshAllergyWarnings = () -> {
             updateSaleAllergyWarnings(
-                    salesService, selectedCustomer[0], saleLines, summary.status());
-            summary.requestedPoints().setDisable(selectedCustomer[0] == null);
+                    salesService, selectedCustomer.get(), saleLines, summary.status());
             refreshCheckout.run();
         };
-        VBox medicationSection = createPrescriptionItemsSection(
-                saleProducts, saleLines, refreshAllergyWarnings);
-        VBox saleItems = (VBox) medicationSection.getChildren().get(2);
-        summary.completeButton().disableProperty().bind(hasPendingSale.not());
+        VBox saleItems = new VBox(8);
+        saleItems.getStyleClass().add("checkout-cart");
+        CheckoutProductPicker productPicker = new CheckoutProductPicker(saleProducts, exchangeRateService, product -> {
+            if (!incrementCheckoutLine(saleLines, product)) {
+                BigDecimal firstQuantity = product.stockOnHand().signum() > 0
+                        ? BigDecimal.ONE.min(product.stockOnHand()) : BigDecimal.ONE;
+                addCheckoutLine(product, new SaleLineRequest(product.id(), firstQuantity, "", 1),
+                        saleLines, saleItems, refreshCheckout, refreshAllergyWarnings, showPrescription);
+                refreshAllergyWarnings.run();
+            }
+            if (product.prescriptionRequired()) {
+                prescriptionSection.setExpanded(true);
+            }
+        });
+        VBox medicationSection = createCheckoutItemsSection(productPicker, saleItems);
+        var invalidPoints = summary.pointsError().textProperty().isNotEmpty();
+        summary.savePendingButton().disableProperty().bind(invalidPoints);
+        summary.completeButton().disableProperty().bind(hasPendingSale.not().or(invalidPoints));
         summary.cancelPendingButton().disableProperty().bind(hasPendingSale.not());
-        customerDetails.textProperty().addListener((observable, oldValue, newValue) ->
-                refreshAllergyWarnings.run());
+        summary.requestedPoints().disableProperty().bind(selectedCustomer.isNull());
+        Runnable refreshPoints = () -> updateCheckoutPoints(summary, selectedCustomer.get(), activePendingSale[0]);
+        summary.requestedPoints().textProperty().addListener((observable, oldValue, newValue) -> refreshPoints.run());
+        selectedCustomer.addListener((observable, previous, customer) -> {
+            if (previous != null && (customer == null || !previous.id().equals(customer.id()))) {
+                summary.requestedPoints().setText("0");
+                summary.requestedPoints().setPromptText(Localization.text("Nhập số điểm khách muốn đổi"));
+            }
+            updateSalesCustomerDetails(customer, customerDetails);
+            refreshPoints.run();
+            refreshAllergyWarnings.run();
+        });
+        refreshPoints.run();
         refreshAllergyWarnings.run();
 
         Runnable resetOrder = () -> {
@@ -4396,28 +4790,39 @@ public class PageRenderer {
             hasPendingSale.set(false);
             customerSearch.clear();
             customerStatus.setText("");
+            productPicker.clear();
             clearSalesForm(saleLines, saleItems, prescriptionCode, prescriptionDate,
                     doctor, clinic, diagnosis, summary, refreshAllergyWarnings);
             summary.status().setText("");
         };
-        summary.newOrderButton().setOnAction(event -> resetOrder.run());
+        summary.newOrderButton().setOnAction(event -> {
+            resetOrder.run();
+            refreshSaleProducts(salesService, saleProducts);
+        });
 
         summary.checkStockButton().setOnAction(event -> {
             Label feedback = summary.stockStatus();
             try {
-                var shortages = salesService.previewSaleStock(buildSaleLines(saleLines));
-                feedback.getStyleClass().setAll(shortages.isEmpty() ? "helper-text" : "form-error");
-                feedback.setText(shortages.isEmpty()
-                        ? Localization.text("Đủ tồn ở các lô còn hạn cho số ngày điều trị đã nhập.")
-                        : shortages.stream().map(shortage -> shortage.productName() + " · "
+                SaleStockPreview preview = salesService.previewSalePicking(buildSaleLines(saleLines));
+                var shortages = preview.shortages();
+                feedback.getStyleClass().setAll("checkout-stock-status",
+                        shortages.isEmpty() ? "helper-text" : "form-error");
+                if (shortages.isEmpty()) {
+                    feedback.setText(preview.picks().isEmpty()
+                            ? Localization.text("Đủ tồn ở các lô còn hạn cho số ngày điều trị đã nhập.")
+                            : Localization.text("Vị trí lấy thuốc dự kiến") + "\n\n"
+                                    + formatSalePicks(preview.picks()));
+                } else {
+                    feedback.setText(shortages.stream().map(shortage -> shortage.productName() + " · "
                                 + Localization.text("Cần ") + shortage.requested().stripTrailingZeros().toPlainString()
                                 + ", " + Localization.text("có ") + shortage.available().stripTrailingZeros().toPlainString()
                                 + " · " + Localization.text("Lô cần còn hạn đến ") + shortage.requiredExpiry())
                                 .collect(java.util.stream.Collectors.joining("\n")));
+                }
             } catch (IllegalArgumentException | IllegalStateException | UnsupportedOperationException
                      | vn.ninhkieupharma.pharmacy.common.dao.DataAccessException exception) {
-                feedback.setText(exception.getMessage());
-                feedback.getStyleClass().setAll("form-error");
+                feedback.setText(Localization.text(exception.getMessage()));
+                feedback.getStyleClass().setAll("checkout-stock-status", "form-error");
             }
         });
 
@@ -4425,7 +4830,7 @@ public class PageRenderer {
             try {
                 SalePendingOrder existing = activePendingSale[0];
                 SaleOrderRequest request = buildSaleOrderRequest(
-                        selectedCustomer[0], saleLines, prescriptionCode, prescriptionDate,
+                        selectedCustomer.get(), saleLines, prescriptionCode, prescriptionDate,
                         doctor, clinic, diagnosis, summary, existing);
                 SalePendingOrder pending = existing == null
                         ? salesService.createPendingSale(authenticatedUserId, request)
@@ -4453,20 +4858,21 @@ public class PageRenderer {
             SaleReceipt receipt;
             try {
                 SaleOrderRequest request = buildSaleOrderRequest(
-                        selectedCustomer[0], saleLines, prescriptionCode, prescriptionDate,
+                        selectedCustomer.get(), saleLines, prescriptionCode, prescriptionDate,
                         doctor, clinic, diagnosis, summary, pending);
                 SaleQuote quote = salesService.quotePendingSale(
                         authenticatedUserId, pending.id(), pending.revision(), request);
                 if (!quote.warnings().isEmpty() && !confirmAllergyWarnings(quote.warnings())) {
                     return;
                 }
-                if (!confirmSalePayment(quote.amounts(), summary.section().getScene().getWindow())) {
+                if (!confirmSalePayment(quote, summary.section().getScene().getWindow())) {
                     return;
                 }
                 receipt = salesService.completePendingSale(
                         authenticatedUserId, pending.id(), pending.revision(), request, quote);
             } catch (IllegalArgumentException | IllegalStateException
                      | vn.ninhkieupharma.pharmacy.common.dao.DataAccessException exception) {
+                summary.stockStatus().setText("");
                 showInformation(Localization.text("Không thể hoàn tất đơn"),
                         Localization.text(exception.getMessage()));
                 return;
@@ -4476,9 +4882,10 @@ public class PageRenderer {
             summary.status().setText(receiptDetails);
             summary.status().getStyleClass().setAll("helper-text");
             showInformation(Localization.text("Đã hoàn tất đơn hàng"), receiptDetails);
+            refreshSaleProducts(salesService, saleProducts);
             refreshSalesRows(renderedTable, featureService, module);
-            refreshSalesCustomers(customerService, customers, selectedCustomer, hasSelectedCustomer,
-                    updatingSearch, customerSearch, suggestionsPopup, customerDetails, customerStatus);
+            refreshSalesCustomers(customerService, customers, selectedCustomer,
+                    updatingSearch, customerSearch, suggestionsPopup, customerStatus);
         });
 
         summary.cancelPendingButton().setOnAction(event -> {
@@ -4512,59 +4919,55 @@ public class PageRenderer {
                 SalePendingOrder pending = salesService.findPendingSale(selected.id());
                 UUID customerId = pending.request().customerId().orElse(null);
                 customerSearch.clear();
-                refreshSalesCustomers(customerService, customers, selectedCustomer, hasSelectedCustomer,
-                        updatingSearch, customerSearch, suggestionsPopup, customerDetails, customerStatus);
+                refreshSalesCustomers(customerService, customers, selectedCustomer,
+                        updatingSearch, customerSearch, suggestionsPopup, customerStatus);
                 ModuleRow customer = customers.stream()
                         .filter(candidate -> candidate.id().equals(customerId))
                         .findFirst()
                         .orElse(null);
                 if (customer != null) {
                     selectSalesCustomer(customerService, customer, customers, selectedCustomer,
-                            hasSelectedCustomer, updatingSearch, customerSearch, suggestionsPopup, suggestions,
-                            customerDetails, customerStatus);
+                            updatingSearch, customerSearch, suggestionsPopup, suggestions, customerStatus);
                 }
                 activePendingSale[0] = pending;
                 hasPendingSale.set(true);
                 SaleOrderRequest request = pending.request();
-                int lineCount = request.lines().size();
-                while (saleLines.size() > lineCount) {
-                    CheckoutLineControls removed = saleLines.remove(saleLines.size() - 1);
-                    saleItems.getChildren().remove(removed.row());
-                }
-                while (saleLines.size() < lineCount) {
-                    addCheckoutLine(saleProducts, saleLines, saleItems, refreshAllergyWarnings);
-                }
+                productPicker.clear();
+                saleLines.clear();
+                saleItems.getChildren().clear();
                 boolean missingProduct = false;
-                for (int index = 0; index < lineCount; index++) {
-                    SaleLineRequest requestLine = request.lines().get(index);
-                    CheckoutLineControls controls = saleLines.get(index);
+                for (SaleLineRequest requestLine : request.lines()) {
                     SaleProduct product = saleProducts.stream()
                             .filter(candidate -> candidate.id().equals(requestLine.productId()))
                             .findFirst()
                             .orElse(null);
-                    controls.product().setValue(product);
                     missingProduct |= product == null;
-                    controls.quantity().setText(requestLine.quantity().stripTrailingZeros().toPlainString());
-                    controls.dosage().setText(requestLine.dosageInstructions() == null
-                            ? "" : requestLine.dosageInstructions());
-                    controls.treatmentDays().setText(Integer.toString(requestLine.treatmentDays()));
+                    addCheckoutLine(product, requestLine, saleLines, saleItems,
+                            refreshCheckout, refreshAllergyWarnings, showPrescription);
                 }
                 prescriptionCode.setText(request.prescriptionCode() == null ? "" : request.prescriptionCode());
                 prescriptionDate.setValue(request.prescriptionDate());
                 doctor.setText(request.prescribingDoctor() == null ? "" : request.prescribingDoctor());
                 clinic.setText(request.clinic() == null ? "" : request.clinic());
                 diagnosis.setText(request.diagnosis() == null ? "" : request.diagnosis());
+                if (!prescriptionCode.getText().isBlank()
+                        || request.prescriptionDate() != null || !doctor.getText().isBlank()
+                        || !clinic.getText().isBlank() || !diagnosis.getText().isBlank()
+                        || saleLines.stream().anyMatch(line -> line.instructions().kind() == SaleLineKind.PRESCRIBED)) {
+                    showPrescription.run();
+                }
                 summary.note().setText(request.note() == null ? "" : request.note());
                 boolean legacyRedemption = request.requestedPoints() == SaleOrderRequest.REDEEM_MAXIMUM;
                 summary.requestedPoints().setText(legacyRedemption ? "" : Long.toString(request.requestedPoints()));
                 summary.requestedPoints().setPromptText(Localization.text(legacyRedemption
                         ? "Đơn cũ dùng tối đa. Nhập 0 để bỏ đổi điểm."
                         : "Nhập số điểm khách muốn đổi"));
+                refreshPoints.run();
                 summary.status().setText(Localization.text("Đang chỉnh sửa đơn Pending ")
                         + pending.saleCode());
                 summary.status().getStyleClass().setAll("helper-text");
                 refreshAllergyWarnings.run();
-                if (selectedCustomer[0] == null || missingProduct) {
+                if (selectedCustomer.get() == null || missingProduct) {
                     summary.status().setText(Localization.text(
                             "Khách hàng hoặc sản phẩm trong đơn không còn khả dụng. Hãy chọn lại hoặc hủy đơn."));
                     summary.status().getStyleClass().setAll("form-error");
@@ -4578,10 +4981,24 @@ public class PageRenderer {
 
         form.getChildren().addAll(
                 customerSection, prescriptionSection, medicationSection, summary.section());
-        refreshSalesCustomers(customerService, customers, selectedCustomer, hasSelectedCustomer,
-                updatingSearch, customerSearch, suggestionsPopup,
-                customerDetails, customerStatus);
-        return new SalesCustomerEntry(form, loadSelectedPending);
+        refreshSalesCustomers(customerService, customers, selectedCustomer,
+                updatingSearch, customerSearch, suggestionsPopup, customerStatus);
+        if (customerStatus.getStyleClass().contains("helper-text")) {
+            customerStatus.setText("");
+        }
+        return new SalesCustomerEntry(form, loadSelectedPending, () -> {
+            productPicker.refreshCurrency();
+            refreshCheckoutPreview(saleLines, summary.subtotal());
+        });
+    }
+
+    private void refreshSaleProducts(SalesService service, ObservableList<SaleProduct> products) {
+        try {
+            products.setAll(service.findSaleProducts());
+        } catch (DataAccessException exception) {
+            showInformation(Localization.text("Không thể tải danh sách sản phẩm bán."),
+                    Localization.text(exception.getMessage()));
+        }
     }
 
     private ListCell<ModuleRow> customerPickerCell() {
@@ -4626,60 +5043,66 @@ public class PageRenderer {
         if (normalizedQuery.isEmpty()) {
             return true;
         }
-        String normalizedPhoneQuery = query.replaceAll("[\\s().-]", "");
+        String normalizedPhoneQuery = normalizeCustomerPhone(query);
         List<String> values = customer.values();
         return values.get(0).toLowerCase(Locale.ROOT).contains(normalizedQuery)
-                || values.get(1).replaceAll("[\\s().-]", "").contains(normalizedPhoneQuery)
+                || normalizeCustomerPhone(values.get(1)).contains(normalizedPhoneQuery)
                 || values.get(2).toLowerCase(Locale.ROOT).contains(normalizedQuery);
+    }
+
+    static String salesCustomerPhonePrefill(String query, List<ModuleRow> customers) {
+        String enteredPhone = query == null ? "" : query.trim();
+        String normalizedPhone = normalizeCustomerPhone(enteredPhone);
+        if (!isValidCustomerPhone(normalizedPhone)) {
+            return "";
+        }
+        boolean alreadyExists = customers.stream()
+                .anyMatch(customer -> normalizeCustomerPhone(customer.values().get(1)).equals(normalizedPhone));
+        return alreadyExists ? "" : enteredPhone;
     }
 
     private void refreshSalesRows(RenderedTable table, FeatureModuleService service, ModuleDefinition module) {
         try {
             refreshRows(table, service, module);
         } catch (vn.ninhkieupharma.pharmacy.common.dao.DataAccessException exception) {
-            showInformation(Localization.text("Không thể làm mới danh sách đơn"), exception.getMessage());
+            showInformation(Localization.text("Không thể làm mới danh sách đơn"), Localization.text(exception.getMessage()));
         }
     }
 
     private void refreshSalesCustomers(
             CustomerLoyaltyService customerService,
             ObservableList<ModuleRow> customers,
-            ModuleRow[] selectedCustomer,
-            SimpleBooleanProperty hasSelectedCustomer,
+            ObjectProperty<ModuleRow> selectedCustomer,
             boolean[] updatingSearch,
             TextField customerSearch,
             Popup suggestionsPopup,
-            Label customerDetails,
             Label customerStatus) {
         try {
             List<ModuleRow> availableCustomers = customerService.findAvailableForSale();
             customers.setAll(availableCustomers);
-            if (selectedCustomer[0] != null) {
-                selectedCustomer[0] = availableCustomers.stream()
-                        .filter(customer -> customer.id().equals(selectedCustomer[0].id()))
+            ModuleRow previous = selectedCustomer.get();
+            if (previous != null) {
+                ModuleRow refreshed = availableCustomers.stream()
+                        .filter(customer -> customer.id().equals(previous.id()))
                         .findFirst()
                         .orElse(null);
-                if (selectedCustomer[0] == null) {
-                    hasSelectedCustomer.set(false);
-                    suggestionsPopup.hide();
-                    updateSalesCustomerDetails(null, customerDetails);
+                selectedCustomer.set(refreshed);
+                suggestionsPopup.hide();
+                if (refreshed == null) {
                     customerStatus.setText(Localization.text(
                             "Khách hàng đã đổi trạng thái và không còn đủ điều kiện bán."));
                     customerStatus.getStyleClass().setAll("form-error");
                     return;
                 }
-                hasSelectedCustomer.set(true);
                 updatingSearch[0] = true;
-                customerSearch.setText(customerPickerText(selectedCustomer[0]));
+                customerSearch.setText(customerPickerText(refreshed));
                 updatingSearch[0] = false;
-                suggestionsPopup.hide();
-                updateSalesCustomerDetails(selectedCustomer[0], customerDetails);
             }
             customerStatus.setText(Localization.text("Danh sách khách hàng đã được cập nhật."));
             customerStatus.getStyleClass().setAll("helper-text");
         } catch (vn.ninhkieupharma.pharmacy.common.dao.DataAccessException
                  | UnsupportedOperationException exception) {
-            customerStatus.setText(exception.getMessage());
+            customerStatus.setText(Localization.text(exception.getMessage()));
             customerStatus.getStyleClass().setAll("form-error");
         }
     }
@@ -4688,13 +5111,11 @@ public class PageRenderer {
             CustomerLoyaltyService customerService,
             ModuleRow candidate,
             ObservableList<ModuleRow> customers,
-            ModuleRow[] selectedCustomer,
-            SimpleBooleanProperty hasSelectedCustomer,
+            ObjectProperty<ModuleRow> selectedCustomer,
             boolean[] updatingSearch,
             TextField customerSearch,
             Popup suggestionsPopup,
             ListView<ModuleRow> suggestions,
-            Label customerDetails,
             Label customerStatus) {
         try {
             List<ModuleRow> availableCustomers = customerService.findAvailableForSale();
@@ -4704,57 +5125,50 @@ public class PageRenderer {
                     .findFirst()
                     .orElse(null);
             if (eligibleCustomer == null) {
-                selectedCustomer[0] = null;
-                hasSelectedCustomer.set(false);
+                selectedCustomer.set(null);
                 suggestionsPopup.hide();
-                updateSalesCustomerDetails(null, customerDetails);
                 customerStatus.setText(Localization.text(
                         "Khách hàng đã đổi trạng thái và không còn đủ điều kiện bán."));
                 customerStatus.getStyleClass().setAll("form-error");
                 return;
             }
-            selectedCustomer[0] = eligibleCustomer;
-            hasSelectedCustomer.set(true);
+            selectedCustomer.set(eligibleCustomer);
             updatingSearch[0] = true;
             customerSearch.setText(customerPickerText(eligibleCustomer));
             updatingSearch[0] = false;
             suggestionsPopup.hide();
             suggestions.getSelectionModel().clearSelection();
-            updateSalesCustomerDetails(eligibleCustomer, customerDetails);
             customerStatus.setText(Localization.text("Khách hàng đã được gắn với đơn kê."));
             customerStatus.getStyleClass().setAll("helper-text");
         } catch (vn.ninhkieupharma.pharmacy.common.dao.DataAccessException
                  | UnsupportedOperationException exception) {
             suggestionsPopup.hide();
-            customerStatus.setText(exception.getMessage());
+            customerStatus.setText(Localization.text(exception.getMessage()));
             customerStatus.getStyleClass().setAll("form-error");
         }
     }
 
-    private VBox createPrescriptionItemsSection(
-            List<SaleProduct> catalogProducts,
-            List<CheckoutLineControls> lines,
-            Runnable onChange) {
+    private VBox createCheckoutItemsSection(CheckoutProductPicker productPicker, VBox saleItems) {
         VBox section = new VBox(12);
-        section.getStyleClass().add("dashboard-panel");
-        Label heading = new Label(Localization.text("3. Sản phẩm trong đơn"));
+        section.setId("checkout-medications");
+        section.getStyleClass().add("checkout-workspace");
+        Label heading = new Label(Localization.text("3. Chọn thuốc"));
         heading.getStyleClass().add("section-title");
-        Label note = new Label(Localization.text(
-                "Chọn sản phẩm đã có giá bán; nhập liều dùng, số lượng và số ngày điều trị để kiểm tra hạn lô."));
-        note.getStyleClass().add("helper-text");
-        VBox items = new VBox(8);
-        Button addLine = new Button(Localization.text("Thêm dòng thuốc"));
-        addLine.getStyleClass().add("button-secondary");
-        addLine.setOnAction(event -> addCheckoutLine(catalogProducts, lines, items, onChange));
-        section.getChildren().addAll(heading, note, items, addLine);
-        addCheckoutLine(catalogProducts, lines, items, onChange);
+        Label cartHeading = new Label(Localization.text("Giỏ hàng"));
+        cartHeading.getStyleClass().add("section-title");
+        Label emptyCart = new Label(Localization.text("Giỏ hàng chưa có sản phẩm."));
+        emptyCart.getStyleClass().add("checkout-cart-empty");
+        emptyCart.setMaxWidth(Double.MAX_VALUE);
+        emptyCart.visibleProperty().bind(javafx.beans.binding.Bindings.isEmpty(saleItems.getChildren()));
+        emptyCart.managedProperty().bind(emptyCart.visibleProperty());
+        section.getChildren().addAll(heading, productPicker, cartHeading, emptyCart, saleItems);
         return section;
     }
 
     private CheckoutSummary createOrderSummarySection() {
         VBox section = new VBox(12);
         section.getStyleClass().add("dashboard-panel");
-        Label heading = new Label(Localization.text("4. Ưu đãi và lưu đơn"));
+        Label heading = new Label(Localization.text("4. Thanh toán"));
         heading.getStyleClass().add("section-title");
         TextArea notes = new TextArea();
         notes.setPromptText(Localization.text("Ghi chú thêm cho đơn thuốc hoặc khách hàng"));
@@ -4762,13 +5176,27 @@ public class PageRenderer {
         notes.setWrapText(true);
         notes.getStyleClass().add("text-input");
         Label pointsLabel = new Label(Localization.text("Điểm muốn đổi"));
+        pointsLabel.getStyleClass().add("field-label");
+        Label pointsBalance = new Label();
+        pointsBalance.setId("checkout-points-balance");
+        pointsBalance.getStyleClass().add("helper-text");
+        FlowPane pointsHeading = new FlowPane(14, 4, pointsLabel, pointsBalance);
+        pointsHeading.setAlignment(Pos.CENTER_LEFT);
         TextField requestedPoints = new TextField("0");
+        requestedPoints.setId("checkout-points-requested");
         requestedPoints.setPromptText(Localization.text("Nhập số điểm khách muốn đổi"));
-        requestedPoints.setAccessibleText(pointsLabel.getText());
+        requestedPoints.setMaxWidth(300);
+        pointsLabel.setLabelFor(requestedPoints);
+        Label pointsError = new Label();
+        pointsError.setId("checkout-points-error");
+        pointsError.getStyleClass().add("form-error");
+        pointsError.setWrapText(true);
+        pointsError.managedProperty().bind(pointsError.textProperty().isNotEmpty());
+        pointsError.visibleProperty().bind(pointsError.managedProperty());
         Label pointsLimit = new Label(Localization.text(
                 "Tiền giảm từ điểm tối đa bằng 50% tiền hàng ban đầu."));
         pointsLimit.getStyleClass().add("helper-text");
-        Label subtotal = new Label(Localization.text("Tạm tính: 0 ₫"));
+        Label subtotal = new Label(Localization.text("Tạm tính: ") + formatSaleMoney(BigDecimal.ZERO));
         subtotal.getStyleClass().add("invoice-total");
         Label status = new Label(Localization.text(
                 "Ưu đãi cố định đủ điều kiện tốt nhất sẽ được áp dụng tự động."));
@@ -4783,101 +5211,106 @@ public class PageRenderer {
         Button newOrder = new Button(Localization.text("Đơn mới"));
         newOrder.getStyleClass().add("button-secondary");
         Button checkStock = new Button(Localization.text("Kiểm tra tồn theo lô"));
+        checkStock.setId("checkout-check-stock");
         checkStock.getStyleClass().add("button-secondary");
         Label stockStatus = new Label();
+        stockStatus.setId("checkout-stock-status");
+        stockStatus.getStyleClass().add("checkout-stock-status");
         stockStatus.setWrapText(true);
         stockStatus.managedProperty().bind(stockStatus.textProperty().isNotEmpty());
         stockStatus.visibleProperty().bind(stockStatus.managedProperty());
         FlowPane actions = new FlowPane(10, 8, checkStock, savePending, completeOrder, cancelPending, newOrder);
-        section.getChildren().addAll(heading, subtotal, pointsLabel, requestedPoints, pointsLimit, notes,
-                status, actions, stockStatus);
+        VBox pointsSection = new VBox(6, pointsHeading, requestedPoints, pointsError, pointsLimit);
+        section.getChildren().addAll(heading, subtotal, pointsSection, notes, status, actions, stockStatus);
         return new CheckoutSummary(
-                section, requestedPoints, notes, subtotal, status, stockStatus, checkStock,
+                section, requestedPoints, pointsBalance, pointsError, notes, subtotal, status, stockStatus, checkStock,
                 savePending, completeOrder, cancelPending, newOrder);
     }
 
     private void addCheckoutLine(
-            List<SaleProduct> catalogProducts,
+            SaleProduct product,
+            SaleLineRequest request,
             List<CheckoutLineControls> lines,
             VBox container,
-            Runnable onChange) {
-        ComboBox<SaleProduct> product = new ComboBox<>(FXCollections.observableArrayList(catalogProducts));
-        product.setPromptText(Localization.text("Chọn sản phẩm"));
-        product.setMaxWidth(Double.MAX_VALUE);
-        product.setPrefWidth(290);
-        product.setConverter(new StringConverter<>() {
-            @Override
-            public String toString(SaleProduct item) {
-                return item == null ? "" : saleProductLabel(item);
-            }
+            Runnable refreshAmounts,
+            Runnable refreshProducts,
+            Runnable showPrescription) {
+        Label name = new Label(product == null
+                ? Localization.text("Một sản phẩm đã chọn không còn hoạt động.") : product.name());
+        name.getStyleClass().add(product == null ? "form-error" : "checkout-product-name");
+        name.setWrapText(true);
+        Label unitPrice = new Label();
+        unitPrice.getStyleClass().add("checkout-product-meta");
+        unitPrice.setWrapText(true);
+        Label lineTotal = new Label();
+        lineTotal.getStyleClass().add("checkout-product-name");
+        VBox identity = new VBox(3, name, unitPrice);
+        HBox.setHgrow(identity, Priority.ALWAYS);
 
-            @Override
-            public SaleProduct fromString(String value) {
-                return null;
+        Button remove = new Button(Localization.text("Bỏ sản phẩm"));
+        remove.getStyleClass().add("button-secondary");
+        HBox header = new HBox(10, identity, lineTotal, remove);
+        header.getStyleClass().add("checkout-section-header");
+
+        TextField quantity = new TextField(request.quantity().stripTrailingZeros().toPlainString());
+        TextField treatmentDays = new TextField(Integer.toString(request.treatmentDays()));
+        FlowPane inputs = new FlowPane(10, 8,
+                checkoutLineField("Số lượng", quantity, 90),
+                checkoutLineField("Ngày điều trị", treatmentDays, 130));
+        CheckoutLineInstructions instructions = new CheckoutLineInstructions(product, request, kind -> {
+            if (kind == SaleLineKind.PRESCRIBED) {
+                showPrescription.run();
             }
         });
-        product.setButtonCell(saleProductCell());
-        product.setCellFactory(list -> saleProductCell());
-
-        TextField dosage = new TextField();
-        dosage.setPromptText(Localization.text("Liều dùng / cách dùng"));
-        dosage.setPrefWidth(210);
-        TextField quantity = new TextField("1");
-        quantity.setPromptText(Localization.text("Số lượng"));
-        quantity.setPrefWidth(84);
-        TextField treatmentDays = new TextField("1");
-        treatmentDays.setPromptText(Localization.text("Ngày điều trị"));
-        treatmentDays.setPrefWidth(94);
         Label allergyWarning = new Label();
         allergyWarning.setWrapText(true);
         allergyWarning.getStyleClass().add("allergy-warning");
         allergyWarning.setVisible(false);
         allergyWarning.setManaged(false);
 
-        Button remove = new Button("−");
-        remove.getStyleClass().add("button-secondary");
-        FlowPane row = new FlowPane(8, 8);
-        row.setAlignment(Pos.CENTER_LEFT);
-        row.setMaxWidth(Double.MAX_VALUE);
-        product.setPrefWidth(280);
-        dosage.setPrefWidth(210);
-        quantity.setPrefWidth(90);
-        treatmentDays.setPrefWidth(100);
-        row.getChildren().addAll(product, dosage, quantity, treatmentDays, remove);
-        VBox line = new VBox(4, row, allergyWarning);
+        VBox line = new VBox(8, header, inputs, instructions, allergyWarning);
         line.getStyleClass().add("checkout-line");
         CheckoutLineControls controls = new CheckoutLineControls(
-                product, quantity, dosage, treatmentDays, allergyWarning, line);
+                product, quantity, instructions, treatmentDays, unitPrice, lineTotal, allergyWarning, line);
         lines.add(controls);
         container.getChildren().add(line);
         remove.setOnAction(event -> {
             lines.remove(controls);
             container.getChildren().remove(line);
-            onChange.run();
+            refreshProducts.run();
         });
-        product.valueProperty().addListener((observable, oldValue, newValue) -> onChange.run());
-        quantity.textProperty().addListener((observable, oldValue, newValue) -> onChange.run());
-        treatmentDays.textProperty().addListener((observable, oldValue, newValue) -> onChange.run());
-        onChange.run();
+        quantity.textProperty().addListener((observable, oldValue, newValue) -> refreshAmounts.run());
+        treatmentDays.textProperty().addListener((observable, oldValue, newValue) -> refreshAmounts.run());
     }
 
-    private ListCell<SaleProduct> saleProductCell() {
-        return new ListCell<>() {
-            @Override
-            protected void updateItem(SaleProduct product, boolean empty) {
-                super.updateItem(product, empty);
-                setText(empty || product == null ? "" : saleProductLabel(product));
+    private VBox checkoutLineField(String title, TextField input, double width) {
+        Label label = new Label(Localization.text(title));
+        label.getStyleClass().add("field-label");
+        label.setLabelFor(input);
+        input.setPromptText(label.getText());
+        input.setPrefWidth(width);
+        return new VBox(4, label, input);
+    }
+
+    private boolean incrementCheckoutLine(List<CheckoutLineControls> lines, SaleProduct product) {
+        SaleLineKind scanKind = product.prescriptionRequired() ? SaleLineKind.PRESCRIBED : SaleLineKind.ADD_ON;
+        for (CheckoutLineControls line : lines) {
+            if (line.product() == null || !line.product().id().equals(product.id())
+                    || line.instructions().kind() != scanKind || line.instructions().hasInstructions()
+                    || !"1".equals(line.treatmentDays().getText().trim())) {
+                continue;
             }
-        };
-    }
-
-    private String saleProductLabel(SaleProduct product) {
-        String price = product.sellingPrice() == null
-                ? Localization.text("Chưa đặt giá")
-                : formatSaleMoney(product.sellingPrice());
-        return product.code() + " · " + product.name() + " · " + price
-                + " · " + Localization.text("Tồn: ")
-                + product.stockOnHand().stripTrailingZeros().toPlainString();
+            try {
+                String next = parseCheckoutQuantity(line.quantity().getText()).add(BigDecimal.ONE)
+                        .stripTrailingZeros().toPlainString();
+                parseCheckoutQuantity(next);
+                line.quantity().setText(next);
+                return true;
+            } catch (IllegalArgumentException invalidQuantity) {
+                // The edited quantity belongs to this line. Keep it and add a new line.
+            }
+        }
+        return false;
     }
 
     private List<SaleLineRequest> buildSaleLines(List<CheckoutLineControls> controls) {
@@ -4886,11 +5319,12 @@ public class PageRenderer {
         }
         List<SaleLineRequest> lines = new ArrayList<>();
         for (CheckoutLineControls line : controls) {
-            SaleProduct product = line.product().getValue();
+            SaleProduct product = line.product();
             if (product == null) {
-                throw new IllegalArgumentException(Localization.text("Hãy chọn sản phẩm cho mỗi dòng."));
+                throw new IllegalArgumentException(Localization.text(
+                        "Hãy bỏ dòng không còn khả dụng và tìm sản phẩm thay thế."));
             }
-            if (product.sellingPrice() == null || product.sellingPrice().signum() <= 0) {
+            if (!CheckoutProductPicker.hasPrice(product)) {
                 throw new IllegalArgumentException(
                         Localization.text("Sản phẩm chưa có giá bán hợp lệ. Hãy cập nhật giá trong quản lý sản phẩm."));
             }
@@ -4905,8 +5339,7 @@ public class PageRenderer {
                 throw new IllegalArgumentException(
                         Localization.text("Số ngày điều trị phải là số nguyên từ 1 đến 3650."), exception);
             }
-            lines.add(new SaleLineRequest(
-                    product.id(), quantity, line.dosage().getText().trim(), treatmentDays));
+            lines.add(line.instructions().buildRequest(product.id(), quantity, treatmentDays));
         }
         return List.copyOf(lines);
     }
@@ -4950,25 +5383,45 @@ public class PageRenderer {
                 clinic.getText().trim(),
                 diagnosis.getText().trim(),
                 summary.note().getText().trim(),
-                readRequestedPoints(summary.requestedPoints().getText(), existing),
+                readRequestedPoints(summary.requestedPoints().getText(), existing, customer),
                 List.of());
     }
 
-    private static long readRequestedPoints(String input, SalePendingOrder existing) {
+    private void updateCheckoutPoints(CheckoutSummary summary, ModuleRow customer, SalePendingOrder existing) {
+        if (customer == null) {
+            summary.pointsBalance().setText(Localization.text("Chọn khách hàng để xem điểm hiện có."));
+            summary.pointsError().setText("");
+            return;
+        }
+        summary.pointsBalance().setText(Localization.text("Điểm hiện có: ") + formatLoyaltyPoints(customer));
+        try {
+            readRequestedPoints(summary.requestedPoints().getText(), existing, customer);
+            summary.pointsError().setText("");
+        } catch (IllegalArgumentException exception) {
+            summary.pointsError().setText(exception.getMessage());
+        }
+    }
+
+    private static long readRequestedPoints(String input, SalePendingOrder existing, ModuleRow customer) {
         String text = input.trim();
         if (text.isEmpty()) {
             return existing != null && existing.request().requestedPoints() == SaleOrderRequest.REDEEM_MAXIMUM
+                    && existing.request().customerId().filter(customer.id()::equals).isPresent()
                     ? SaleOrderRequest.REDEEM_MAXIMUM : 0;
         }
+        long points;
         try {
-            long points = Long.parseLong(text);
-            if (points >= 0 && points <= SaleOrderRequest.MAX_POINT_BALANCE) {
-                return points;
-            }
+            points = text.matches("[0-9]+") ? Long.parseLong(text) : -1;
         } catch (NumberFormatException exception) {
-            // Report the accepted range below.
+            points = -1;
         }
-        throw new IllegalArgumentException(Localization.text("Số điểm muốn đổi phải là số nguyên không âm hợp lệ."));
+        if (points < 0 || points > SaleOrderRequest.MAX_POINT_BALANCE) {
+            throw new IllegalArgumentException(Localization.text("Số điểm muốn đổi phải là số nguyên không âm hợp lệ."));
+        }
+        if (points > Long.parseLong(customer.values().get(4))) {
+            throw new IllegalArgumentException(Localization.text("Số điểm muốn đổi vượt quá điểm hiện có của khách hàng."));
+        }
+        return points;
     }
 
     private void clearSalesForm(
@@ -4981,17 +5434,8 @@ public class PageRenderer {
             TextField diagnosis,
             CheckoutSummary summary,
             Runnable refreshAllergyWarnings) {
-        while (lines.size() > 1) {
-            CheckoutLineControls removed = lines.remove(lines.size() - 1);
-            saleItems.getChildren().remove(removed.row());
-        }
-        if (!lines.isEmpty()) {
-            CheckoutLineControls line = lines.get(0);
-            line.product().getSelectionModel().clearSelection();
-            line.quantity().setText("1");
-            line.dosage().clear();
-            line.treatmentDays().setText("1");
-        }
+        lines.clear();
+        saleItems.getChildren().clear();
         prescriptionCode.clear();
         prescriptionDate.setValue(null);
         doctor.clear();
@@ -5010,6 +5454,7 @@ public class PageRenderer {
         alert.setContentText(Localization.text(
                 "Đơn đang chờ sẽ chuyển sang trạng thái đã hủy và không thể chỉnh sửa."));
         alert.getButtonTypes().setAll(ButtonType.CANCEL, ButtonType.OK);
+        localizeSalesDialogButtons(alert);
         return alert.showAndWait().filter(ButtonType.OK::equals).isPresent();
     }
 
@@ -5020,25 +5465,45 @@ public class PageRenderer {
             dialog.setHeaderText(sale.values().get(0));
             dialog.initModality(Modality.APPLICATION_MODAL);
             dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+            localizeSalesDialogButtons(dialog);
             dialog.getDialogPane().getStyleClass().add("form-dialog");
             TableView<ModuleRow> details = new TableView<>();
             details.getStyleClass().add("data-table");
             details.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
             List<String> columns = List.of(
                     "Mã sản phẩm", "Sản phẩm", "Đơn vị", "Số lượng",
-                    "Đơn giá", "Thành tiền", "Hướng dẫn", "Ngày điều trị");
+                    "Đơn giá", "Thành tiền", "Hướng dẫn", "Ngày điều trị", "Loại thuốc");
             for (int index = 0; index < columns.size(); index++) {
                 final int columnIndex = index;
                 TableColumn<ModuleRow, String> column = new TableColumn<>(Localization.text(columns.get(index)));
                 column.setCellValueFactory(cell -> {
-                    String value = cell.getValue().values().get(columnIndex);
+                    List<String> values = cell.getValue().values();
+                    String value = columnIndex < values.size() ? values.get(columnIndex) : "—";
                     if (columnIndex == 4 || columnIndex == 5) {
-                        value = NumberFormat.getNumberInstance(Localization.isEnglish()
-                                        ? Locale.US : Locale.forLanguageTag("vi-VN"))
-                                .format(new BigDecimal(value)) + " ₫";
+                        value = formatSaleMoney(new BigDecimal(value));
+                    } else if (columnIndex == 2) {
+                        value = Localization.saleUnitText(value);
                     }
-                    return new javafx.beans.property.ReadOnlyStringWrapper(Localization.text(value));
+                    return new javafx.beans.property.ReadOnlyStringWrapper(value);
                 });
+                if (index == 6 || index == 8) {
+                    column.setPrefWidth(index == 6 ? 260 : 134);
+                    column.setCellFactory(ignored -> new TableCell<>() {
+                        private final Label label = new Label();
+
+                        {
+                            label.setWrapText(true);
+                            label.maxWidthProperty().bind(widthProperty().subtract(16));
+                        }
+
+                        @Override
+                        protected void updateItem(String value, boolean empty) {
+                            super.updateItem(value, empty);
+                            label.setText(value);
+                            setGraphic(empty ? null : label);
+                        }
+                    });
+                }
                 details.getColumns().add(column);
             }
             details.setItems(FXCollections.observableArrayList(service.findSaleDetails(sale.id())));
@@ -5054,16 +5519,28 @@ public class PageRenderer {
     }
 
     private void refreshCheckoutPreview(List<CheckoutLineControls> lines, Label subtotalLabel) {
+        SalesMoney money = SalesMoney.capture(exchangeRateService);
         BigDecimal subtotal = BigDecimal.ZERO;
         boolean invalidQuantity = false;
         for (CheckoutLineControls line : lines) {
-            SaleProduct product = line.product().getValue();
-            if (product == null || product.sellingPrice() == null) {
+            SaleProduct product = line.product();
+            line.lineTotal().setText("—");
+            if (product == null) {
+                line.unitPrice().setText("");
+                continue;
+            }
+            String unitPrice = CheckoutProductPicker.hasPrice(product)
+                    ? money.format(product.sellingPrice(), 2) + " / " + Localization.saleUnitText(product.unit())
+                    : Localization.text("Chưa đặt giá");
+            line.unitPrice().setText(product.code() + " · " + Localization.text("Đơn giá") + " " + unitPrice);
+            if (!CheckoutProductPicker.hasPrice(product)) {
                 continue;
             }
             try {
                 BigDecimal quantity = parseCheckoutQuantity(line.quantity().getText());
-                subtotal = subtotal.add(product.sellingPrice().multiply(quantity).setScale(2, RoundingMode.HALF_UP));
+                BigDecimal amount = product.sellingPrice().multiply(quantity).setScale(2, RoundingMode.HALF_UP);
+                line.lineTotal().setText(money.format(amount, 2));
+                subtotal = subtotal.add(amount);
             } catch (IllegalArgumentException ignored) {
                 invalidQuantity = true;
             }
@@ -5071,7 +5548,7 @@ public class PageRenderer {
         subtotalLabel.setText(invalidQuantity
                 ? Localization.text("Nhập số lượng hợp lệ để xem tạm tính.")
                 : Localization.text("Tạm tính (chưa trừ ưu đãi/điểm): ")
-                        + formatSaleMoney(subtotal.setScale(2, RoundingMode.HALF_UP)));
+                        + money.format(subtotal, 2));
     }
 
     private void updateSaleAllergyWarnings(
@@ -5082,17 +5559,17 @@ public class PageRenderer {
         try {
             Optional<UUID> customerId = Optional.ofNullable(customer).map(ModuleRow::id);
             List<UUID> productIds = lines.stream()
-                    .map(line -> line.product().getValue())
+                    .map(CheckoutLineControls::product)
                     .filter(Objects::nonNull)
                     .map(SaleProduct::id)
                     .distinct()
                     .toList();
-            List<SaleAllergyWarning> warnings =
-                    salesService.findAllergyWarnings(customerId, productIds);
+            List<SaleAllergyWarning> warnings = customerId.isEmpty() || productIds.isEmpty()
+                    ? List.of() : salesService.findAllergyWarnings(customerId, productIds);
             for (CheckoutLineControls line : lines) {
                 List<SaleAllergyWarning> productWarnings = warnings.stream()
-                        .filter(warning -> line.product().getValue() != null
-                                && warning.productId().equals(line.product().getValue().id()))
+                        .filter(warning -> line.product() != null
+                                && warning.productId().equals(line.product().id()))
                         .toList();
                 boolean hasWarning = !productWarnings.isEmpty();
                 line.allergyWarning().setVisible(hasWarning);
@@ -5113,7 +5590,7 @@ public class PageRenderer {
             }
             status.getStyleClass().setAll("helper-text");
         } catch (vn.ninhkieupharma.pharmacy.common.dao.DataAccessException exception) {
-            status.setText(exception.getMessage());
+            status.setText(Localization.text(exception.getMessage()));
             status.getStyleClass().setAll("form-error");
         }
     }
@@ -5123,39 +5600,97 @@ public class PageRenderer {
         alert.setTitle(Localization.text("Cảnh báo dị ứng"));
         alert.setHeaderText(Localization.text("Có thành phần trùng với dị ứng đã khai báo"));
         alert.setContentText(Localization.text(
-                "Chỉ tiếp tục sau khi đã kiểm tra và xác nhận tư vấn với khách hàng:\n")
+                "Chỉ tiếp tục sau khi đã kiểm tra và xác nhận tư vấn với khách hàng:") + "\n"
                 + warnings.stream()
                         .map(warning -> warning.productName() + " — "
                                 + warning.ingredientName() + " (" + warning.allergenName() + ")")
                         .distinct()
                         .collect(java.util.stream.Collectors.joining("\n")));
         alert.getButtonTypes().setAll(ButtonType.CANCEL, ButtonType.OK);
+        localizeSalesDialogButtons(alert);
         return alert.showAndWait().filter(ButtonType.OK::equals).isPresent();
     }
 
-    private boolean confirmSalePayment(SaleReceipt amounts, javafx.stage.Window owner) {
+    private boolean confirmSalePayment(SaleQuote quote, javafx.stage.Window owner) {
+        SalesMoney money = SalesMoney.capture(exchangeRateService);
+        if (!money.available()) {
+            showInformation(Localization.text("Xác nhận thanh toán"), Localization.text("Tỷ giá chưa sẵn sàng"));
+            return false;
+        }
+        SaleReceipt amounts = quote.amounts();
         ButtonType confirm = new ButtonType(Localization.text("Đã thu tiền"), ButtonBar.ButtonData.OK_DONE);
-        Alert alert = new Alert(Alert.AlertType.CONFIRMATION, formatSaleReceipt(amounts), confirm, ButtonType.CANCEL);
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION,
+                formatSaleReceipt(amounts, money), confirm, ButtonType.CANCEL);
         alert.setTitle(Localization.text("Xác nhận thanh toán"));
-        alert.setHeaderText(Localization.text("Số tiền cần thu: ") + formatSaleMoney(amounts.total()));
+        alert.setHeaderText(Localization.text("Số tiền cần thu: ") + money.format(amounts.total(), 2));
         alert.initOwner(owner);
+        if (!quote.picks().isEmpty()) {
+            Label receipt = new Label(formatSaleReceipt(amounts, money));
+            receipt.setWrapText(true);
+            Label heading = new Label(Localization.text("Vị trí lấy thuốc"));
+            heading.getStyleClass().add("field-label");
+            Label picks = new Label(formatSalePicks(quote.picks()));
+            picks.setId("checkout-payment-picks");
+            picks.setWrapText(true);
+            picks.setPadding(new Insets(6));
+            ScrollPane scroll = new ScrollPane(picks);
+            scroll.setFitToWidth(true);
+            scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+            scroll.setPrefViewportHeight(Math.min(210, 54.0 * quote.picks().size()));
+            alert.getDialogPane().setContent(new VBox(8, receipt, heading, scroll));
+            alert.getDialogPane().setPrefWidth(480);
+        }
+        localizeSalesDialogButtons(alert);
         ((Button) alert.getDialogPane().lookupButton(confirm)).setDefaultButton(false);
         ((Button) alert.getDialogPane().lookupButton(ButtonType.CANCEL)).setDefaultButton(true);
         return alert.showAndWait().filter(confirm::equals).isPresent();
     }
 
+    private static String formatSalePicks(List<SaleStockPreview.Pick> picks) {
+        return picks.stream().map(pick -> pick.productName() + " · "
+                + pick.quantity().stripTrailingZeros().toPlainString() + " "
+                + Localization.saleUnitText(pick.unit()) + "\n"
+                + Localization.text("Vị trí kho") + " " + pick.locationCode() + " (" + pick.locationName() + ")"
+                + " · " + Localization.text("Mã lô") + " " + pick.batchCode()
+                + " · " + Localization.text("Hạn dùng") + " " + pick.expiryDate())
+                .collect(java.util.stream.Collectors.joining("\n\n"));
+    }
+
+    private void localizeSalesDialogButtons(Dialog<?> dialog) {
+        var pane = dialog.getDialogPane();
+        for (ButtonType type : pane.getButtonTypes()) {
+            if (pane.lookupButton(type) instanceof Button button) {
+                if (type == ButtonType.OK) {
+                    button.setText(Localization.text("Xác nhận"));
+                } else if (type == ButtonType.CANCEL) {
+                    button.setText(Localization.text("Hủy"));
+                } else if (type == ButtonType.CLOSE) {
+                    button.setText(Localization.text("Đóng"));
+                }
+            }
+        }
+    }
+
     private String formatSaleReceipt(SaleReceipt receipt) {
+        return formatSaleReceipt(receipt, SalesMoney.capture(exchangeRateService));
+    }
+
+    private String formatSaleReceipt(SaleReceipt receipt, SalesMoney money) {
         return Localization.text("Mã đơn: ") + receipt.saleCode()
-                + "\n" + Localization.text("Tạm tính: ") + formatSaleMoney(receipt.subtotal())
-                + "\n" + Localization.text("Giảm khuyến mãi: ") + formatSaleMoney(receipt.promotionDiscount())
+                + "\n" + Localization.text("Tạm tính: ") + money.format(receipt.subtotal(), 2)
+                + "\n" + Localization.text("Giảm khuyến mãi: ") + money.format(receipt.promotionDiscount(), 2)
                 + (receipt.promotionCode().isBlank() ? "" : " (" + receipt.promotionCode() + ")")
-                + "\n" + Localization.text("Giảm bằng điểm: ") + formatSaleMoney(receipt.pointsDiscount())
-                + "\n" + Localization.text("Tổng thanh toán: ") + formatSaleMoney(receipt.total())
+                + "\n" + Localization.text("Giảm bằng điểm: ") + money.format(receipt.pointsDiscount(), 2)
+                + "\n" + Localization.text("Tổng thanh toán: ") + money.format(receipt.total(), 2)
                 + "\n" + Localization.text("Điểm đã dùng / tích lũy / còn lại: ")
                 + receipt.pointsRedeemed() + " / " + receipt.pointsEarned() + " / " + receipt.remainingPoints();
     }
 
     private String formatSaleMoney(BigDecimal amount) {
+        return SalesMoney.capture(exchangeRateService).format(amount, 2);
+    }
+
+    private String formatInventoryMoney(BigDecimal amount) {
         NumberFormat formatter = NumberFormat.getNumberInstance(
                 Localization.isEnglish() ? Locale.US : Locale.forLanguageTag("vi-VN"));
         formatter.setMaximumFractionDigits(2);
@@ -5173,6 +5708,7 @@ public class PageRenderer {
     private void updateSalesCustomerDetails(ModuleRow customer, Label details) {
         if (customer == null) {
             details.setText(Localization.text("Chưa gắn khách hàng với đơn này."));
+            details.getStyleClass().remove("form-error");
             return;
         }
         List<String> values = customer.values();
@@ -5185,19 +5721,19 @@ public class PageRenderer {
         String allergies = values.get(3).isBlank()
                 ? Localization.text("Chưa ghi nhận")
                 : values.get(3);
-        String age = values.size() <= 5 || values.get(5).isBlank()
-                ? Localization.text("Chưa có ngày sinh")
-                : Integer.toString(java.time.Period.between(
-                        LocalDate.parse(values.get(5)), LocalDate.now()).getYears());
-        String points = NumberFormat.getIntegerInstance(Localization.isEnglish()
-                        ? Locale.US : Locale.forLanguageTag("vi-VN"))
-                .format(Long.parseLong(values.get(4)));
+        String birthDate = values.size() > 5 ? values.get(5) : "";
+        String birthDetails = switch (birthDate.length()) {
+            case 0 -> Localization.text("Chưa có ngày sinh");
+            case 10 -> Localization.text("Tuổi: ") + java.time.Period.between(
+                    LocalDate.parse(birthDate), LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh"))).getYears();
+            default -> Localization.text("Ngày sinh: ") + birthDate;
+        };
         details.setText(Localization.text("Tên: ") + values.get(0)
-                + "\n" + Localization.text("Điện thoại: ") + phone
-                + "\n" + Localization.text("Email: ") + email
-                + "\n" + Localization.text("Tuổi: ") + age
-                + "\n" + Localization.text("Dị ứng: ") + allergies
-                + "\n" + Localization.text("Điểm tích lũy hiện có: ") + points);
+                + " · " + Localization.text("Điện thoại: ") + phone
+                + " · " + Localization.text("Email: ") + email
+                + "\n" + birthDetails
+                + " · " + Localization.text("Điểm tích lũy hiện có: ") + formatLoyaltyPoints(customer)
+                + "\n" + Localization.text("Dị ứng: ") + allergies);
         if (values.get(3).isBlank()) {
             details.getStyleClass().remove("form-error");
         } else if (!details.getStyleClass().contains("form-error")) {
@@ -5205,21 +5741,25 @@ public class PageRenderer {
         }
     }
 
+    private static String formatLoyaltyPoints(ModuleRow customer) {
+        return NumberFormat.getIntegerInstance(Localization.isEnglish() ? Locale.US : Locale.forLanguageTag("vi-VN"))
+                .format(Long.parseLong(customer.values().get(4)));
+    }
+
     private void editSalesCustomer(
             CustomerLoyaltyService customerService,
             ModuleRow selectedCustomer,
+            String initialPhone,
             ObservableList<ModuleRow> customers,
-            ModuleRow[] selectedCustomerState,
-            SimpleBooleanProperty hasSelectedCustomer,
+            ObjectProperty<ModuleRow> selectedCustomerState,
             boolean[] updatingSearch,
             TextField customerSearch,
             Popup suggestionsPopup,
             ListView<ModuleRow> suggestions,
-            Label customerDetails,
             Label customerStatus) {
         ModuleRow draft = selectedCustomer;
         while (true) {
-            java.util.Optional<List<String>> submitted = createSalesCustomerProfileDialog(draft);
+            java.util.Optional<List<String>> submitted = createSalesCustomerProfileDialog(draft, initialPhone);
             if (submitted.isEmpty()) {
                 return;
             }
@@ -5233,8 +5773,7 @@ public class PageRenderer {
                 customers.sort(java.util.Comparator.comparing(
                         customer -> customer.values().get(0), String.CASE_INSENSITIVE_ORDER));
                 selectSalesCustomer(customerService, savedCustomer, customers, selectedCustomerState,
-                        hasSelectedCustomer, updatingSearch, customerSearch, suggestionsPopup, suggestions,
-                        customerDetails, customerStatus);
+                        updatingSearch, customerSearch, suggestionsPopup, suggestions, customerStatus);
                 return;
             } catch (IllegalArgumentException | IllegalStateException | java.util.NoSuchElementException
                      | vn.ninhkieupharma.pharmacy.common.dao.DataAccessException
@@ -5249,24 +5788,26 @@ public class PageRenderer {
         }
     }
 
-    private java.util.Optional<List<String>> createSalesCustomerProfileDialog(ModuleRow existingCustomer) {
+    private java.util.Optional<List<String>> createSalesCustomerProfileDialog(
+            ModuleRow existingCustomer, String initialPhone) {
         List<String> oldValues = existingCustomer == null ? List.of() : existingCustomer.values();
         Dialog<List<String>> dialog = new Dialog<>();
         dialog.setTitle(Localization.text(existingCustomer == null ? "Thêm khách hàng" : "Sửa thông tin khách hàng"));
         dialog.setHeaderText(Localization.text("Thông tin khách hàng dùng tại quầy"));
         dialog.initModality(Modality.APPLICATION_MODAL);
         dialog.getDialogPane().getButtonTypes().setAll(ButtonType.CANCEL, ButtonType.OK);
+        localizeSalesDialogButtons(dialog);
         dialog.getDialogPane().getStyleClass().add("form-dialog");
 
         TextField name = customerTextField(oldValues, 0);
         TextField phone = customerTextField(oldValues, 1);
-        TextField email = customerTextField(oldValues, 2);
-        DatePicker dateOfBirth = new DatePicker();
-        if (oldValues.size() > 5 && !oldValues.get(5).isBlank()) {
-            dateOfBirth.setValue(LocalDate.parse(oldValues.get(5)));
+        if (existingCustomer == null) {
+            phone.setText(initialPhone);
         }
+        TextField email = customerTextField(oldValues, 2);
+        TextField dateOfBirth = customerBirthDateField(oldValues, 5);
         TextArea allergies = new TextArea(oldValues.size() > 3 ? oldValues.get(3) : "");
-        allergies.setPromptText(Localization.text("Mỗi dòng: tên dị ứng | ghi chú tùy chọn"));
+        allergies.setPromptText(Localization.text("Mỗi dòng: một chất dị ứng"));
         allergies.setPrefRowCount(4);
         allergies.setWrapText(true);
         allergies.getStyleClass().add("text-input");
@@ -5279,7 +5820,7 @@ public class PageRenderer {
         addCustomerField(fields, 1, "Điện thoại", phone);
         addCustomerField(fields, 2, "Email", email);
         addCustomerField(fields, 3, "Ngày sinh", dateOfBirth);
-        addCustomerField(fields, 4, "Dị ứng", allergies);
+        addCustomerField(fields, 4, "Chất dị ứng", allergies);
         if (oldValues.size() > 4) {
             Label loyaltyPoints = new Label(Localization.text("Điểm hiện có: ") + oldValues.get(4));
             loyaltyPoints.getStyleClass().add("helper-text");
@@ -5296,10 +5837,8 @@ public class PageRenderer {
 
         javafx.scene.Node okButton = dialog.getDialogPane().lookupButton(ButtonType.OK);
         okButton.addEventFilter(ActionEvent.ACTION, event -> {
-            String validationError = validateCustomerForm(name, phone, email, new CheckBox(), new TextField());
-            if (dateOfBirth.getValue() != null && dateOfBirth.getValue().isAfter(LocalDate.now())) {
-                validationError = "Ngày sinh không thể ở tương lai.";
-            }
+            String validationError = validateCustomerForm(
+                    name, phone, email, dateOfBirth, new CheckBox(), new TextField());
             if (!validationError.isEmpty()) {
                 validationMessage.setText(Localization.text(validationError));
                 event.consume();
@@ -5308,7 +5847,7 @@ public class PageRenderer {
         dialog.setResultConverter(button -> button == ButtonType.OK
                 ? List.of(name.getText().trim(), phone.getText().trim(),
                         email.getText().trim(), allergies.getText().trim(),
-                        dateOfBirth.getValue() == null ? "" : dateOfBirth.getValue().toString())
+                        dateOfBirth.getText().strip())
                 : null);
         return dialog.showAndWait();
     }
@@ -5418,7 +5957,7 @@ public class PageRenderer {
                     List.of("Khách lẻ", "Nguyễn Thị Mai · KH0001", "Trần Văn Nam · KH0002")
                             .get(customer.getSelectionModel().getSelectedIndex()),
                     "Nhân viên demo",
-                    NumberFormat.getNumberInstance(Locale.forLanguageTag("vi-VN")).format(amount) + " ₫",
+                    Long.toString(amount),
                     "Hoàn tất");
             runMutation(() -> featureService.create(module, invoiceRow), () -> {
                 cart.clear();
@@ -5509,8 +6048,7 @@ public class PageRenderer {
     }
 
     private String formatCurrency(long amount) {
-        Locale locale = Localization.isEnglish() ? Locale.US : Locale.forLanguageTag("vi-VN");
-        return NumberFormat.getNumberInstance(locale).format(amount) + " ₫";
+        return formatSaleMoney(BigDecimal.valueOf(amount));
     }
 
     private void showInformation(String title, String message) {

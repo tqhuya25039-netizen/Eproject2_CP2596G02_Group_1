@@ -36,8 +36,8 @@ public class NinhKieuPharmaApp extends Application {
             return;
         } catch (DatabaseConnection.MissingSchemaException exception) {
             Alert alert = new Alert(Alert.AlertType.ERROR);
-            alert.setTitle("Database schema update required");
-            alert.setHeaderText("Cơ sở dữ liệu cần được cập nhật");
+            alert.setTitle("Database schema incomplete");
+            alert.setHeaderText("Cơ sở dữ liệu thiếu bảng hoặc cột cần thiết");
             alert.setContentText(exception.getMessage());
             alert.showAndWait();
             Platform.exit();

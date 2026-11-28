@@ -118,6 +118,14 @@
     -fx-border-width: 1.5px;
 }
 
+.form-dialog .text-field {
+    -fx-padding: 12px 16px;
+}
+
+.form-dialog .text-area .content {
+    -fx-padding: 12px 16px;
+}
+
 .supplier-multiselect {
     -fx-background-color: #FFFFFF;
     -fx-background-insets: 0;
@@ -383,6 +391,14 @@
     -fx-alignment: top-left;
 }
 
+.report-filter-error {
+    -fx-text-fill: #B91C1C;
+}
+
+.report-note {
+    -fx-text-fill: #475569;
+}
+
 .chart-card {
     -fx-background-color: #FFFFFF;
     -fx-background-radius: 10px;
@@ -501,6 +517,164 @@
 .checkout-line .flow-pane {
     -fx-hgap: 8px;
     -fx-vgap: 8px;
+}
+
+.checkout-workspace {
+    -fx-padding: 16px;
+    -fx-spacing: 12px;
+    -fx-background-color: #FFFFFF;
+    -fx-background-radius: 10px;
+    -fx-border-color: #E2E8F0;
+    -fx-border-radius: 10px;
+}
+
+.checkout-section-header {
+    -fx-alignment: center-left;
+    -fx-spacing: 8px;
+    -fx-padding: 0 0 4px 0;
+}
+
+.checkout-search-bar {
+    -fx-alignment: center-left;
+    -fx-spacing: 8px;
+}
+
+.checkout-search-bar .search-input,
+.checkout-search-bar .button {
+    -fx-min-height: 42px;
+}
+
+.checkout-search-bar .search-input {
+    -fx-prompt-text-fill: #475569;
+}
+
+.checkout-product-results {
+    -fx-background-color: #FFFFFF;
+    -fx-background-insets: 0;
+    -fx-background-radius: 8px;
+    -fx-border-color: #CBD5E1;
+    -fx-border-radius: 8px;
+    -fx-padding: 3px;
+}
+
+.checkout-product-results:focused {
+    -fx-border-color: #1E40AF;
+}
+
+.checkout-product-results .list-cell {
+    -fx-background-color: #FFFFFF;
+    -fx-background-radius: 5px;
+    -fx-border-color: transparent;
+    -fx-border-width: 0 0 0 3px;
+    -fx-padding: 6px 9px;
+}
+
+.checkout-product-results .list-cell:filled:hover,
+.checkout-product-results .list-cell:filled:selected {
+    -fx-background-color: #EFF6FF;
+}
+
+.checkout-product-results .list-cell:filled:selected {
+    -fx-border-color: transparent transparent transparent #1D4ED8;
+}
+
+.checkout-product-result {
+    -fx-alignment: center-left;
+    -fx-spacing: 3px;
+}
+
+.checkout-product-name {
+    -fx-text-fill: #1E293B;
+    -fx-font-weight: bold;
+}
+
+.checkout-product-meta {
+    -fx-text-fill: #475569;
+    -fx-font-size: 12px;
+}
+
+.checkout-product-unavailable,
+.checkout-product-unavailable .checkout-product-meta {
+    -fx-text-fill: #92400E;
+}
+
+.checkout-cart {
+    -fx-spacing: 8px;
+}
+
+.checkout-cart-empty {
+    -fx-text-fill: #475569;
+    -fx-background-color: #F8FAFC;
+    -fx-background-radius: 7px;
+    -fx-padding: 12px;
+}
+
+.checkout-cart .checkout-line {
+    -fx-background-color: #F8FAFC;
+    -fx-background-radius: 7px;
+    -fx-border-color: #E2E8F0;
+    -fx-border-radius: 7px;
+    -fx-padding: 10px;
+}
+
+.checkout-cart .checkout-line.allergy-warning-line {
+    -fx-background-color: #FEF2F2;
+    -fx-border-color: #DC2626;
+}
+
+.checkout-line-instructions {
+    -fx-border-color: #E2E8F0 transparent transparent transparent;
+    -fx-border-width: 1px 0 0 0;
+    -fx-padding: 8px 0 0 0;
+}
+
+.checkout-line-kind .radio-button,
+.checkout-dose-sessions .check-box {
+    -fx-min-height: 30px;
+}
+
+.checkout-stock-status {
+    -fx-text-fill: #1E3A8A;
+    -fx-background-color: #EFF6FF;
+    -fx-background-radius: 7px;
+    -fx-padding: 9px 12px;
+}
+
+.checkout-stock-status.form-error {
+    -fx-text-fill: #B91C1C;
+    -fx-background-color: #FEF2F2;
+}
+
+.checkout-prescription > .title {
+    -fx-background-color: #EFF6FF;
+    -fx-background-insets: 0;
+    -fx-background-radius: 8px;
+    -fx-border-color: #BFDBFE;
+    -fx-border-radius: 8px;
+    -fx-padding: 10px 12px;
+    -fx-cursor: hand;
+}
+
+.checkout-prescription > .title > .text {
+    -fx-fill: #1E3A8A;
+    -fx-font-weight: bold;
+}
+
+.checkout-prescription:focused > .title {
+    -fx-border-color: #1E40AF;
+}
+
+.checkout-prescription:expanded > .title {
+    -fx-background-radius: 8px 8px 0 0;
+    -fx-border-radius: 8px 8px 0 0;
+}
+
+.checkout-prescription > .content {
+    -fx-background-color: #FFFFFF;
+    -fx-background-radius: 0 0 8px 8px;
+    -fx-border-color: #BFDBFE;
+    -fx-border-radius: 0 0 8px 8px;
+    -fx-border-width: 0 1px 1px 1px;
 }
 
 .report-empty, .empty-dashboard {

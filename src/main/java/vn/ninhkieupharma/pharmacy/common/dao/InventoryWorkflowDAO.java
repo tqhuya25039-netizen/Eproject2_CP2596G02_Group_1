@@ -98,6 +98,13 @@ public interface InventoryWorkflowDAO {
             String locationName) {
     }
 
+    record StocktakeDetails(String note, List<StocktakeDetail> items) {
+        public StocktakeDetails {
+            note = note == null ? "" : note;
+            items = List.copyOf(items);
+        }
+    }
+
     record StocktakeCount(long batchId, BigDecimal countedQuantity) {
     }
 
@@ -138,7 +145,7 @@ public interface InventoryWorkflowDAO {
 
     ReceiptDraft findGoodsReceiptDraft(UUID receiptId);
 
-    List<StocktakeDetail> findStocktakeDetails(UUID stocktakeId);
+    StocktakeDetails findStocktakeDetails(UUID stocktakeId);
 
     StocktakeDraft findStocktakeDraft(UUID stocktakeId);
 
