@@ -118,6 +118,14 @@
     -fx-border-width: 1.5px;
 }
 
+.form-dialog .text-field {
+    -fx-padding: 12px 16px;
+}
+
+.form-dialog .text-area .content {
+    -fx-padding: 12px 16px;
+}
+
 .supplier-multiselect {
     -fx-background-color: #FFFFFF;
     -fx-background-insets: 0;

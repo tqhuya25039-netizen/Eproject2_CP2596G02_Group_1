@@ -2118,6 +2118,9 @@ public class PageRenderer {
                 if ("UC-15".equals(module.id()) && columnIndex == 2) {
                     value = Localization.movementTypeText(value);
                 }
+                if ("UC-15".equals(module.id()) && columnIndex == 4) {
+                    value = Localization.inventoryMovementNoteText(value);
+                }
                 if (("UC-17".equals(module.id()) && columnIndex == 4)
                         || ("UC-19".equals(module.id()) && columnIndex >= 2)) {
                     value = formatSaleMoney(new BigDecimal(value));
@@ -2633,8 +2636,8 @@ public class PageRenderer {
 
         Dialog<ButtonType> dialog = new Dialog<>();
         dialog.setTitle(Localization.text("Chi tiết lô hàng nhập"));
-        dialog.setHeaderText(Localization.text(
-                "Phiếu " + receipt.values().get(0) + " · " + receipt.values().get(1)));
+        dialog.setHeaderText(
+                Localization.text("Phiếu nhập") + " " + receipt.values().get(0) + " · " + receipt.values().get(1));
         dialog.initModality(Modality.APPLICATION_MODAL);
         dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
         dialog.getDialogPane().getStyleClass().add("form-dialog");
@@ -2651,7 +2654,7 @@ public class PageRenderer {
         addReceiptDetailColumn(table, "Đơn vị", detail -> detail.unitName(), 80);
         addReceiptDetailColumn(table, "Mã lô", detail -> detail.batchCode(), 110);
         addReceiptDetailColumn(table, "Hạn sử dụng",
-                detail -> detail.expiryDate() == null ? "Không có" : detail.expiryDate().toString(), 115);
+                detail -> detail.expiryDate() == null ? "Chưa có hạn sử dụng" : detail.expiryDate().toString(), 115);
         addReceiptDetailColumn(table, "Số lượng",
                 detail -> detail.quantity().stripTrailingZeros().toPlainString(), 90);
         addReceiptDetailColumn(table, "Đơn giá",
@@ -2697,9 +2700,9 @@ public class PageRenderer {
 
         Dialog<ButtonType> dialog = new Dialog<>();
         dialog.setTitle(Localization.text("Chi tiết kiểm kê"));
-        dialog.setHeaderText(Localization.text(
-                "Phiên " + stocktake.values().get(0)
-                        + " · " + stocktake.values().get(1)));
+        dialog.setHeaderText(
+                Localization.text("Phiên kiểm kê") + " " + stocktake.values().get(0)
+                        + " · " + stocktake.values().get(1));
         dialog.initModality(Modality.APPLICATION_MODAL);
         dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
         dialog.getDialogPane().getStyleClass().add("form-dialog");
@@ -2730,7 +2733,7 @@ public class PageRenderer {
         addStocktakeDetailColumn(table, "Đơn vị", detail -> detail.unitName(), 70);
         addStocktakeDetailColumn(table, "Mã lô", detail -> detail.batchCode(), 100);
         addStocktakeDetailColumn(table, "Hạn sử dụng",
-                detail -> detail.expiryDate() == null ? "Không có" : detail.expiryDate().toString(), 115);
+                detail -> detail.expiryDate() == null ? "Chưa có hạn sử dụng" : detail.expiryDate().toString(), 115);
         addStocktakeDetailColumn(table, "Tồn hệ thống",
                 detail -> detail.expectedQuantity().stripTrailingZeros().toPlainString(), 100);
         addStocktakeDetailColumn(table, "Tồn đếm",
@@ -2769,8 +2772,9 @@ public class PageRenderer {
         addCustomerField(fields, 2, "Loại biến động",
                 new Label(Localization.movementTypeText(values.get(2))));
         addCustomerField(fields, 3, "Số lượng", new Label(Localization.text(values.get(3))));
-        Label explanation = new Label(Localization.text(
-                values.get(4).isBlank() ? "Không có ghi chú" : values.get(4)));
+        String movementNote = values.get(4).isBlank()
+                ? "Không có ghi chú" : Localization.inventoryMovementNoteText(values.get(4));
+        Label explanation = new Label(Localization.text(movementNote));
         explanation.setWrapText(true);
         addCustomerField(fields, 4, "Diễn giải", explanation);
         addCustomerField(fields, 5, "Hạn sử dụng",
@@ -2885,10 +2889,10 @@ public class PageRenderer {
                                 ? "Phiếu mới sẽ ở trạng thái chưa xác nhận và chưa làm thay đổi tồn kho."
                                 : "Chỉnh sửa phiếu chưa xác nhận; tồn kho vẫn chưa thay đổi.")),
                 new Label(Localization.text(
-                        "Mỗi dòng nhập lưu sản phẩm, mã lô, hạn sử dụng, vị trí, số lượng và giá nhập.")),
+                        "Mỗi dòng hàng ghi nhận sản phẩm, mã lô, hạn sử dụng, vị trí lưu kho, số lượng và giá nhập.")),
                 lineScroll,
                 addLine);
-        content.setPadding(new Insets(10, 0, 0, 0));
+        content.setPadding(new Insets(12, 16, 12, 16));
         dialog.getDialogPane().setContent(content);
 
         Button okButton = (Button) dialog.getDialogPane().lookupButton(ButtonType.OK);
@@ -2930,7 +2934,7 @@ public class PageRenderer {
                 combo.show();
             }
         });
-        VBox selector = new VBox(4, search, combo);
+        VBox selector = new VBox(8, search, combo);
         selector.setPrefWidth(width);
         selector.setMinWidth(0);
         return selector;
@@ -3100,7 +3104,7 @@ public class PageRenderer {
         addCustomerField(header, 1, "Ngày kiểm kê", stocktakeDate);
         addCustomerField(header, 2, "Ghi chú", note);
 
-        VBox batchRows = new VBox(6);
+        VBox batchRows = new VBox(10);
         Map<Long, TextField> countedQuantities = new java.util.LinkedHashMap<>();
         Map<Long, BigDecimal> savedCounts = initialDraft == null
                 ? Map.of()
@@ -3151,7 +3155,7 @@ public class PageRenderer {
                                 ? "Phiên mới ở trạng thái chưa xác nhận; tồn kho chỉ đổi sau khi xác nhận."
                                 : "Chỉnh sửa phiên chưa xác nhận; tồn kho vẫn chưa thay đổi.")),
                 batchStatus, batchScroll);
-        content.setPadding(new Insets(10, 0, 0, 0));
+        content.setPadding(new Insets(12, 16, 12, 16));
         dialog.getDialogPane().setContent(content);
 
         Button okButton = (Button) dialog.getDialogPane().lookupButton(ButtonType.OK);
@@ -3218,7 +3222,12 @@ public class PageRenderer {
         batch.setConverter(new StringConverter<>() {
             @Override
             public String toString(InventoryWorkflowDAO.BatchOption value) {
-                return value == null ? "" : value.label();
+                return value == null ? ""
+                        : value.productCode() + " · " + value.productName() + " · " + value.batchCode()
+                                + " · " + value.quantityOnHand().stripTrailingZeros().toPlainString()
+                                + " · " + Localization.text(value.expiryDate() == null
+                                        ? "Không có HSD" : value.expiryDate().toString())
+                                + " · " + value.locationCode();
             }
 
             @Override
@@ -3251,6 +3260,7 @@ public class PageRenderer {
         GridPane fields = new GridPane();
         fields.setHgap(16);
         fields.setVgap(12);
+        fields.setPadding(new Insets(12, 16, 12, 16));
         addCustomerField(fields, 0, "Lô hàng", batch);
         addCustomerField(fields, 1, "Loại biến động", lossType);
         addCustomerField(fields, 2, "Số lượng", quantity);
@@ -3300,7 +3310,8 @@ public class PageRenderer {
         try {
             return new BigDecimal(raw == null ? "" : raw.trim().replace(",", "."));
         } catch (NumberFormatException exception) {
-            throw new IllegalArgumentException(field + " phải là số hợp lệ.");
+            throw new IllegalArgumentException(
+                    Localization.text(field) + Localization.text(" phải là số hợp lệ."));
         }
     }
 
@@ -3363,7 +3374,7 @@ public class PageRenderer {
         GridPane fields = new GridPane();
         fields.setHgap(16);
         fields.setVgap(12);
-        fields.setPadding(new Insets(12, 0, 8, 0));
+        fields.setPadding(new Insets(12, 16, 8, 16));
         addCustomerField(fields, 0, "Mã vị trí", code);
         addCustomerField(fields, 1, "Tên vị trí", name);
         addCustomerField(fields, 2, "Mô tả", description);
