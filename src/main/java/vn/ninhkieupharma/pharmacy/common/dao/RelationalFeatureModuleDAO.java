@@ -7,6 +7,7 @@ import vn.ninhkieupharma.pharmacy.common.auth.User;
 import vn.ninhkieupharma.pharmacy.common.auth.UserRole;
 import vn.ninhkieupharma.pharmacy.common.dao.InventoryWorkflowDAO;
 import vn.ninhkieupharma.pharmacy.common.service.Localization;
+import vn.ninhkieupharma.pharmacy.common.time.VietnamDate;
 import vn.ninhkieupharma.pharmacy.domain.hr.AvailabilitySlot;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleAllergyWarning;
 import vn.ninhkieupharma.pharmacy.domain.sales.SaleLineRequest;
@@ -1404,18 +1405,19 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
     }
 
     private ModuleRow createEmployeeAccount(List<String> values) {
-        validateEmployeeAccountFields(values);
-        if (values.get(6).isBlank()) {
+        requireSize("UC-01", values, 6);
+        List<String> accountValues = List.of(
+                values.get(0), values.get(1), values.get(2), values.get(3), values.get(4),
+                "STAFF", values.get(5));
+        validateEmployeeAccountFields(accountValues);
+        if (accountValues.get(6).isBlank()) {
             throw new IllegalArgumentException("Mật khẩu không được để trống.");
         }
-        if (values.get(6).getBytes(StandardCharsets.UTF_8).length > 72) {
+        if (accountValues.get(6).getBytes(StandardCharsets.UTF_8).length > 72) {
             throw new IllegalArgumentException("Mật khẩu không được dài quá 72 byte UTF-8.");
         }
-        if (!"STAFF".equals(normalizeRoleCode(values.get(5)))) {
-            throw new IllegalArgumentException("Mục tạo tài khoản nhân viên chỉ hỗ trợ vai trò STAFF.");
-        }
-        String employeeEmail = values.get(3).trim();
-        String passwordHash = PasswordHasher.hash(values.get(6));
+        String employeeEmail = accountValues.get(3).trim();
+        String passwordHash = PasswordHasher.hash(accountValues.get(6));
         long employeeId = transaction(connection -> {
             long roleId = resolveId(connection, "SELECT role_id FROM roles WHERE role_code = ?", "STAFF");
             long userId = insert(connection, """
@@ -1423,7 +1425,7 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
                     VALUES (?, ?, ?, 1)
                     """, statement -> {
                 statement.setLong(1, roleId);
-                statement.setString(2, values.get(4).trim());
+                statement.setString(2, accountValues.get(4).trim());
                 statement.setString(3, passwordHash);
             });
             return insert(connection, """
@@ -1432,15 +1434,15 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
                     VALUES (?, ?, ?, ?, ?, CURRENT_DATE, 'ACTIVE')
                     """, statement -> {
                 statement.setLong(1, userId);
-                statement.setString(2, values.get(0).trim());
-                statement.setString(3, values.get(1).trim());
-                setNullableString(statement, 4, values.get(2));
+                statement.setString(2, accountValues.get(0).trim());
+                statement.setString(3, accountValues.get(1).trim());
+                setNullableString(statement, 4, accountValues.get(2));
                 setNullableString(statement, 5, employeeEmail);
             });
         });
         return row(employeeId, List.of(
-                values.get(0).trim(), values.get(1).trim(), values.get(2).trim(), employeeEmail,
-                values.get(4).trim(), "Nhân viên", "Đang hoạt động"));
+                accountValues.get(0).trim(), accountValues.get(1).trim(), accountValues.get(2).trim(), employeeEmail,
+                accountValues.get(4).trim(), "Nhân viên", "Đang hoạt động"));
     }
 
     private ModuleRow updateEmployeeAccount(long employeeId, List<String> values) {
@@ -1510,6 +1512,9 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
         if (containsWhitespace(employeeCode)) {
             throw new IllegalArgumentException("Mã nhân viên không được chứa khoảng trắng.");
         }
+        if (containsDigit(fullName)) {
+            throw new IllegalArgumentException("Họ và tên không được chứa chữ số.");
+        }
         if (!fullName.matches("[\\p{L}\\p{M}]+(?: [\\p{L}\\p{M}]+)*")) {
             throw new IllegalArgumentException("Họ và tên chỉ được chứa chữ cái và khoảng trắng.");
         }
@@ -1522,6 +1527,13 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
         if (containsWhitespace(username)) {
             throw new IllegalArgumentException("Tên đăng nhập không được chứa khoảng trắng.");
         }
+        if (containsDigit(username)) {
+            throw new IllegalArgumentException("Tên đăng nhập không được chứa chữ số.");
+        }
+    }
+
+    private static boolean containsDigit(String value) {
+        return value.codePoints().anyMatch(Character::isDigit);
     }
 
     private static boolean containsWhitespace(String value) {
@@ -2024,9 +2036,10 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
 
     private ModuleRow createAvailability(List<String> values) {
         requireSize("UC-02", values, 5);
+        LocalDate date = parseIsoDate(values.get(1), "Ngày khả dụng");
+        VietnamDate.requireSchedulingDate(date, "Ngày khả dụng");
         long employeeId = resolveId("SELECT employee_id FROM employees WHERE full_name = ? ORDER BY employee_id",
                 values.get(0).trim());
-        LocalDate date = parseIsoDate(values.get(1), "Ngày khả dụng");
         java.time.LocalTime start = parseIsoTime(values.get(2), "Giờ bắt đầu");
         java.time.LocalTime end = parseIsoTime(values.get(3), "Giờ kết thúc");
         if (!start.isBefore(end)) {
@@ -2062,6 +2075,9 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
         if (slots.stream().anyMatch(Objects::isNull)) {
             throw new IllegalArgumentException("Ngày khả dụng không hợp lệ.");
         }
+        for (AvailabilitySlot slot : slots) {
+            VietnamDate.requireSchedulingDate(slot.date(), "Ngày khả dụng");
+        }
         return transaction(connection -> {
             long employeeId = resolveId(
                     connection,
@@ -2094,9 +2110,10 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
 
     private ModuleRow updateAvailability(long id, List<String> values) {
         requireSize("UC-02", values, 5);
+        LocalDate date = parseIsoDate(values.get(1), "Ngày khả dụng");
+        VietnamDate.requireSchedulingDate(date, "Ngày khả dụng");
         long employeeId = resolveId("SELECT employee_id FROM employees WHERE full_name = ? ORDER BY employee_id",
                 values.get(0).trim());
-        LocalDate date = parseIsoDate(values.get(1), "Ngày khả dụng");
         java.time.LocalTime start = parseIsoTime(values.get(2), "Giờ bắt đầu");
         java.time.LocalTime end = parseIsoTime(values.get(3), "Giờ kết thúc");
         if (!start.isBefore(end)) {
@@ -2160,6 +2177,7 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
     private ModuleRow createStoreSchedule(List<String> values) {
         requireSize("UC-03", values, 5);
         LocalDate workDate = parseIsoDate(values.get(0), "Ngày làm");
+        VietnamDate.requireSchedulingDate(workDate, "Ngày làm");
         LocalDate weekStart = workDate.minusDays(workDate.getDayOfWeek().getValue() - 1L);
         String shiftName = values.get(1).trim();
         String employeeName = values.get(2).trim();
@@ -2192,6 +2210,7 @@ public final class RelationalFeatureModuleDAO implements FeatureModuleDAO, Inven
     private ModuleRow updateStoreSchedule(long assignmentId, List<String> values) {
         requireSize("UC-03", values, 5);
         LocalDate workDate = parseIsoDate(values.get(0), "Ngày làm");
+        VietnamDate.requireSchedulingDate(workDate, "Ngày làm");
         LocalDate weekStart = workDate.minusDays(workDate.getDayOfWeek().getValue() - 1L);
         String shiftName = values.get(1).trim();
         String employeeName = values.get(2).trim();

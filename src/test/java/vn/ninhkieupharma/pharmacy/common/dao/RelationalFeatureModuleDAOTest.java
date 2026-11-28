@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import vn.ninhkieupharma.pharmacy.common.auth.User;
 import vn.ninhkieupharma.pharmacy.common.auth.UserRole;
 import vn.ninhkieupharma.pharmacy.common.service.ModuleCatalog;
+import vn.ninhkieupharma.pharmacy.common.time.VietnamDate;
 import vn.ninhkieupharma.pharmacy.common.dao.InventoryWorkflowDAO;
 
 import java.math.BigDecimal;
@@ -47,6 +48,18 @@ class RelationalFeatureModuleDAOTest {
     }
 
     @Test
+    void employeeNamesAndUsernamesRejectDigits() {
+        assertThrows(IllegalArgumentException.class, () ->
+                RelationalFeatureModuleDAO.validateEmployeeAccountFields(
+                        List.of("NV-TEST", "Nguyễn Thị An2", "0901234567", "an@example.com",
+                                "nguyenthian", "STAFF", "Test@12345")));
+        assertThrows(IllegalArgumentException.class, () ->
+                RelationalFeatureModuleDAO.validateEmployeeAccountFields(
+                        List.of("NV-TEST", "Nguyễn Thị An", "0901234567", "an@example.com",
+                                "nguyenthian2", "STAFF", "Test@12345")));
+    }
+
+    @Test
     void attendanceRequiresAnAuthenticatedActor() {
         assertThrows(SecurityException.class, () -> dao.findAll("UC-04"));
         assertThrows(SecurityException.class, dao::findCurrentEmployeeName);
@@ -66,7 +79,17 @@ class RelationalFeatureModuleDAOTest {
         assertThrows(SecurityException.class, () -> staffDAO.delete("UC-03", UUID.randomUUID()));
         assertThrows(SecurityException.class, () -> staffDAO.replaceAll("UC-03", List.of()));
         assertThrows(IllegalArgumentException.class, () -> administratorDAO.create("UC-03",
-                List.of("2026-11-03", "Ca sang", "Nguyen Thi An", "INVALID", "")));
+                List.of(VietnamDate.today().toString(), "Ca sang", "Nguyen Thi An", "INVALID", "")));
+    }
+
+    @Test
+    void availabilityAndStoreScheduleRejectDatesOutsideTheVietnamSchedulingRange() {
+        assertThrows(IllegalArgumentException.class, () -> adminDao.create("UC-02",
+                List.of("Nguyễn Thị An", VietnamDate.today().minusDays(1).toString(),
+                        "08:00", "12:00", "")));
+        assertThrows(IllegalArgumentException.class, () -> adminDao.create("UC-03",
+                List.of(VietnamDate.latestSchedulingDate().plusDays(1).toString(),
+                        "Ca sáng", "Nguyễn Thị An", "PLANNED", "")));
     }
 
     @Test
@@ -176,7 +199,7 @@ class RelationalFeatureModuleDAOTest {
     }
 
     @Test
-    void employeeAccountCreationDoesNotAllowElevatedRoles() {
+    void employeeAccountCreationRejectsAnExposedRoleField() {
         assertThrows(IllegalArgumentException.class, () -> dao.create("UC-01",
                 List.of("NV-TEST", "Test Employee", "", "", "test_admin", "ADMIN", "Test@12345")));
     }
@@ -184,7 +207,7 @@ class RelationalFeatureModuleDAOTest {
     @Test
     void employeeAccountCreationValidatesPasswordBeforeConnectingToMysql() {
         assertThrows(IllegalArgumentException.class, () -> dao.create("UC-01",
-                List.of("NV-TEST", "Test Employee", "", "", "test_staff", "STAFF", "x".repeat(73))));
+                List.of("NV-TEST", "Test Employee", "", "staff@example.com", "test_staff", "x".repeat(73))));
     }
 
     @Test
@@ -199,6 +222,8 @@ class RelationalFeatureModuleDAOTest {
                         "nguyenthian", "STAFF", "Test@12345"),
                 List.of("NV-TEST", "Nguyễn @ An", "0901234567", "an@example.com",
                         "nguyenthian", "STAFF", "Test@12345"),
+                List.of("NV-TEST", "Nguyễn Thị An", "0901234567", "an@example.com",
+                        "nguyenthian2", "STAFF", "Test@12345"),
                 List.of("NV-TEST", "Nguyễn Thị An", "0901234567", "",
                         "nguyenthian", "STAFF", "Test@12345"),
                 List.of("NV-TEST", "Nguyễn Thị An", "0901234567", "not-an-email",
@@ -207,7 +232,9 @@ class RelationalFeatureModuleDAOTest {
                         "nguyen thi an", "STAFF", "Test@12345"));
 
         for (List<String> values : invalidValues) {
-            assertThrows(IllegalArgumentException.class, () -> dao.create("UC-01", values));
+            List<String> creationValues = List.of(
+                    values.get(0), values.get(1), values.get(2), values.get(3), values.get(4), values.get(6));
+            assertThrows(IllegalArgumentException.class, () -> dao.create("UC-01", creationValues));
             assertThrows(IllegalArgumentException.class,
                     () -> administratorDAO.update("UC-01", employeeId, values));
         }

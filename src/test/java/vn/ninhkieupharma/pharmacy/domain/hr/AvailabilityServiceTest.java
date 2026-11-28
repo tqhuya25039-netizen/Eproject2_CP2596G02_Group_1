@@ -4,16 +4,34 @@ import org.junit.jupiter.api.Test;
 import vn.ninhkieupharma.pharmacy.common.dao.FeatureModuleDAO;
 import vn.ninhkieupharma.pharmacy.common.model.ModuleRow;
 import vn.ninhkieupharma.pharmacy.common.repository.InMemoryModuleRepository;
+import vn.ninhkieupharma.pharmacy.common.time.VietnamDate;
 
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.time.temporal.TemporalAdjusters;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class AvailabilityServiceTest {
+    @Test
+    void rejectsPastAndOutOfRangeDatesBeforeCallingRepository() {
+        AvailabilityService service = new AvailabilityService(new InMemoryModuleRepository());
+        LocalDate today = VietnamDate.today();
+
+        assertThrows(IllegalArgumentException.class, () -> service.createWeeklyAvailability(
+                "Nguyen Thi An", today.minusDays(1),
+                List.of(new AvailabilitySlot(today, LocalTime.of(8, 0), LocalTime.NOON, ""))));
+        assertThrows(IllegalArgumentException.class, () -> service.createWeeklyAvailability(
+                "Nguyen Thi An", today,
+                List.of(new AvailabilitySlot(today.plusYears(1).plusDays(1),
+                        LocalTime.of(8, 0), LocalTime.NOON, ""))));
+    }
+
     @Test
     void registersSelectedDaysUsingTheMondayOfTheChosenWeek() {
         FeatureModuleDAO delegate = new InMemoryModuleRepository();
@@ -54,15 +72,15 @@ class AvailabilityServiceTest {
                 return slots.size();
             }
         };
-        LocalDate monday = LocalDate.of(2026, 11, 23);
+        LocalDate today = VietnamDate.today();
+        LocalDate monday = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
         List<AvailabilitySlot> slots = List.of(
-                new AvailabilitySlot(monday, LocalTime.of(8, 0), LocalTime.NOON, ""),
-                new AvailabilitySlot(monday.plusDays(2), LocalTime.NOON, LocalTime.of(18, 0), ""));
+                new AvailabilitySlot(today, LocalTime.of(8, 0), LocalTime.NOON, ""));
 
         int created = new AvailabilityService(repository).createWeeklyAvailability(
-                "  Nguyen Thi An  ", monday.plusDays(3), slots);
+                "  Nguyen Thi An  ", today, slots);
 
-        assertEquals(2, created);
+        assertEquals(1, created);
         assertEquals(monday, receivedWeekStart.get());
         assertEquals(slots, receivedSlots.get());
     }

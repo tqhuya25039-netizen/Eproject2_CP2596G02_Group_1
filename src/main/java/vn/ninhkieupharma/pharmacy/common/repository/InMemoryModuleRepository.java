@@ -39,7 +39,11 @@ public final class InMemoryModuleRepository implements FeatureModuleDAO {
 
     @Override
     public ModuleRow create(String moduleId, List<String> values) {
-        ModuleRow row = new ModuleRow(UUID.randomUUID(), values);
+        List<String> rowValues = "UC-01".equals(moduleId)
+                ? List.of(values.get(0), values.get(1), values.get(2), values.get(3), values.get(4),
+                        "Nhân viên", "Đang hoạt động")
+                : values;
+        ModuleRow row = new ModuleRow(UUID.randomUUID(), rowValues);
         requireModule(moduleId).add(row);
         return row;
     }

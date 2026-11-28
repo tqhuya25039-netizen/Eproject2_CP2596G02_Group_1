@@ -2,6 +2,7 @@ package vn.ninhkieupharma.pharmacy.domain.hr;
 
 import vn.ninhkieupharma.pharmacy.common.dao.FeatureModuleDAO;
 import vn.ninhkieupharma.pharmacy.common.service.SingleModuleService;
+import vn.ninhkieupharma.pharmacy.common.time.VietnamDate;
 
 import java.time.DayOfWeek;
 import java.time.LocalDate;
@@ -28,8 +29,15 @@ public final class AvailabilityService extends SingleModuleService {
         if (dateInWeek == null) {
             throw new IllegalArgumentException("Vui lòng chọn một ngày trong tuần.");
         }
+        VietnamDate.requireSchedulingDate(dateInWeek, "Ngày đã chọn");
         if (slots == null || slots.isEmpty()) {
             throw new IllegalArgumentException("Vui lòng chọn ít nhất một ngày khả dụng.");
+        }
+        for (AvailabilitySlot slot : slots) {
+            if (slot == null) {
+                throw new IllegalArgumentException("Ngày khả dụng không hợp lệ.");
+            }
+            VietnamDate.requireSchedulingDate(slot.date(), "Ngày khả dụng");
         }
         LocalDate weekStart = dateInWeek.with(
                 TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));

@@ -196,7 +196,9 @@ public final class Localization {
                 "Đến giờ", "To", "Ghi chú", "Notes", "Ngày khả dụng", "Available Date",
                 "Giờ bắt đầu", "Start Time", "Giờ kết thúc", "End Time",
                 "Tuần bắt đầu", "Week Starting", "Ngày làm", "Shift Date",
-                "Ca làm", "Shift", "Giờ vào", "Clock In", "Giờ ra", "Clock Out",
+                "Ca làm", "Shift",                 "Giờ vào", "Clock In", "Giờ ra", "Clock Out",
+                "Giờ vào (HH:mm dd/MM/yyyy)", "Clock In (HH:mm dd/MM/yyyy)",
+                "Giờ ra (HH:mm dd/MM/yyyy)", "Clock Out (HH:mm dd/MM/yyyy)",
                 "Ca được phân", "Assigned Shift", "Kỳ lương", "Pay Period",
                 "Số ca", "Shift Count", "Giờ thực tế", "Actual Hours",
                 "Kỳ báo cáo", "Report Period", "Khoản điều chỉnh", "Adjustment",
@@ -694,11 +696,15 @@ public final class Localization {
                 "Dữ liệu mẫu", "Sample Data",
                 "DOANH THU GHI NHẬN", "RECORDED REVENUE",
                 "Biến động tồn kho theo loại", "Inventory Movements by Type",
-                "Attendance times must use H:mm, dd/MM/yyyy HH:mm, or YYYY-MM-DD HH:mm format: ",
-                "Giờ chấm công phải theo định dạng H:mm, dd/MM/yyyy HH:mm hoặc YYYY-MM-DD HH:mm: ",
+                "Attendance times must use H:mm, HH:mm dd/MM/yyyy, dd/MM/yyyy HH:mm, "
+                        + "or YYYY-MM-DD HH:mm format: ",
+                "Giờ chấm công phải theo định dạng H:mm, HH:mm dd/MM/yyyy, "
+                        + "dd/MM/yyyy HH:mm hoặc YYYY-MM-DD HH:mm: ",
                 "Time value cannot be null.", "Giá trị giờ không được để trống.",
-                "Time must use H:mm, dd/MM/yyyy HH:mm, or YYYY-MM-DD HH:mm format: ",
-                "Giờ phải theo định dạng H:mm, dd/MM/yyyy HH:mm hoặc YYYY-MM-DD HH:mm: ",
+                "Time must use H:mm, HH:mm dd/MM/yyyy, dd/MM/yyyy HH:mm, "
+                        + "or YYYY-MM-DD HH:mm format: ",
+                "Giờ phải theo định dạng H:mm, HH:mm dd/MM/yyyy, "
+                        + "dd/MM/yyyy HH:mm hoặc YYYY-MM-DD HH:mm: ",
                 "Late status must include the delay in minutes.", "Trạng thái đi trễ cần có số phút đi trễ.",
                 "Expected a numeric quantity: ", "Số lượng phải có giá trị số: ",
                 "Invoice date must use dd/MM/yyyy format: ", "Ngày hóa đơn phải theo định dạng dd/MM/yyyy: ",

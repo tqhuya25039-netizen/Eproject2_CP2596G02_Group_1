@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import vn.ninhkieupharma.pharmacy.common.auth.User;
 import vn.ninhkieupharma.pharmacy.common.auth.UserRole;
+import vn.ninhkieupharma.pharmacy.common.time.VietnamDate;
 import vn.ninhkieupharma.pharmacy.domain.hr.AvailabilityService;
 import vn.ninhkieupharma.pharmacy.domain.hr.AvailabilitySlot;
 
@@ -31,7 +32,7 @@ class AvailabilityMySqlIntegrationTest {
             RelationalFeatureModuleDAO repository = new RelationalFeatureModuleDAO(
                     new User(1, "admin_demo", "", UserRole.ADMIN, true));
             AvailabilityService service = new AvailabilityService(repository);
-            LocalDate weekStart = LocalDate.of(2099, 1, 1)
+            LocalDate weekStart = VietnamDate.today().plusDays(7)
                     .with(TemporalAdjusters.nextOrSame(DayOfWeek.MONDAY));
             List<AvailabilitySlot> slots = List.of(
                     new AvailabilitySlot(weekStart, LocalTime.of(8, 0), LocalTime.NOON, "Week test"),

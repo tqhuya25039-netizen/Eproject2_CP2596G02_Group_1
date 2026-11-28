@@ -29,6 +29,7 @@ import javafx.scene.control.CheckMenuItem;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Control;
 import javafx.scene.control.DatePicker;
+import javafx.scene.control.DateCell;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.Hyperlink;
 import javafx.scene.control.Label;
@@ -65,6 +66,7 @@ import vn.ninhkieupharma.pharmacy.common.model.ModuleDefinition;
 import vn.ninhkieupharma.pharmacy.common.service.DemoData;
 import vn.ninhkieupharma.pharmacy.common.service.Localization;
 import vn.ninhkieupharma.pharmacy.common.service.ModuleCatalog;
+import vn.ninhkieupharma.pharmacy.common.time.VietnamDate;
 import vn.ninhkieupharma.pharmacy.common.auth.UserRole;
 import vn.ninhkieupharma.pharmacy.common.dao.InventoryWorkflowDAO;
 import vn.ninhkieupharma.pharmacy.domain.inventory.InventoryWorkflowService;
@@ -121,6 +123,8 @@ public class PageRenderer {
             DateTimeFormatter.ofPattern("dd/MM/yyyy");
     private static final DateTimeFormatter VIETNAMESE_DATE_TIME_FORMAT =
             DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
+    private static final DateTimeFormatter ATTENDANCE_INPUT_DATE_TIME_FORMAT =
+            DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy");
     private static final DateTimeFormatter TIME_INPUT_FORMAT =
             DateTimeFormatter.ofPattern("H:mm");
     private static final DateTimeFormatter ISO_DATE_TIME_WITH_SPACE =
@@ -841,21 +845,8 @@ public class PageRenderer {
         employee.setPromptText(Localization.text("Chọn nhân viên"));
         employee.setMaxWidth(Double.MAX_VALUE);
 
-        LocalDate currentMonday = LocalDate.now().with(
-                TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
-        DatePicker weekDate = new DatePicker(currentMonday);
-        weekDate.setConverter(new StringConverter<>() {
-            @Override
-            public String toString(LocalDate date) {
-                return date == null ? "" : date.format(VIETNAMESE_DATE_FORMAT);
-            }
-
-            @Override
-            public LocalDate fromString(String value) {
-                return value == null || value.isBlank()
-                        ? null : LocalDate.parse(value, VIETNAMESE_DATE_FORMAT);
-            }
-        });
+        LocalDate today = VietnamDate.today();
+        DatePicker weekDate = schedulingDatePicker(today);
         Label weekRange = new Label();
         weekRange.getStyleClass().add("helper-text");
         Runnable updateWeekRange = () -> {
@@ -871,9 +862,6 @@ public class PageRenderer {
                     + start.format(VIETNAMESE_DATE_FORMAT) + " – "
                     + end.format(VIETNAMESE_DATE_FORMAT));
         };
-        weekDate.valueProperty().addListener((observable, oldValue, newValue) -> updateWeekRange.run());
-        updateWeekRange.run();
-
         String[] dayNames = {
                 "Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy", "Chủ Nhật"
         };
@@ -900,6 +888,33 @@ public class PageRenderer {
             availabilityGrid.add(start, 1, day + 1);
             availabilityGrid.add(end, 2, day + 1);
         }
+        Runnable updateAvailableDays = () -> {
+            LocalDate selectedDate = weekDate.getValue();
+            if (selectedDate == null) {
+                availableDays.forEach(day -> {
+                    day.setSelected(false);
+                    day.setDisable(true);
+                });
+                return;
+            }
+            LocalDate weekStart = selectedDate.with(
+                    TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+            for (int day = 0; day < availableDays.size(); day++) {
+                CheckBox available = availableDays.get(day);
+                boolean allowed = VietnamDate.isSchedulingDateAllowed(weekStart.plusDays(day));
+                available.setDisable(!allowed);
+                if (!allowed) {
+                    available.setSelected(false);
+                }
+            }
+        };
+        weekDate.valueProperty().addListener((observable, oldValue, newValue) -> {
+            updateWeekRange.run();
+            updateAvailableDays.run();
+        });
+        updateWeekRange.run();
+        updateAvailableDays.run();
+
         TextField note = new TextField();
         note.setPromptText(Localization.text("Ghi chú chung cho các ngày"));
         Label guidance = new Label(Localization.text(
@@ -928,10 +943,10 @@ public class PageRenderer {
             return;
         }
         LocalDate selectedDate = weekDate.getValue();
-        if (selectedDate == null) {
+        if (!VietnamDate.isSchedulingDateAllowed(selectedDate)) {
             showInformation(
                     Localization.text("Không thể đăng ký khả dụng"),
-                    Localization.text("Vui lòng chọn một ngày trong tuần."));
+                    Localization.text("Chọn ngày từ hôm nay đến hết một năm tới."));
             return;
         }
         if (employee.getValue() == null || employee.getValue().isBlank()) {
@@ -3245,7 +3260,14 @@ public class PageRenderer {
             Label label = new Label(fieldLabels.get(index));
             label.getStyleClass().add("field-label");
             Node input;
-            if ("UC-03".equals(module.id()) && index == 3) {
+            if (existingRow == null
+                    && (("UC-02".equals(module.id()) && index == 1)
+                    || ("UC-03".equals(module.id()) && index == 0))) {
+                DatePicker dateInput = schedulingDatePicker(VietnamDate.today());
+                input = dateInput;
+                valueReaders.add(() -> dateInput.getValue() == null
+                        ? "" : dateInput.getValue().toString());
+            } else if ("UC-03".equals(module.id()) && index == 3) {
                 ComboBox<String> statusInput = new ComboBox<>();
                 statusInput.getItems().setAll("PLANNED", "COMPLETED", "CANCELLED");
                 statusInput.setValue(existingRow == null ? "PLANNED" : existingRow.values().get(index));
@@ -3269,7 +3291,7 @@ public class PageRenderer {
                 if (existingRow != null) {
                     String value = Localization.text(existingRow.values().get(index));
                     if ("UC-04".equals(module.id()) && index >= 2) {
-                        value = formatDisplayDate(value);
+                        value = formatAttendanceInput(value);
                     }
                     textField.setText(value);
                 }
@@ -3302,6 +3324,30 @@ public class PageRenderer {
                 .filter(ButtonType.OK::equals)
                 .map(ignored -> valueReaders.stream().map(java.util.function.Supplier::get).toList())
                 .map(values -> preserveUnchangedValues(existingRow, values));
+    }
+
+    private DatePicker schedulingDatePicker(LocalDate initialDate) {
+        DatePicker datePicker = new DatePicker(initialDate);
+        datePicker.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(LocalDate date) {
+                return date == null ? "" : date.format(VIETNAMESE_DATE_FORMAT);
+            }
+
+            @Override
+            public LocalDate fromString(String value) {
+                return value == null || value.isBlank()
+                        ? null : LocalDate.parse(value, VIETNAMESE_DATE_FORMAT);
+            }
+        });
+        datePicker.setDayCellFactory(picker -> new DateCell() {
+            @Override
+            public void updateItem(LocalDate date, boolean empty) {
+                super.updateItem(date, empty);
+                setDisable(empty || !VietnamDate.isSchedulingDateAllowed(date));
+            }
+        });
+        return datePicker;
     }
 
     private void createStaffAttendanceDialog(
@@ -4048,7 +4094,6 @@ public class PageRenderer {
                         inputs.get(2).getText().trim(),
                         inputs.get(3).getText().trim(),
                         inputs.get(4).getText().trim(),
-                        "STAFF",
                         password.getText()));
     }
 
@@ -4087,6 +4132,16 @@ public class PageRenderer {
             } catch (DateTimeParseException notAnIsoDate) {
                 return value;
             }
+        }
+    }
+
+    private String formatAttendanceInput(String value) {
+        String displayValue = formatDisplayDate(value);
+        try {
+            return LocalDateTime.parse(displayValue, VIETNAMESE_DATE_TIME_FORMAT)
+                    .format(ATTENDANCE_INPUT_DATE_TIME_FORMAT);
+        } catch (DateTimeParseException exception) {
+            return displayValue;
         }
     }
 

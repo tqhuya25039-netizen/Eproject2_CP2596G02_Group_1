@@ -24,6 +24,8 @@ public final class AttendanceService extends AbstractFeatureModuleService {
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
     private static final DateTimeFormatter VIETNAMESE_DATE_TIME =
             DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
+    private static final DateTimeFormatter VIETNAMESE_TIME_DATE =
+            DateTimeFormatter.ofPattern("H:mm dd/MM/yyyy");
     private final FeatureModuleDAO repository;
 
     public AttendanceService(FeatureModuleDAO repository) {
@@ -107,7 +109,8 @@ public final class AttendanceService extends AbstractFeatureModuleService {
             parseAttendanceTime(value);
         } catch (DateTimeParseException exception) {
             throw new IllegalArgumentException(
-                    Localization.text("Time must use H:mm, dd/MM/yyyy HH:mm, or YYYY-MM-DD HH:mm format: ")
+                    Localization.text("Time must use H:mm, HH:mm dd/MM/yyyy, dd/MM/yyyy HH:mm, "
+                            + "or YYYY-MM-DD HH:mm format: ")
                             + value,
                     exception);
         }
@@ -133,8 +136,13 @@ public final class AttendanceService extends AbstractFeatureModuleService {
             try {
                 return LocalDateTime.parse(value, VIETNAMESE_DATE_TIME);
             } catch (DateTimeParseException vietnameseException) {
-                vietnameseException.addSuppressed(isoException);
-                throw vietnameseException;
+                try {
+                    return LocalDateTime.parse(value, VIETNAMESE_TIME_DATE);
+                } catch (DateTimeParseException timeFirstException) {
+                    timeFirstException.addSuppressed(isoException);
+                    timeFirstException.addSuppressed(vietnameseException);
+                    throw timeFirstException;
+                }
             }
         }
     }
@@ -156,7 +164,8 @@ public final class AttendanceService extends AbstractFeatureModuleService {
             }
         } catch (DateTimeParseException exception) {
             throw new IllegalArgumentException(
-                    Localization.text("Attendance times must use H:mm, dd/MM/yyyy HH:mm, or YYYY-MM-DD HH:mm format: ")
+                    Localization.text("Attendance times must use H:mm, HH:mm dd/MM/yyyy, "
+                            + "dd/MM/yyyy HH:mm, or YYYY-MM-DD HH:mm format: ")
                             + values.get(2) + "–" + values.get(3),
                     exception);
         }

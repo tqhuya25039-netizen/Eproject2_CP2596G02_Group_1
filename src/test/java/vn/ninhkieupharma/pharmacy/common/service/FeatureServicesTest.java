@@ -69,6 +69,21 @@ class FeatureServicesTest {
     }
 
     @Test
+    void employeeAccountCreationAcceptsFormFieldsAndDoesNotExposePassword() {
+        FeatureServices services = new FeatureServices();
+        ModuleDefinition employeesModule = module("UC-01");
+        FeatureModuleService employees = services.forModule(employeesModule);
+
+        ModuleRow created = employees.create(employeesModule,
+                List.of("NV-TEST", "Test Employee", "0901234567", "test@example.com",
+                        "test_staff", "Test@12345"));
+
+        assertEquals(List.of("NV-TEST", "Test Employee", "0901234567", "test@example.com",
+                "test_staff", "Nhân viên", "Đang hoạt động"), created.values());
+        assertEquals(7, employeesModule.columns().size());
+    }
+
+    @Test
     void readOnlyReportsShareTheirOwningDomainService() {
         FeatureServices services = new FeatureServices();
         REPORT_OWNERS.forEach((reportId, ownerId) ->
@@ -258,6 +273,19 @@ class FeatureServicesTest {
         assertTrue(services.forModule(payrollReport).findAll(payrollReport).stream()
                 .anyMatch(row -> row.values().get(0).equals("Vietnamese Date Employee")
                         && row.values().get(3).startsWith("8,0")));
+    }
+
+    @Test
+    void attendanceInputAcceptsVietnameseTimeBeforeDate() {
+        FeatureServices services = new FeatureServices();
+        ModuleDefinition attendanceModule = module("UC-04");
+
+        ModuleRow attendance = services.forModule(attendanceModule).create(attendanceModule,
+                List.of("Vietnamese Time First Employee", "Morning shift",
+                        "09:00 25/11/2026", "17:00 25/11/2026", ""));
+
+        assertEquals("2026-11-25 09:00", attendance.values().get(2));
+        assertEquals("2026-11-25 17:00", attendance.values().get(3));
     }
 
     @Test
